@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Trade {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  date        DateTime
+  pair        String   // e.g. "NZD/USD"
+  direction   String   // "Long" | "Short"
+  model       String   // "A" | "B"
+  grade       String   // "A+" | "B" | "C"
+  session     String   // "London" | "New York" | "Tokyo"
+  entryPrice  Float
+  slPrice     Float
+  tpPrice     Float
+  closePrice  Float?
+  riskPercent Float    @default(1.0)
+  resultR     Float?   // profit/loss in R
+  resultPips  Float?
+  outcome     String?  // "Win" | "Loss" | "BE" | "Open"
+  reason      String   // entry reason — one sentence
+  notes       String?  // post-trade notes
+  screenshotUrl String? // Supabase storage URL
+  strongCcy   String   // top currency at time of trade
+  weakCcy     String   // bottom currency at time of trade
+  divScore    Float?   // divergence score at entry
+  tags        String[] // e.g. ["wyckoff-spring", "ny-session", "nzdusd"]
+}
+
+model DailyAlert {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  date        DateTime @unique
+  top3        Json     // [{cur, score, tag}]
+  bottom3     Json     // [{cur, score, tag}]
+  pairs9      Json     // 9-pair matrix results
+  priority1   Json     // top setup
+  rawCalendar String?
+  rawPerf     String?
+  rawStddev   String?
+  sentAt      DateTime?
+  telegramMsgId Int?
+}
+
+model CurrencyScore {
+  id        String   @id @default(cuid())
+  date      DateTime
+  currency  String
+  score     Float
+  fundamental Float
+  pricePerf  Float
+  stdDev     Float
+  notes     String[]
+  @@unique([date, currency])
+}
