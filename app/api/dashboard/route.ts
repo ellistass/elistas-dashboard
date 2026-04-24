@@ -1,19 +1,19 @@
 // app/api/dashboard/route.ts
 // Returns everything the live dashboard needs in one request
-export const dynamic = 'force-dynamic'
-export const runtime = 'nodejs'
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-import { NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { NextResponse } from "next/server";
+import { db } from "@/lib/db";
 
 export async function GET() {
   try {
     // Get today's saved scores from DB (set by /api/alerts)
-    const today = new Date()
-    today.setUTCHours(0, 0, 0, 0)
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
 
-    let scores = null
-    const saved = await db.dailyAlert.findUnique({ where: { date: today } })
+    let scores = null;
+    const saved = await db.dailyAlert.findUnique({ where: { date: today } });
     if (saved) {
       scores = {
         top3: saved.top3 as any,
@@ -22,45 +22,43 @@ export async function GET() {
         priority1: saved.priority1 as any,
         allScores: [],
         generatedAt: saved.createdAt,
-        scoredBy: 'claude-ai',
-      }
+        scoredBy: "claude-ai",
+      };
     }
 
     // Open trades with alignment
     const openTrades = await db.trade.findMany({
-      where: { outcome: 'Open' },
-      orderBy: { date: 'desc' },
-      include: {
-        alignments: {
-          orderBy: { checkedAt: 'desc' },
-          take: 1,
-        },
-      },
-    })
+      where: { outcome: "Open" },
+      orderBy: { date: "desc" },
+    });
 
     // Check alignment for each open trade against latest scores
-    const tradesWithAlignment = openTrades.map(trade => {
-      let alignmentStatus: 'Green' | 'Amber' | 'Red' | 'Unknown' = 'Unknown'
-      let alignmentReason = 'No scores yet — run analysis first'
+    const tradesWithAlignment = openTrades.map((trade) => {
+      let alignmentStatus: "Green" | "Amber" | "Red" | "Unknown" = "Unknown";
+      let alignmentReason = "No scores yet — run analysis first";
 
       if (scores) {
-        const top3Curs = new Set((scores.top3 as any[]).map((c: any) => c.cur || c.currency))
-        const bottom3Curs = new Set((scores.bottom3 as any[]).map((c: any) => c.cur || c.currency))
+        const top3Curs = new Set(
+          (scores.top3 as any[]).map((c: any) => c.cur || c.currency),
+        );
+        const bottom3Curs = new Set(
+          (scores.bottom3 as any[]).map((c: any) => c.cur || c.currency),
+        );
 
-        const strongStillTop = top3Curs.has(trade.strongCcy)
-        const weakStillBottom = bottom3Curs.has(trade.weakCcy)
+        const strongStillTop = top3Curs.has(trade.strongCcy);
+        const weakStillBottom = bottom3Curs.has(trade.weakCcy);
 
         if (strongStillTop && weakStillBottom) {
-          alignmentStatus = 'Green'
-          alignmentReason = `${trade.strongCcy} still top 3 · ${trade.weakCcy} still bottom 3`
+          alignmentStatus = "Green";
+          alignmentReason = `${trade.strongCcy} still top 3 · ${trade.weakCcy} still bottom 3`;
         } else if (!strongStillTop && !weakStillBottom) {
-          alignmentStatus = 'Red'
-          alignmentReason = `⚠️ ${trade.strongCcy} dropped out of top 3 AND ${trade.weakCcy} left bottom 3`
+          alignmentStatus = "Red";
+          alignmentReason = `⚠️ ${trade.strongCcy} dropped out of top 3 AND ${trade.weakCcy} left bottom 3`;
         } else {
-          alignmentStatus = 'Amber'
+          alignmentStatus = "Amber";
           alignmentReason = !strongStillTop
             ? `${trade.strongCcy} no longer in top 3 — monitor closely`
-            : `${trade.weakCcy} no longer in bottom 3 — monitor closely`
+            : `${trade.weakCcy} no longer in bottom 3 — monitor closely`;
         }
       }
 
@@ -80,8 +78,8 @@ export async function GET() {
         date: trade.date,
         alignmentStatus,
         alignmentReason,
-      }
-    })
+      };
+    });
 
     return NextResponse.json({
       scores,
@@ -90,9 +88,12 @@ export async function GET() {
       fetchErrors: [],
       hasLiveData: !!saved,
       scoredAt: saved?.createdAt || null,
-    })
+    });
   } catch (err) {
-    console.error('Dashboard error:', err)
-    return NextResponse.json({ error: 'Dashboard fetch failed' }, { status: 500 })
+    console.error("Dashboard error:", err);
+    return NextResponse.json(
+      { error: "Dashboard fetch failed" },
+      { status: 500 },
+    );
   }
 }

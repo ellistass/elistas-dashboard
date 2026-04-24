@@ -3,53 +3,77 @@
 // Replaces the old regex-based scoring with Claude intelligence
 
 export interface AICurrencyScore {
-  currency: string
-  total: number
-  fundamental: number
-  price: number
-  stddev: number
-  notes: string[]
-  tag: string
+  currency: string;
+  total: number;
+  fundamental: number;
+  price: number;
+  stddev: number;
+  notes: string[];
+  tag: string;
 }
 
 export interface AIPairSetup {
-  pair: string
-  direction: 'Long' | 'Short'
-  strong: string
-  weak: string
-  strongScore: number
-  weakScore: number
-  divergence: number
-  grade: 'A+' | 'B' | 'C' | 'Skip'
-  session: string[]
-  reason: string
+  pair: string;
+  direction: "Long" | "Short";
+  strong: string;
+  weak: string;
+  strongScore: number;
+  weakScore: number;
+  divergence: number;
+  grade: "A+" | "B" | "C" | "Skip";
+  session: string[];
+  reason: string;
 }
 
 export interface AIScoringResult {
-  scores: AICurrencyScore[]
-  top3: string[]
-  bottom3: string[]
-  pairs9: AIPairSetup[]
+  scores: AICurrencyScore[];
+  top3: string[];
+  bottom3: string[];
+  pairs9: AIPairSetup[];
   priority1: {
-    pair: string
-    direction: string
-    divergence: number
-    grade: string
-    reason: string
-  }
-  divergenceWarnings: string[]
-  date: string
+    pair: string;
+    direction: string;
+    divergence: number;
+    grade: string;
+    reason: string;
+  };
+  divergenceWarnings: string[];
+  date: string;
 }
 
 // Normalised result that the rest of the app uses (matches existing interfaces)
 export interface NormalisedScoringResult {
-  top3: Array<{ cur: string; score: number; fundamental: number; pricePerf: number; stdDev: number; tag: string; notes: string[] }>
-  bottom3: Array<{ cur: string; score: number; fundamental: number; pricePerf: number; stdDev: number; tag: string; notes: string[] }>
-  pairs9: AIPairSetup[]
-  priority1: AIPairSetup
-  allScores: Array<{ cur: string; score: number; fundamental: number; pricePerf: number; stdDev: number; tag: string; notes: string[] }>
-  divergenceWarnings: string[]
-  generatedAt: Date
+  top3: Array<{
+    cur: string;
+    score: number;
+    fundamental: number;
+    pricePerf: number;
+    stdDev: number;
+    tag: string;
+    notes: string[];
+  }>;
+  bottom3: Array<{
+    cur: string;
+    score: number;
+    fundamental: number;
+    pricePerf: number;
+    stdDev: number;
+    tag: string;
+    notes: string[];
+  }>;
+  pairs9: AIPairSetup[];
+  priority1: AIPairSetup;
+  allScores: Array<{
+    cur: string;
+    score: number;
+    fundamental: number;
+    pricePerf: number;
+    stdDev: number;
+    tag: string;
+    notes: string[];
+  }>;
+  divergenceWarnings: string[];
+  generatedAt: Date;
 }
 
 const RFDM_SYSTEM_PROMPT = `You are the RFDM (Relative Flow Divergence Model) scoring engine for a forex trader based in Lagos, Nigeria (WAT = GMT+1).
@@ -163,146 +187,173 @@ Return ONLY valid JSON (no markdown, no explanation, no code fences). Use this e
   "date": "2026-04-24"
 }
 
-IMPORTANT: Include ALL 10 currencies in the scores array (even if score is 0). Sort scores by total descending. Every currency must appear.`
+IMPORTANT: Include ALL 10 currencies in the scores array (even if score is 0). Sort scores by total descending. Every currency must appear.`;
 
 /**
  * Call Claude to score currencies from raw market data.
  * Supports both auto-fetched structured data and manual pasted text.
  */
 export async function scoreWithClaude(input: {
-  mode: 'auto' | 'manual'
+  mode: "auto" | "manual";
   // Auto mode
-  perfMap?: Record<string, number>
-  calendarEvents?: Array<{ title: string; country: string; impact: string; forecast: string | null; actual: string | null; previous: string | null }>
+  perfMap?: Record<string, number>;
+  calendarEvents?: Array<{
+    title: string;
+    country: string;
+    impact: string;
+    forecast: string | null;
+    actual: string | null;
+    previous: string | null;
+  }>;
   // Manual mode
-  calendar?: string
-  perf?: string
-  stddev?: string
-  futures?: string
+  calendar?: string;
+  perf?: string;
+  stddev?: string;
+  futures?: string;
 }): Promise<NormalisedScoringResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set')
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
   // Build the user message with all available data
-  let userMessage = ''
+  let userMessage = "";
 
-  if (input.mode === 'auto') {
+  if (input.mode === "auto") {
     if (input.perfMap && Object.keys(input.perfMap).length > 0) {
-      userMessage += `## FOREX PERFORMANCE (auto-fetched from Barchart)\nAverage % change per currency today:\n`
-      const sorted = Object.entries(input.perfMap).sort((a, b) => b[1] - a[1])
+      userMessage += `## FOREX PERFORMANCE (auto-fetched from Barchart)\nAverage % change per currency today:\n`;
+      const sorted = Object.entries(input.perfMap).sort((a, b) => b[1] - a[1]);
       for (const [cur, pct] of sorted) {
-        userMessage += `${cur}: ${pct > 0 ? '+' : ''}${pct.toFixed(4)}%\n`
+        userMessage += `${cur}: ${pct > 0 ? "+" : ""}${pct.toFixed(4)}%\n`;
       }
-      userMessage += '\n'
+      userMessage += "\n";
     }
 
     if (input.calendarEvents && input.calendarEvents.length > 0) {
-      userMessage += `## ECONOMIC CALENDAR (auto-fetched from ForexFactory)\n`
+      userMessage += `## ECONOMIC CALENDAR (auto-fetched from ForexFactory)\n`;
       for (const e of input.calendarEvents) {
         const status = e.actual
-          ? `Actual: ${e.actual} | Forecast: ${e.forecast || 'n/a'} | Previous: ${e.previous || 'n/a'}`
-          : `Not yet released | Forecast: ${e.forecast || 'n/a'}`
-        userMessage += `[${e.country}] [${e.impact}] ${e.title} — ${status}\n`
+          ? `Actual: ${e.actual} | Forecast: ${e.forecast || "n/a"} | Previous: ${e.previous || "n/a"}`
+          : `Not yet released | Forecast: ${e.forecast || "n/a"}`;
+        userMessage += `[${e.country}] [${e.impact}] ${e.title} — ${status}\n`;
       }
-      userMessage += '\n'
+      userMessage += "\n";
     }
   }
 
-  if (input.mode === 'manual' || userMessage.trim() === '') {
-    if (input.calendar) userMessage += `## ECONOMIC CALENDAR (pasted)\n${input.calendar}\n\n`
-    if (input.perf) userMessage += `## FOREX PERFORMANCE TABLE (pasted)\n${input.perf}\n\n`
-    if (input.stddev) userMessage += `## STANDARD DEVIATION / PRICE SURPRISES (pasted)\n${input.stddev}\n\n`
-    if (input.futures) userMessage += `## FUTURES PERFORMANCE (pasted)\n${input.futures}\n\n`
+  if (input.mode === "manual" || userMessage.trim() === "") {
+    if (input.calendar)
+      userMessage += `## ECONOMIC CALENDAR (pasted)\n${input.calendar}\n\n`;
+    if (input.perf)
+      userMessage += `## FOREX PERFORMANCE TABLE (pasted)\n${input.perf}\n\n`;
+    if (input.stddev)
+      userMessage += `## STANDARD DEVIATION / PRICE SURPRISES (pasted)\n${input.stddev}\n\n`;
+    if (input.futures)
+      userMessage += `## FUTURES PERFORMANCE (pasted)\n${input.futures}\n\n`;
   }
 
   if (!userMessage.trim()) {
-    throw new Error('No market data provided — either paste data manually or wait for auto-fetch')
+    throw new Error(
+      "No market data provided — either paste data manually or wait for auto-fetch",
+    );
   }
 
-  userMessage += `\nToday's date: ${new Date().toISOString().split('T')[0]}\nCurrent time (WAT): ${new Date().toLocaleTimeString('en-GB', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit' })}\n\nScore all 10 currencies using the RFDM rules and return the JSON.`
+  userMessage += `\nToday's date: ${new Date().toISOString().split("T")[0]}\nCurrent time (WAT): ${new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour: "2-digit", minute: "2-digit" })}\n\nScore all 10 currencies using the RFDM rules and return the JSON.`;
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6-20250514',
+      model: "claude-sonnet-4-6-20250514",
       max_tokens: 4096,
       system: RFDM_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
+      messages: [{ role: "user", content: userMessage }],
     }),
-  })
+  });
 
   if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Claude API error ${res.status}: ${err}`)
+    const err = await res.text();
+    throw new Error(`Claude API error ${res.status}: ${err}`);
   }
 
-  const data = await res.json()
-  const text = data.content?.[0]?.text || ''
+  const data = await res.json();
+  const text = data.content?.[0]?.text || "";
 
   // Parse JSON from response — handle potential markdown wrapping
-  let jsonStr = text.trim()
-  if (jsonStr.startsWith('```')) {
-    jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+  let jsonStr = text.trim();
+  if (jsonStr.startsWith("```")) {
+    jsonStr = jsonStr.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
   }
 
-  let parsed: AIScoringResult
+  let parsed: AIScoringResult;
   try {
-    parsed = JSON.parse(jsonStr)
+    parsed = JSON.parse(jsonStr);
   } catch (e) {
-    console.error('Claude returned invalid JSON:', text.substring(0, 500))
-    throw new Error('Claude returned invalid JSON — scoring failed')
+    console.error("Claude returned invalid JSON:", text.substring(0, 500));
+    throw new Error("Claude returned invalid JSON — scoring failed");
   }
 
-  return normaliseResult(parsed)
+  return normaliseResult(parsed);
 }
 
 /**
  * Convert Claude's AI output to the normalised format the rest of the app expects.
  */
 function normaliseResult(ai: AIScoringResult): NormalisedScoringResult {
-  const allScores = ai.scores.map(s => ({
-    cur: s.currency,
-    score: s.total,
-    fundamental: s.fundamental,
-    pricePerf: s.price,
-    stdDev: s.stddev,
-    tag: s.tag,
-    notes: s.notes,
-  })).sort((a, b) => b.score - a.score)
+  const allScores = ai.scores
+    .map((s) => ({
+      cur: s.currency,
+      score: s.total,
+      fundamental: s.fundamental,
+      pricePerf: s.price,
+      stdDev: s.stddev,
+      tag: s.tag,
+      notes: s.notes,
+    }))
+    .sort((a, b) => b.score - a.score);
 
-  const top3 = allScores.filter(s => ai.top3.includes(s.cur)).slice(0, 3)
-  const bottom3 = allScores.filter(s => ai.bottom3.includes(s.cur)).slice(0, 3)
+  const top3 = allScores.filter((s) => ai.top3.includes(s.cur)).slice(0, 3);
+  const bottom3 = allScores
+    .filter((s) => ai.bottom3.includes(s.cur))
+    .slice(0, 3);
 
   // Ensure top3 and bottom3 have 3 items each (fallback to allScores)
   while (top3.length < 3 && allScores.length > top3.length) {
-    const next = allScores.find(s => !top3.some(t => t.cur === s.cur) && !bottom3.some(b => b.cur === s.cur))
-    if (next) top3.push(next)
-    else break
+    const next = allScores.find(
+      (s) =>
+        !top3.some((t) => t.cur === s.cur) &&
+        !bottom3.some((b) => b.cur === s.cur),
+    );
+    if (next) top3.push(next);
+    else break;
   }
   while (bottom3.length < 3 && allScores.length > bottom3.length) {
-    const next = [...allScores].reverse().find(s => !top3.some(t => t.cur === s.cur) && !bottom3.some(b => b.cur === s.cur))
-    if (next) bottom3.push(next)
-    else break
+    const next = [...allScores]
+      .reverse()
+      .find(
+        (s) =>
+          !top3.some((t) => t.cur === s.cur) &&
+          !bottom3.some((b) => b.cur === s.cur),
+      );
+    if (next) bottom3.push(next);
+    else break;
   }
 
   // Build priority1 as a full PairSetup
   const priority1Setup: AIPairSetup = ai.pairs9[0] || {
-    pair: ai.priority1?.pair || 'N/A',
-    direction: (ai.priority1?.direction as 'Long' | 'Short') || 'Long',
-    strong: ai.top3[0] || '',
-    weak: ai.bottom3[0] || '',
+    pair: ai.priority1?.pair || "N/A",
+    direction: (ai.priority1?.direction as "Long" | "Short") || "Long",
+    strong: ai.top3[0] || "",
+    weak: ai.bottom3[0] || "",
     strongScore: top3[0]?.score || 0,
     weakScore: bottom3[0]?.score || 0,
     divergence: ai.priority1?.divergence || 0,
-    grade: (ai.priority1?.grade as 'A+' | 'B' | 'C' | 'Skip') || 'C',
-    session: ['London', 'New York'],
-    reason: ai.priority1?.reason || '',
-  }
+    grade: (ai.priority1?.grade as "A+" | "B" | "C" | "Skip") || "C",
+    session: ["London", "New York"],
+    reason: ai.priority1?.reason || "",
+  };
 
   return {
     top3,
@@ -312,41 +363,64 @@ function normaliseResult(ai: AIScoringResult): NormalisedScoringResult {
     allScores,
     divergenceWarnings: ai.divergenceWarnings || [],
     generatedAt: new Date(),
-  }
+  };
 }
 
 /**
  * Format alert message for Telegram
  */
-export function formatTelegramAlertAI(result: NormalisedScoringResult, session: string): string {
-  const { top3, bottom3, priority1, pairs9, divergenceWarnings } = result
-  const date = new Date().toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+export function formatTelegramAlertAI(
+  result: NormalisedScoringResult,
+  session: string,
+): string {
+  const { top3, bottom3, priority1, pairs9, divergenceWarnings } = result;
+  const date = new Date().toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
 
-  const top3str = top3.map((c, i) => `${i + 1}. ${c.cur} ${c.score > 0 ? '+' : ''}${c.score.toFixed(1)} — ${c.tag}`).join('\n')
-  const bot3str = bottom3.map((c, i) => `${i + 1}. ${c.cur} ${c.score > 0 ? '+' : ''}${c.score.toFixed(1)} — ${c.tag}`).join('\n')
-  const aplus = pairs9.filter(p => p.grade === 'A+').map(p => `${p.pair} ${p.direction}`).join(', ')
-  const bGrade = pairs9.filter(p => p.grade === 'B').map(p => `${p.pair} ${p.direction}`).join(', ')
+  const top3str = top3
+    .map(
+      (c, i) =>
+        `${i + 1}. ${c.cur} ${c.score > 0 ? "+" : ""}${c.score.toFixed(1)} — ${c.tag}`,
+    )
+    .join("\n");
+  const bot3str = bottom3
+    .map(
+      (c, i) =>
+        `${i + 1}. ${c.cur} ${c.score > 0 ? "+" : ""}${c.score.toFixed(1)} — ${c.tag}`,
+    )
+    .join("\n");
+  const aplus = pairs9
+    .filter((p) => p.grade === "A+")
+    .map((p) => `${p.pair} ${p.direction}`)
+    .join(", ");
+  const bGrade = pairs9
+    .filter((p) => p.grade === "B")
+    .map((p) => `${p.pair} ${p.direction}`)
+    .join(", ");
 
-  let msg = `🎯 *RFDM Alert — ${session} Session*\n📅 ${date}\n🤖 Scored by Claude AI\n\n`
-  msg += `*Strongest (Top 3)*\n${top3str}\n\n`
-  msg += `*Weakest (Bottom 3)*\n${bot3str}\n\n`
+  let msg = `🎯 *RFDM Alert — ${session} Session*\n📅 ${date}\n🤖 Scored by Claude AI\n\n`;
+  msg += `*Strongest (Top 3)*\n${top3str}\n\n`;
+  msg += `*Weakest (Bottom 3)*\n${bot3str}\n\n`;
 
   if (priority1) {
-    msg += `*Priority Setup*\n📊 ${priority1.pair} ${priority1.direction} — Divergence: ${priority1.divergence.toFixed(1)} (${priority1.grade})\n${priority1.reason}\n\n`
+    msg += `*Priority Setup*\n📊 ${priority1.pair} ${priority1.direction} — Divergence: ${priority1.divergence.toFixed(1)} (${priority1.grade})\n${priority1.reason}\n\n`;
   }
 
   if (aplus || bGrade) {
-    msg += `*Graded Setups*\n`
-    if (aplus) msg += `✅ A+: ${aplus}\n`
-    if (bGrade) msg += `⚡ B: ${bGrade}\n`
-    msg += '\n'
+    msg += `*Graded Setups*\n`;
+    if (aplus) msg += `✅ A+: ${aplus}\n`;
+    if (bGrade) msg += `⚡ B: ${bGrade}\n`;
+    msg += "\n";
   }
 
   if (divergenceWarnings.length > 0) {
-    msg += `*⚠️ Divergence Warnings*\n${divergenceWarnings.map(w => `→ ${w}`).join('\n')}\n\n`
+    msg += `*⚠️ Divergence Warnings*\n${divergenceWarnings.map((w) => `→ ${w}`).join("\n")}\n\n`;
   }
 
-  msg += `*Reminder*\n→ Wait for H1 candle to fully close\n→ Declare Model A or B before entry\n→ Minimum R:R 1:2\n→ No entries 30min after session open`
+  msg += `*Reminder*\n→ Wait for H1 candle to fully close\n→ Declare Model A or B before entry\n→ Minimum R:R 1:2\n→ No entries 30min after session open`;
 
-  return msg
+  return msg;
 }
