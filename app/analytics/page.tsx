@@ -170,6 +170,52 @@ export default function AnalyticsPage() {
         )}
       </div>
 
+      {/* Alignment quality vs outcome */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-8">
+        <p className="section-label mt-0">Alignment quality vs outcome</p>
+        {analytics.totalTrades < 20 ? (
+          <div className="text-center py-8">
+            <p className="text-gray-400 text-sm">Need 20+ closed trades to show alignment insights</p>
+            <p className="text-xs text-gray-300 mt-1">{analytics.totalTrades} / 20 trades logged</p>
+          </div>
+        ) : (() => {
+          // Build alignment data from trades that have grade info
+          const gradeGroups: Record<string, { wins: number; total: number }> = { 'A+': { wins: 0, total: 0 }, 'B': { wins: 0, total: 0 }, 'C': { wins: 0, total: 0 } }
+          trades.filter(t => t.outcome !== 'Open').forEach(t => {
+            if (gradeGroups[t.grade]) {
+              gradeGroups[t.grade].total++
+              if (t.outcome === 'Win') gradeGroups[t.grade].wins++
+            }
+          })
+          const alignData = Object.entries(gradeGroups).filter(([, v]) => v.total > 0).map(([grade, v]) => ({
+            grade, winRate: Math.round((v.wins / v.total) * 100), trades: v.total,
+          }))
+          return (
+            <div>
+              <ResponsiveContainer width="100%" height={160}>
+                <BarChart data={alignData} barSize={50}>
+                  <XAxis dataKey="grade" tick={{ fontSize: 12, fill: '#444' }} />
+                  <YAxis tick={{ fontSize: 11, fill: '#888' }} unit="%" />
+                  <Tooltip formatter={(v: number) => [`${v}%`, 'Win rate']} />
+                  <Bar dataKey="winRate" radius={[6, 6, 0, 0]}>
+                    {alignData.map(d => <Cell key={d.grade} fill={d.grade === 'A+' ? '#1a6b4a' : d.grade === 'B' ? '#d4830a' : '#888'} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              <p className="text-xs text-gray-400 text-center mt-2">Does higher alignment grade = better win rate?</p>
+              <div className="mt-3 space-y-1">
+                {alignData.map(d => (
+                  <div key={d.grade} className="flex justify-between text-xs">
+                    <span className="text-gray-500">{d.grade} — {d.trades} trades</span>
+                    <span className="font-mono font-medium">{d.winRate}% win rate</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })()}
+      </div>
+
       {/* Key insights */}
       <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5">
         <p className="section-label mt-0">RFDM checklist — key rules</p>

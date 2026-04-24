@@ -21,6 +21,8 @@ export default function JournalPage() {
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  const [alignment, setAlignment] = useState<string>('')
+
   const [form, setForm] = useState({
     date: new Date().toISOString().split('T')[0],
     pair: 'NZD/USD', direction: 'Short', model: 'A', grade: 'A+',
@@ -28,6 +30,19 @@ export default function JournalPage() {
     closePrice: '', resultR: '', outcome: 'Open', reason: '',
     notes: '', strongCcy: 'USD', weakCcy: 'NZD', divScore: '', screenshotUrl: '',
   })
+
+  // Fetch alignment at entry from latest scores
+  useEffect(() => {
+    fetch('/api/dashboard').then(r => r.json()).then(d => {
+      if (d.scores) {
+        const top3 = (d.scores.top3 || []).map((c: any) => `${c.cur || c.currency} (${(c.score || c.total || 0).toFixed(1)})`)
+        const bot3 = (d.scores.bottom3 || []).map((c: any) => `${c.cur || c.currency} (${(c.score || c.total || 0).toFixed(1)})`)
+        const p1 = d.scores.priority1
+        const divText = p1 ? ` · Priority: ${p1.pair} ${p1.direction} div ${p1.divergence?.toFixed(1)} ${p1.grade}` : ''
+        setAlignment(`Strong: ${top3.join(', ')} | Weak: ${bot3.join(', ')}${divText}`)
+      }
+    }).catch(() => {})
+  }, [])
 
   useEffect(() => { fetchTrades() }, [])
 
@@ -198,6 +213,14 @@ export default function JournalPage() {
                   placeholder="e.g. 15.3" value={form.divScore} onChange={e => setForm(f => ({ ...f, divScore: e.target.value }))} />
               </div>
             </div>
+
+            {/* Alignment at entry */}
+            {alignment && (
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-xs text-blue-700 font-medium mb-1">📊 Alignment at entry (auto-filled from latest score)</p>
+                <p className="text-xs text-blue-600 font-mono">{alignment}</p>
+              </div>
+            )}
 
             {/* Reason - most important field */}
             <div className="mb-4">

@@ -1,10 +1,12 @@
 // app/api/alerts/route.ts
+// Scoring API — uses Claude AI to score currencies
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
+export const maxDuration = 60
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { scoreCurrencies, scoreCurrenciesFromData, formatTelegramAlert } from '@/lib/scoring'
+import { scoreWithClaude, formatTelegramAlertAI } from '@/lib/ai-scoring'
 import { fetchAllMarketData } from '@/lib/fetchers'
 import { sendTelegramMessage } from '@/lib/telegram'
 
@@ -12,24 +14,24 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const {
-      mode = 'auto',          // 'auto' | 'manual'
-      calendar, perf, stddev, futures,  // manual mode inputs
+      mode = 'auto',
+      calendar, perf, stddev, futures,
       sendAlert = false,
     } = body
 
-    let result
     let fetchErrors: string[] = []
 
+    // Build the input for Claude
+    let scoringInput: Parameters<typeof scoreWithClaude>[0]
+
     if (mode === 'auto') {
-      // ── Auto mode: fetch live from Barchart + ForexFactory ──────────────────
       const { perfMap, calEvents, errors } = await fetchAllMarketData()
       fetchErrors = errors
 
-      if (Object.keys(perfMap).length === 0 && errors.length > 0) {
-        // Both fetches failed — fall back to manual if data was provided
+      if (Object.keys(perfMap).length === 0 && calEvents.length === 0) {
         if (perf || calendar) {
-          result = scoreCurrencies(calendar || '', perf || '', stddev || '', futures || '')
-          fetchErrors.push('Fell back to manual data due to fetch errors')
+          scoringInput = { mode: 'manual', calendar, perf, stddev, futures }
+          fetchErrors.push('Auto-fetch failed — fell back to manual data')
         } else {
           return NextResponse.json(
             { error: 'Auto-fetch failed and no manual data provided', details: errors },
@@ -37,14 +39,16 @@ export async function POST(req: NextRequest) {
           )
         }
       } else {
-        result = scoreCurrenciesFromData(perfMap, calEvents)
+        scoringInput = { mode: 'auto', perfMap, calendarEvents: calEvents }
       }
     } else {
-      // ── Manual mode: score from pasted text ─────────────────────────────────
-      result = scoreCurrencies(calendar || '', perf || '', stddev || '', futures || '')
+      scoringInput = { mode: 'manual', calendar, perf, stddev, futures }
     }
 
-    // ── Save to DB ─────────────────────────────────────────────────────────────
+    // Score with Claude AI
+    const result = await scoreWithClaude(scoringInput)
+
+    // Save to DB
     const today = new Date()
     today.setUTCHours(0, 0, 0, 0)
 
@@ -68,21 +72,25 @@ export async function POST(req: NextRequest) {
         bottom3: result.bottom3 as any,
         pairs9: result.pairs9 as any,
         priority1: result.priority1 as any,
+        sentAt: sendAlert ? new Date() : undefined,
       },
     })
 
-    // ── Optionally send Telegram ───────────────────────────────────────────────
+    // Save hourly snapshot
+    await saveHourlySnapshot(result)
+
+    // Optionally send Telegram
     if (sendAlert && result.priority1) {
       const hour = new Date().getUTCHours()
       const session = hour < 10 ? 'London' : 'New York'
-      const message = formatTelegramAlert(result, session)
+      const message = formatTelegramAlertAI(result, session)
       await sendTelegramMessage(message)
     }
 
-    return NextResponse.json({ ...result, fetchErrors })
-  } catch (err) {
+    return NextResponse.json({ ...result, fetchErrors, scoredBy: 'claude-ai' })
+  } catch (err: any) {
     console.error('Alert error:', err)
-    return NextResponse.json({ error: 'Failed to score' }, { status: 500 })
+    return NextResponse.json({ error: err.message || 'Failed to score' }, { status: 500 })
   }
 }
 
@@ -91,4 +99,20 @@ export async function GET() {
   today.setUTCHours(0, 0, 0, 0)
   const alert = await db.dailyAlert.findUnique({ where: { date: today } })
   return NextResponse.json(alert || null)
+}
+
+async function saveHourlySnapshot(result: any) {
+  const bucket = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000)
+  const top3 = result.top3.map((c: any) => c.cur)
+  const bottom3 = result.bottom3.map((c: any) => c.cur)
+
+  const upserts = result.allScores.map((s: any) =>
+    db.hourlyScore.upsert({
+      where: { bucket_currency: { bucket, currency: s.cur } },
+      create: { bucket, currency: s.cur, score: s.score, pricePerf: s.pricePerf, top3, bottom3 },
+      update: { score: s.score, pricePerf: s.pricePerf, top3, bottom3 },
+    })
+  )
+
+  await Promise.all(upserts)
 }

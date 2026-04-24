@@ -1,26 +1,23 @@
 // app/api/cron/route.ts
 // Vercel Cron jobs:
-//   - Session alerts: 7:30am WAT (06:30 UTC) + 2:30pm WAT (13:30 UTC) daily
-//   - Hourly alignment: every hour
-
+//   - Session alerts: 7:30am WAT (06:30 UTC) + 2:30pm WAT (13:30 UTC)
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { scoreCurrenciesFromData, formatTelegramAlert, checkTradeAlignment } from '@/lib/scoring'
+import { scoreWithClaude, formatTelegramAlertAI } from '@/lib/ai-scoring'
 import { fetchAllMarketData } from '@/lib/fetchers'
 import { sendTelegramMessage } from '@/lib/telegram'
 
 export async function GET(req: Request) {
-  // Verify this is called by Vercel Cron (or our own schedule)
   const authHeader = req.headers.get('authorization')
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
   const { searchParams } = new URL(req.url)
-  const jobType = searchParams.get('job') || 'session' // 'session' | 'alignment'
+  const jobType = searchParams.get('job') || 'session'
 
   if (jobType === 'alignment') {
     return runAlignmentCheck()
@@ -28,17 +25,14 @@ export async function GET(req: Request) {
   return runSessionAlert()
 }
 
-// ── Session alert job (7:30am + 2:30pm WAT) ─────────────────────────────────
 async function runSessionAlert() {
   const hour = new Date().getUTCHours()
   const session = hour < 10 ? 'London' : 'New York'
 
   try {
-    // Auto-fetch live market data
     const { perfMap, calEvents, errors } = await fetchAllMarketData()
 
-    if (Object.keys(perfMap).length === 0) {
-      // Fetch failed — send reminder
+    if (Object.keys(perfMap).length === 0 && calEvents.length === 0) {
       await sendTelegramMessage(
         `⚠️ *Elistas — ${session} Alert*\n\n` +
         `Could not fetch market data automatically.\n` +
@@ -48,7 +42,8 @@ async function runSessionAlert() {
       return NextResponse.json({ ok: true, message: 'Fetch failed — reminder sent', errors })
     }
 
-    const result = scoreCurrenciesFromData(perfMap, calEvents)
+    // Score with Claude AI
+    const result = await scoreWithClaude({ mode: 'auto', perfMap, calendarEvents: calEvents })
 
     // Save to DB
     const today = new Date()
@@ -74,116 +69,94 @@ async function runSessionAlert() {
     })
 
     // Save hourly snapshot
-    await saveHourlySnapshot(result.allScores, result.top3.map(c => c.cur), result.bottom3.map(c => c.cur))
+    await saveHourlySnapshot(result)
 
-    // Format and send Telegram
-    const message = formatTelegramAlert(result, session)
+    // Send Telegram
+    const message = formatTelegramAlertAI(result, session)
     const sent = await sendTelegramMessage(message)
 
+    // Check alignment of open trades
+    await checkOpenTradeAlignment(result)
+
     return NextResponse.json({
-      ok: true,
-      sent,
-      session,
+      ok: true, sent, session,
       priority: result.priority1?.pair,
+      scoredBy: 'claude-ai',
       fetchErrors: errors,
     })
   } catch (err) {
     console.error('Session cron error:', err)
+    await sendTelegramMessage(`❌ *Elistas Cron Error*\n${session} scoring failed: ${err}`)
     return NextResponse.json({ error: 'Session cron failed' }, { status: 500 })
   }
 }
 
-// ── Hourly alignment check job ────────────────────────────────────────────────
 async function runAlignmentCheck() {
   try {
-    // Fetch fresh market data
     const { perfMap, calEvents, errors } = await fetchAllMarketData()
     if (Object.keys(perfMap).length === 0) {
       return NextResponse.json({ ok: true, message: 'Skipped — no market data', errors })
     }
 
-    const currentScores = scoreCurrenciesFromData(perfMap, calEvents)
+    const result = await scoreWithClaude({ mode: 'auto', perfMap, calendarEvents: calEvents })
+    await saveHourlySnapshot(result)
+    await checkOpenTradeAlignment(result)
 
-    // Save hourly snapshot
-    await saveHourlySnapshot(
-      currentScores.allScores,
-      currentScores.top3.map(c => c.cur),
-      currentScores.bottom3.map(c => c.cur)
-    )
-
-    // Get all open trades
-    const openTrades = await db.trade.findMany({
-      where: { outcome: 'Open' },
-    })
-
-    if (openTrades.length === 0) {
-      return NextResponse.json({ ok: true, message: 'No open trades to check' })
-    }
-
-    const alerts: string[] = []
-
-    for (const trade of openTrades) {
-      const check = checkTradeAlignment(trade, currentScores)
-
-      // Save alignment record
-      await db.tradeAlignment.create({
-        data: {
-          tradeId: trade.id,
-          status: check.status,
-          strongStillTop3: currentScores.top3.some(c => c.cur === trade.strongCcy),
-          weakStillBottom3: currentScores.bottom3.some(c => c.cur === trade.weakCcy),
-          reason: check.reason,
-        },
-      })
-
-      // Alert on Amber or Red
-      if (check.status === 'Amber' || check.status === 'Red') {
-        const emoji = check.status === 'Red' ? '🔴' : '🟡'
-        alerts.push(
-          `${emoji} *${trade.pair} ${trade.direction}*\n` +
-          `${check.reason}\n` +
-          `Entry: ${trade.entryPrice} · SL: ${trade.slPrice}`
-        )
-      }
-    }
-
-    if (alerts.length > 0) {
-      const msg =
-        `⚡ *Elistas — Trade Alignment Alert*\n` +
-        `${new Date().toLocaleTimeString('en-GB', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit' })} WAT\n\n` +
-        alerts.join('\n\n') +
-        `\n\nTop 3: ${currentScores.top3.map(c => c.cur).join(' · ')}\n` +
-        `Bottom 3: ${currentScores.bottom3.map(c => c.cur).join(' · ')}`
-      await sendTelegramMessage(msg)
-    }
-
-    return NextResponse.json({
-      ok: true,
-      openTrades: openTrades.length,
-      alertsSent: alerts.length,
-      fetchErrors: errors,
-    })
+    return NextResponse.json({ ok: true, scoredBy: 'claude-ai', fetchErrors: errors })
   } catch (err) {
     console.error('Alignment cron error:', err)
     return NextResponse.json({ error: 'Alignment cron failed' }, { status: 500 })
   }
 }
 
-// ── Helper: save hourly score snapshot ────────────────────────────────────────
-async function saveHourlySnapshot(
-  allScores: Array<{ cur: string; score: number; pricePerf: number }>,
-  top3: string[],
-  bottom3: string[]
-) {
-  const bucket = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000)
+async function checkOpenTradeAlignment(result: any) {
+  const openTrades = await db.trade.findMany({ where: { outcome: 'Open' } })
+  if (openTrades.length === 0) return
 
-  const upserts = allScores.map(s =>
+  const top3Curs = new Set(result.top3.map((c: any) => c.cur))
+  const bottom3Curs = new Set(result.bottom3.map((c: any) => c.cur))
+  const alerts: string[] = []
+
+  for (const trade of openTrades) {
+    const strongStillTop = top3Curs.has(trade.strongCcy)
+    const weakStillBottom = bottom3Curs.has(trade.weakCcy)
+    const status = strongStillTop && weakStillBottom ? 'Green'
+      : !strongStillTop && !weakStillBottom ? 'Red' : 'Amber'
+    const reason = status === 'Green'
+      ? `${trade.strongCcy} still top 3 · ${trade.weakCcy} still bottom 3`
+      : status === 'Red'
+        ? `${trade.strongCcy} dropped out of top 3 AND ${trade.weakCcy} left bottom 3`
+        : !strongStillTop ? `${trade.strongCcy} no longer in top 3` : `${trade.weakCcy} no longer in bottom 3`
+
+    await db.tradeAlignment.create({
+      data: { tradeId: trade.id, status, strongStillTop3: strongStillTop, weakStillBottom3: weakStillBottom, reason },
+    })
+
+    if (status !== 'Green') {
+      const emoji = status === 'Red' ? '🔴' : '🟡'
+      alerts.push(`${emoji} *${trade.pair} ${trade.direction}*\n${reason}\nEntry: ${trade.entryPrice} · SL: ${trade.slPrice}`)
+    }
+  }
+
+  if (alerts.length > 0) {
+    const time = new Date().toLocaleTimeString('en-GB', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit' })
+    await sendTelegramMessage(
+      `⚡ *Elistas — Trade Alignment Alert*\n${time} WAT\n\n${alerts.join('\n\n')}\n\nTop 3: ${result.top3.map((c: any) => c.cur).join(' · ')}\nBottom 3: ${result.bottom3.map((c: any) => c.cur).join(' · ')}`
+    )
+  }
+}
+
+async function saveHourlySnapshot(result: any) {
+  const bucket = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000)
+  const top3 = result.top3.map((c: any) => c.cur)
+  const bottom3 = result.bottom3.map((c: any) => c.cur)
+
+  const upserts = result.allScores.map((s: any) =>
     db.hourlyScore.upsert({
       where: { bucket_currency: { bucket, currency: s.cur } },
-      create: { bucket, currency: s.cur, score: s.score, pricePerf: s.pricePerf, top3, bottom3 },
-      update: { score: s.score, pricePerf: s.pricePerf, top3, bottom3 },
+      create: { bucket, currency: s.cur, score: s.score, pricePerf: s.pricePerf || 0, top3, bottom3 },
+      update: { score: s.score, pricePerf: s.pricePerf || 0, top3, bottom3 },
     })
   )
-
   await Promise.all(upserts)
 }
