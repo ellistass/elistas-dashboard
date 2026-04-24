@@ -1,7 +1,8 @@
 // lib/scoring.ts
 // RFDM Currency Scoring Engine
-// Ranks top 3 strongest vs bottom 3 weakest currencies
-// from economic calendar + forex performance + std dev + futures data
+// v2: supports both structured JSON data (auto-fetch) and raw text (manual paste)
+
+import type { CalendarEvent } from './fetchers'
 
 export interface CurrencyScore {
   cur: string
@@ -350,4 +351,172 @@ ${bGrade ? `⚡ B: ${bGrade}` : ''}
 → Declare Model A or B before entry
 → Minimum R:R 1:2
 → No entries 30min after session open`
+}
+
+// ─── V2: Score from structured auto-fetched data ────────────────────────────
+
+/**
+ * Score currencies from structured data (Barchart JSON + ForexFactory JSON).
+ * This replaces manual copy-paste with auto-fetched clean data.
+ *
+ * @param perfMap       per-currency average % change from Barchart (e.g. { USD: 0.18 })
+ * @param calEvents     today's ForexFactory calendar events
+ * @param stdDevMap     optional per-currency std dev scores (Barchart price surprises)
+ */
+export function scoreCurrenciesFromData(
+  perfMap: Record<string, number>,
+  calEvents: CalendarEvent[],
+  stdDevMap?: Record<string, number>
+): ScoringResult {
+  const scores = initScores()
+
+  // ── 1. Price performance pillar (weight: 1.5×) ────────────────────────────
+  // perfMap gives avg % change for each currency across all pairs it trades in.
+  // Scale factor: ±0.2% avg = notable move for forex (typical daily range is 0.1–0.5%)
+  const PERF_SCALE = 4 // multiplier to convert % into score contribution
+
+  for (const [cur, avgPct] of Object.entries(perfMap)) {
+    if (!scores[cur]) continue
+    scores[cur].pricePerf = avgPct
+
+    // Cap contribution at ±3 to prevent outliers from dominating
+    const contribution = Math.max(-3, Math.min(3, avgPct * PERF_SCALE))
+    scores[cur].score += contribution * 1.5
+
+    if (Math.abs(avgPct) > 0.05) {
+      scores[cur].notes.push(
+        `${avgPct > 0 ? '↑' : '↓'} price ${avgPct > 0 ? '+' : ''}${avgPct.toFixed(3)}% avg`
+      )
+    }
+  }
+
+  // ── 2. Fundamentals pillar (weight: 1.5×) ─────────────────────────────────
+  // Compare actual vs forecast for High/Medium impact events.
+  // High impact beat/miss = ±2, Medium = ±1
+  for (const event of calEvents) {
+    const cur = event.country
+    if (!scores[cur]) continue
+    if (!event.actual || !event.forecast) continue // event hasn't released yet
+    if (event.impact === 'Low' || event.impact === 'Holiday') continue
+
+    const actual = parseFloat(event.actual.replace(/[^0-9.\-]/g, ''))
+    const forecast = parseFloat(event.forecast.replace(/[^0-9.\-]/g, ''))
+    if (isNaN(actual) || isNaN(forecast)) continue
+
+    // Tolerance: 0.1% difference to avoid noise from rounding
+    const diff = actual - forecast
+    if (Math.abs(diff) < 0.001) continue
+
+    const beat = diff > 0
+    const impactWeight = event.impact === 'High' ? 2 : 1
+    const contribution = beat ? impactWeight : -impactWeight
+
+    scores[cur].fundamental += contribution
+    scores[cur].score += contribution * 1.5
+    scores[cur].notes.push(
+      `${beat ? '↑' : '↓'} ${event.title.substring(0, 40)} (${event.impact})`
+    )
+  }
+
+  // ── 3. Std dev / price surprises pillar (weight: 0.8×) ────────────────────
+  if (stdDevMap) {
+    for (const [cur, sd] of Object.entries(stdDevMap)) {
+      if (!scores[cur]) continue
+      scores[cur].stdDev = sd
+      const contribution = Math.max(-2, Math.min(2, sd))
+      scores[cur].score += contribution * 0.8
+      if (Math.abs(sd) > 0.2) {
+        scores[cur].notes.push(`σ ${sd > 0 ? '+' : ''}${sd.toFixed(2)}`)
+      }
+    }
+  }
+
+  // ── Build tags and sort ────────────────────────────────────────────────────
+  Object.values(scores).forEach(s => { s.tag = buildTag(s) })
+
+  const allScores = Object.values(scores).sort((a, b) => b.score - a.score)
+
+  // Include currencies with any score activity (even zero if they had data)
+  const active = allScores.filter(s => {
+    const hasPerfData = perfMap[s.cur] !== undefined
+    const hasFundData = calEvents.some(e => e.country === s.cur && e.actual)
+    return hasPerfData || hasFundData || Math.abs(s.score) > 0
+  })
+
+  const scored = active.length >= 6 ? active : allScores
+
+  const top3 = scored.slice(0, 3)
+  const bottom3 = scored.slice(-3).reverse()
+
+  // ── Build 9-pair matrix ────────────────────────────────────────────────────
+  const pairs9: PairSetup[] = []
+  top3.forEach(strong => {
+    bottom3.forEach(weak => {
+      if (strong.cur === weak.cur) return
+      const pair = findPair(strong.cur, weak.cur)
+      const [base] = pair.split('/')
+      const direction: 'Long' | 'Short' = base === strong.cur ? 'Long' : 'Short'
+      const divergence = Math.abs(strong.score - weak.score)
+      const grade = gradeSetup(divergence)
+      const sessions = getBestSession(pair)
+
+      pairs9.push({
+        pair,
+        direction,
+        strong: strong.cur,
+        weak: weak.cur,
+        strongScore: strong.score,
+        weakScore: weak.score,
+        divergence,
+        grade,
+        session: sessions,
+        reason: `${strong.cur} strength (${strong.tag}) vs ${weak.cur} weakness (${weak.tag})`,
+      })
+    })
+  })
+
+  pairs9.sort((a, b) => b.divergence - a.divergence)
+  const priority1 = pairs9[0]
+
+  return {
+    top3,
+    bottom3,
+    pairs9,
+    priority1: priority1 || pairs9[0],
+    allScores: scored,
+    generatedAt: new Date(),
+  }
+}
+
+/**
+ * Check alignment status for an open trade against current scores.
+ * Returns Green / Amber / Red.
+ */
+export function checkTradeAlignment(
+  trade: { strongCcy: string; weakCcy: string; direction: string; pair: string },
+  currentScores: ScoringResult
+): { status: 'Green' | 'Amber' | 'Red'; reason: string } {
+  const top3Curs = new Set(currentScores.top3.map(c => c.cur))
+  const bottom3Curs = new Set(currentScores.bottom3.map(c => c.cur))
+
+  const strongStillTop = top3Curs.has(trade.strongCcy)
+  const weakStillBottom = bottom3Curs.has(trade.weakCcy)
+
+  if (strongStillTop && weakStillBottom) {
+    return { status: 'Green', reason: `${trade.strongCcy} still top 3 · ${trade.weakCcy} still bottom 3` }
+  }
+
+  if (!strongStillTop && !weakStillBottom) {
+    return {
+      status: 'Red',
+      reason: `⚠️ ${trade.strongCcy} dropped out of top 3 AND ${trade.weakCcy} left bottom 3 — setup invalidated`,
+    }
+  }
+
+  // One side is out of place → Amber
+  const reason = !strongStillTop
+    ? `${trade.strongCcy} no longer in top 3 — monitor closely`
+    : `${trade.weakCcy} no longer in bottom 3 — monitor closely`
+
+  return { status: 'Amber', reason }
 }

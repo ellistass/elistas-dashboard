@@ -3,8 +3,8 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'RFDM Trading System',
-  description: 'Relative Flow Divergence Model — Currency strength scoring, session alerts, trade journal',
+  title: 'Elistas — Trading System',
+  description: 'Currency strength scoring, session alerts, trade journal & alignment monitoring',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -19,7 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <nav className="border-b border-gray-200 bg-white sticky top-0 z-50">
           <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="font-mono text-sm font-medium tracking-wider text-gray-400">RFDM</span>
+              <span className="font-mono text-sm font-medium tracking-wider text-gray-400">ELISTAS</span>
               <span className="text-gray-200">|</span>
               <span className="font-sans text-sm font-medium">Trading System</span>
             </div>

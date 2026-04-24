@@ -160,7 +160,7 @@ elistas-dashboard/
 - [x] `TELEGRAM_BOT_TOKEN`
 - [x] `TELEGRAM_CHAT_ID`
 - [x] `CRON_SECRET`
-- [ ] `NEXT_PUBLIC_APP_URL` — your Vercel URL (after first deploy)
+- [x] `NEXT_PUBLIC_APP_URL` — https://elistas-dashboard.vercel.app
 
 ### Phase 4 — GitHub
 - [ ] Create repo at github.com/new → `elistas-dashboard` (Private)
@@ -168,10 +168,10 @@ elistas-dashboard/
 - [ ] `git push -u origin main`
 
 ### Phase 5 — Vercel Deploy
-- [ ] `npx vercel` in the project folder
-- [ ] Add all env vars in Vercel dashboard → Settings → Environment Variables
-- [ ] Redeploy after adding env vars
-- [ ] Add `NEXT_PUBLIC_APP_URL` = your live Vercel URL, then redeploy once more
+- [x] `npx vercel` in the project folder
+- [x] Add all env vars in Vercel dashboard → Settings → Environment Variables
+- [x] Redeploy after adding env vars
+- [x] Live at https://elistas-dashboard.vercel.app
 
 ### Phase 6 — Verify
 - [ ] Visit live URL → Session Alerts page loads
@@ -180,6 +180,51 @@ elistas-dashboard/
 - [ ] Log a test trade in Journal
 - [ ] Check Analytics page shows the trade
 - [ ] Confirm Vercel cron is listed under Project → Settings → Cron Jobs
+
+---
+
+## V2 Roadmap — Elistas Trading System
+
+### Task 1 — Auto-Fetch Scoring Engine ✅ DONE
+- [x] Created `lib/fetchers.ts` — auto-fetches from Barchart JSON API + ForexFactory JSON API
+- [x] Added `scoreCurrenciesFromData()` to `lib/scoring.ts` — scores from structured data, no regex
+- [x] `app/api/alerts/route.ts` — `mode: 'auto'` default, `mode: 'manual'` as fallback
+- [x] No manual copy-paste needed — fetches live data on every analysis
+- [x] Data sources: Barchart `proxies/core-api/v1/quotes/get?lists=forex.markets.all` (price perf) + ForexFactory `nfs.faireconomy.media/ff_calendar_thisweek.json` (fundamentals)
+
+### Task 2 — Hourly Cron + Trade Alignment ✅ DONE
+- [x] Added `HourlyScore` and `TradeAlignment` models to Prisma schema
+- [x] Hourly cron job fetches Barchart live data every hour (weekdays)
+- [x] `checkTradeAlignment()` in `lib/scoring.ts` — checks Green/Amber/Red per trade
+- [x] Telegram alert sent when any open trade goes Amber or Red
+- [x] `app/api/cron/route.ts` — `?job=session` for daily alerts, `?job=alignment` for hourly checks
+- [x] Removed Alpha Vantage dependency — Barchart is better and free
+- [x] `vercel.json` updated with hourly alignment cron (every hour, weekdays)
+
+### Task 3 — Live Dashboard Redesign ✅ DONE
+- [x] Left column: open trades with 🟢/🟡/🔴 alignment badges
+- [x] Right column: live currency scores + 9-pair matrix + priority setup
+- [x] Manual data entry collapsed at bottom (for fallback only)
+- [x] DM Mono font, auto-refresh every 5 minutes
+- [x] `GET /api/dashboard` endpoint — returns scores + open trades + alignment in one call
+- [x] Session window indicator shows current active session
+
+### Task 4 — Journal Alignment Field (Medium)
+- [ ] Auto-populate "Alignment at entry" when logging a trade
+- [ ] Pull from latest HourlyScore record
+
+### Task 5 — Analytics Alignment Chart (Lower)
+- [ ] Bar chart: Green/Amber/Red alignment at entry vs win rate
+- [ ] Placeholder if fewer than 20 trades
+
+---
+
+## Deployment Steps After V2
+
+1. Run `npx prisma db push` to create HourlyScore + TradeAlignment tables in Supabase
+2. Push to GitHub → Vercel auto-deploys
+3. Verify `/api/dashboard` returns live Barchart data
+4. Check Vercel Cron Jobs in dashboard — should show 3 jobs (2 session + 1 hourly alignment)
 
 ---
 
