@@ -16,11 +16,11 @@ export async function uploadScreenshot(file: File, tradeId: string): Promise<str
   const path = `screenshots/${tradeId}.${ext}`
 
   const { error } = await supabaseAdmin.storage
-    .from('rfdm-trades')
+    .from('elistas-trades')
     .upload(path, file, { upsert: true })
 
   if (error) { console.error('Upload error:', error); return null }
 
-  const { data } = supabaseAdmin.storage.from('rfdm-trades').getPublicUrl(path)
+  const { data } = supabaseAdmin.storage.from('elistas-trades').getPublicUrl(path)
   return data.publicUrl
 }
