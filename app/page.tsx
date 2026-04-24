@@ -80,8 +80,6 @@ function ScoreBadge({ score }: { score: number }) {
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(false)
-  const [scoring, setScoring] = useState(false)
-  const [scoreStatus, setScoreStatus] = useState<{ ok: boolean; msg: string } | null>(null)
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
   const [showManual, setShowManual] = useState(false)
@@ -213,18 +211,6 @@ export default function Dashboard() {
               🕐 {currentSession} session active
             </span>
           )}
-          {/* Primary: run the full auto-fetch + scoring pipeline */}
-          <button
-            onClick={() => runAutoScore(false)}
-            disabled={scoring}
-            className="px-4 py-2 bg-black text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors disabled:opacity-50 flex items-center gap-2"
-          >
-            {scoring ? (
-              <><span className="animate-spin inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full" />Scoring…</>
-            ) : (
-              <><span>⚡</span>Run Analysis</>
-            )}
-          </button>
           {/* Refresh view (dashboard endpoint — also re-fetches) */}
           <button
             onClick={fetchDashboard}
@@ -238,26 +224,14 @@ export default function Dashboard() {
           </button>
           {/* Send to Telegram */}
           <button
-            onClick={() => runAutoScore(true)}
-            disabled={scoring || sent}
+            onClick={sendToTelegram}
+            disabled={sending || sent}
             className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
           >
             {sent ? '✓ Sent' : sending ? 'Sending…' : '📱 Send Alert'}
           </button>
         </div>
       </div>
-
-      {/* ── Score status strip ── */}
-      {scoreStatus && (
-        <div className={`mb-3 px-4 py-2.5 rounded-lg text-xs font-mono flex items-center justify-between ${
-          scoreStatus.ok
-            ? 'bg-green-50 border border-green-200 text-green-800'
-            : 'bg-red-50 border border-red-200 text-red-800'
-        }`}>
-          <span>{scoreStatus.msg}</span>
-          <button onClick={() => setScoreStatus(null)} className="ml-4 opacity-50 hover:opacity-100 text-base leading-none">×</button>
-        </div>
-      )}
 
       {/* ── Fetch errors ── */}
       {data?.fetchErrors && data.fetchErrors.length > 0 && (
