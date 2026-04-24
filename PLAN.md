@@ -110,7 +110,7 @@ date, currency, score, fundamental, pricePerf, stdDev, notes[]
 ## File Structure
 
 ```
-rfdm-trading-app/
+elistas-dashboard/
 ├── app/
 │   ├── page.tsx              ← Session Alerts dashboard (main page)
 │   ├── journal/page.tsx      ← Trade journal
@@ -139,17 +139,17 @@ rfdm-trading-app/
 ## Deployment Checklist
 
 ### Phase 1 — Supabase Setup
-- [x] Create Supabase project (`rfdm-trading`, East US)
+- [x] Create Supabase project (`elistas-trading`, East US)
 - [x] Get project URL and API keys
 - [x] Set database password
-- [x] Create storage bucket → **Storage → New bucket → `rfdm-trades` → Public**
+- [x] Create storage bucket → `elistas-trades` (Public)
 - [x] Run `npx prisma db push` → creates Trade, DailyAlert, CurrencyScore tables
 
 ### Phase 2 — Telegram Bot
-- [ ] Message @BotFather on Telegram → `/newbot`
-- [ ] Save `TELEGRAM_BOT_TOKEN`
-- [ ] Message your bot once, then visit `https://api.telegram.org/botYOUR_TOKEN/getUpdates`
-- [ ] Save `TELEGRAM_CHAT_ID` from the response
+- [x] Message @BotFather on Telegram → `/newbot`
+- [x] Save `TELEGRAM_BOT_TOKEN` → @elistas_alerts_bot
+- [x] Message your bot once, then visit `https://api.telegram.org/botYOUR_TOKEN/getUpdates`
+- [x] Save `TELEGRAM_CHAT_ID` from the response
 
 ### Phase 3 — Environment Variables
 - [x] `DATABASE_URL` — Supabase PostgreSQL (with pgbouncer)
@@ -157,14 +157,14 @@ rfdm-trading-app/
 - [x] `NEXT_PUBLIC_SUPABASE_URL`
 - [x] `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - [x] `SUPABASE_SERVICE_KEY`
-- [ ] `TELEGRAM_BOT_TOKEN`
-- [ ] `TELEGRAM_CHAT_ID`
-- [ ] `CRON_SECRET` — run `openssl rand -hex 32` in Terminal
+- [x] `TELEGRAM_BOT_TOKEN`
+- [x] `TELEGRAM_CHAT_ID`
+- [x] `CRON_SECRET`
 - [ ] `NEXT_PUBLIC_APP_URL` — your Vercel URL (after first deploy)
 
 ### Phase 4 — GitHub
-- [ ] Create repo at github.com/new → `rfdm-trading-app` (Private)
-- [ ] `git remote add origin https://github.com/YOUR_USERNAME/rfdm-trading-app.git`
+- [ ] Create repo at github.com/new → `elistas-dashboard` (Private)
+- [ ] `git remote add origin https://github.com/YOUR_USERNAME/elistas-dashboard.git`
 - [ ] `git push -u origin main`
 
 ### Phase 5 — Vercel Deploy
