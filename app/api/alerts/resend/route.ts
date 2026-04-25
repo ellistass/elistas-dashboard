@@ -41,9 +41,10 @@ export async function POST() {
       pairs9:             alert.pairs9  as any[],
       ideas:              (alert as any).ideas ?? (alert.pairs9 as any[]) ?? [],
       priority1:          alert.priority1 as any,
-      allScores:          [],
-      divergenceWarnings: [],
+      allScores:          [] as any[],
+      divergenceWarnings: [] as string[],
       generatedAt:        alert.createdAt,
+      scoringModel:       (alert as any).scoringModel ?? "claude-ai",
     };
 
     const session = currentSessionName();

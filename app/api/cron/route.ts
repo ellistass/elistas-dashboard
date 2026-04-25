@@ -115,10 +115,10 @@ async function runSessionAlert() {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
-    await db.dailyAlert.upsert({
+    await (db.dailyAlert.upsert as any)({
       where:  { date: today },
-      create: { date: today, top3: result.top3 as any, bottom3: result.bottom3 as any, pairs9: result.pairs9 as any, priority1: result.priority1 as any, dataAge: ages.barchart, sentAt: new Date() },
-      update: { top3: result.top3 as any, bottom3: result.bottom3 as any, pairs9: result.pairs9 as any, priority1: result.priority1 as any, dataAge: ages.barchart, sentAt: new Date() },
+      create: { date: today, top3: result.top3 as any, bottom3: result.bottom3 as any, pairs9: result.pairs9 as any, priority1: result.priority1 as any, ideas: (result as any).ideas ?? null, dataAge: ages.barchart, scoringModel: result.scoringModel ?? null, sentAt: new Date() },
+      update: { top3: result.top3 as any, bottom3: result.bottom3 as any, pairs9: result.pairs9 as any, priority1: result.priority1 as any, ideas: (result as any).ideas ?? undefined, dataAge: ages.barchart, scoringModel: result.scoringModel ?? undefined, sentAt: new Date() },
     });
 
     try { await saveHourlySnapshot(result); } catch (e) { console.error("Snapshot warning:", e); }

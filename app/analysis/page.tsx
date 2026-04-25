@@ -32,6 +32,8 @@ export default function AnalysisPage() {
   const [debug, setDebug] = useState<DebugLog | null>(null);
   const [ideas, setIdeas] = useState<TradeIdea[]>([]);
   const [scores, setScores] = useState<any>(null);
+  const [savedModel, setSavedModel] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingDebug, setLoadingDebug] = useState(false);
   const [scoring, setScoring] = useState(false);
@@ -39,6 +41,16 @@ export default function AnalysisPage() {
   const [activeTab, setActiveTab] = useState<"ideas" | "prompt" | "response" | "system">("ideas");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+
+  // Load today's saved scores on mount so model info shows before a fresh run
+  useState(() => {
+    fetch("/api/dashboard").then(r => r.ok ? r.json() : null).then(d => {
+      if (d?.scores?.scoringModel) setSavedModel(d.scores.scoringModel);
+      if (d?.scoredAt) setSavedAt(d.scoredAt);
+      if (d?.scores?.ideas?.length) setIdeas(d.scores.ideas);
+      else if (d?.scores?.pairs9?.length) setIdeas(d.scores.pairs9);
+    }).catch(() => {});
+  });
 
   async function runAnalysis(sendAlert = false) {
     setScoring(true); setStatus(null);
@@ -54,6 +66,8 @@ export default function AnalysisPage() {
       } else {
         setScores(json);
         setIdeas(json.ideas || json.pairs9 || []);
+        if (json.scoringModel) setSavedModel(json.scoringModel);
+        setSavedAt(new Date().toISOString());
         setStatus({ ok: true, msg: `Scored with ${json.scoredBy || "claude-ai"} · ${json.fetchErrors?.length ? json.fetchErrors.length + " warnings" : "clean"}` });
         if (sendAlert) setSent(true);
         // Auto-load debug log
@@ -128,19 +142,33 @@ export default function AnalysisPage() {
       )}
 
       {/* Model info */}
-      {debug && (
-        <div style={{ marginBottom: 16, padding: "10px 16px", borderRadius: 10, background: "var(--blue-dim)", border: "1px solid var(--blue-border)", display: "flex", alignItems: "center", gap: 12 }}>
+      {(debug || savedModel) && (
+        <div style={{ marginBottom: 16, padding: "10px 16px", borderRadius: 10, background: "var(--blue-dim)", border: "1px solid var(--blue-border)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, color: "var(--blue)" }}>
-            Model: <span className="font-mono" style={{ fontWeight: 600 }}>{debug.model}</span>
+            Model: <span className="font-mono" style={{ fontWeight: 600 }}>{debug?.model ?? savedModel}</span>
           </span>
-          <span style={{ color: "var(--border)" }}>|</span>
-          <span style={{ fontSize: 11, color: "var(--text-3)" }}>
-            Last scored: {new Date(debug.timestamp).toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour: "2-digit", minute: "2-digit" })} WAT
-          </span>
-          <span style={{ color: "var(--border)" }}>|</span>
-          <span style={{ fontSize: 11, color: "var(--text-3)" }}>
-            Prompt: {debug.promptLength.toLocaleString()} chars
-          </span>
+          {(debug?.timestamp || savedAt) && (
+            <>
+              <span style={{ color: "var(--border)" }}>|</span>
+              <span style={{ fontSize: 11, color: "var(--text-3)" }}>
+                Last scored: {new Date((debug?.timestamp ?? savedAt)!).toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour: "2-digit", minute: "2-digit" })} WAT
+              </span>
+            </>
+          )}
+          {debug && (
+            <>
+              <span style={{ color: "var(--border)" }}>|</span>
+              <span style={{ fontSize: 11, color: "var(--text-3)" }}>
+                Prompt: {debug.promptLength.toLocaleString()} chars
+              </span>
+            </>
+          )}
+          {!debug && savedModel && (
+            <>
+              <span style={{ color: "var(--border)" }}>|</span>
+              <span style={{ fontSize: 11, color: "var(--text-3)" }}>Saved result · run analysis to inspect prompt</span>
+            </>
+          )}
         </div>
       )}
 

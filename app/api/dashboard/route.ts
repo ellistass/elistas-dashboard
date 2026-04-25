@@ -20,9 +20,12 @@ export async function GET() {
         bottom3: saved.bottom3 as any,
         pairs9: saved.pairs9 as any,
         priority1: saved.priority1 as any,
+        ideas: (saved as any).ideas as any ?? null,
         allScores: [],
         generatedAt: saved.createdAt,
         scoredBy: "claude-ai",
+        scoringModel: (saved as any).scoringModel ?? null,
+        dataAge: (saved as any).dataAge ?? null,
       };
     }
 

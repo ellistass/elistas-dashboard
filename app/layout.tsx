@@ -52,6 +52,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 { href: '/accounts',  label: 'Accounts'  },
                 { href: '/journal',   label: 'Journal'   },
                 { href: '/analysis',  label: 'Analysis'  },
+                { href: '/data',      label: 'Market Data' },
                 { href: '/analytics', label: 'Stats'     },
               ].map(({ href, label }) => (
                 <a key={href} href={href} className="nav-link">{label}</a>

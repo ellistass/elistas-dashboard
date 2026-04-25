@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
-    await db.dailyAlert.upsert({
+    await (db.dailyAlert.upsert as any)({
       where: { date: today },
       create: {
         date: today,
@@ -69,6 +69,9 @@ export async function POST(req: NextRequest) {
         bottom3: result.bottom3 as any,
         pairs9: result.pairs9 as any,
         priority1: result.priority1 as any,
+        ideas: (result as any).ideas ?? null,
+        scoringModel: result.scoringModel ?? null,
+        sentAt: sendAlert ? new Date() : null,
       },
       update: {
         rawCalendar: mode === "manual" ? calendar : undefined,
@@ -78,6 +81,8 @@ export async function POST(req: NextRequest) {
         bottom3: result.bottom3 as any,
         pairs9: result.pairs9 as any,
         priority1: result.priority1 as any,
+        ideas: (result as any).ideas ?? undefined,
+        scoringModel: result.scoringModel ?? undefined,
         sentAt: sendAlert ? new Date() : undefined,
       },
     });
@@ -101,7 +106,7 @@ export async function POST(req: NextRequest) {
       await sendTelegramMessage(message);
     }
 
-    return NextResponse.json({ ...result, fetchErrors, scoredBy: "claude-ai" });
+    return NextResponse.json({ ...result, fetchErrors, scoredBy: "claude-ai", scoringModel: result.scoringModel });
   } catch (err: any) {
     console.error("Alert error:", err);
     return NextResponse.json(

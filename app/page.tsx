@@ -19,6 +19,7 @@ interface ScoringResult {
   pairs9: PairSetup[]; priority1: PairSetup;
   allScores: CurrencyScore[]; divergenceWarnings?: string[];
   generatedAt?: string; scoredBy?: string;
+  scoringModel?: string | null; dataAge?: number | null;
 }
 interface OpenTrade {
   id: string; pair: string; direction: string; model: string;
@@ -236,6 +237,14 @@ export default function Dashboard() {
           <p style={{ fontSize: 12, color: "var(--text-3)", margin: 0 }}>
             {clock} WAT
             {data?.scoredAt ? ` · Last scored ${timeAgo(data.scoredAt)}` : " · No scores yet"}
+            {data?.scores?.scoringModel && (
+              <span style={{ color: "var(--text-3)", marginLeft: 4 }}>
+                · <span className="font-mono" style={{ color: "var(--blue)", fontSize: 11 }}>{data.scores.scoringModel}</span>
+              </span>
+            )}
+            {data?.scores?.dataAge != null && (
+              <span style={{ color: "var(--text-3)", marginLeft: 4, fontSize: 11 }}>· data {data.scores.dataAge}m old</span>
+            )}
             {data?.hasLiveData && <span style={{ color: "var(--green)", marginLeft: 4 }}>· live data</span>}
           </p>
         </div>

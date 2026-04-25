@@ -64,6 +64,7 @@ export interface NormalisedScoringResult {
   }>;
   divergenceWarnings: string[];
   generatedAt: Date;
+  scoringModel: string;
 }
 
 const RFDM_SYSTEM_PROMPT = `You are the RFDM (Relative Flow Divergence Model) scoring engine for a forex trader based in Lagos, Nigeria (WAT = GMT+1).
@@ -439,13 +440,13 @@ export async function scoreWithClaude(input: {
     throw new Error("Claude returned invalid JSON — scoring failed");
   }
 
-  return normaliseResult(parsed);
+  return normaliseResult(parsed, usedModel);
 }
 
 /**
  * Convert Claude's AI output to the normalised format the rest of the app expects.
  */
-function normaliseResult(ai: AIScoringResult): NormalisedScoringResult {
+function normaliseResult(ai: AIScoringResult, _usedModel: string = ""): NormalisedScoringResult {
   const allScores = ai.scores
     .map((s) => ({
       cur: s.currency,
@@ -506,6 +507,7 @@ function normaliseResult(ai: AIScoringResult): NormalisedScoringResult {
     allScores,
     divergenceWarnings: ai.divergenceWarnings || [],
     generatedAt: new Date(),
+    scoringModel: _usedModel,
   };
 }
 

@@ -75,6 +75,7 @@ model DailyAlert {
   ideas         Json?     // TradeIdea[] — all ranked setups (Phase 2)
   fullAnalysis  Json?     // full 10-section structured output from Claude (Phase 2)
   dataAge       Int?      // age of Barchart snapshot in minutes when analysis ran
+  scoringModel  String?   // which Claude model produced this result e.g. "claude-sonnet-4-6"
   rawCalendar   String?
   rawPerf       String?
   rawStddev     String?
