@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     let scoringInput: Parameters<typeof scoreWithClaude>[0];
 
     if (mode === "auto") {
-      const { perfMap, calEvents, errors } = await fetchAllMarketData();
+      const { perfMap, stddevMap, calEvents, centralBankRates, barchart, errors } = await fetchAllMarketData();
       fetchErrors = errors;
 
       if (Object.keys(perfMap).length === 0 && calEvents.length === 0) {
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
           );
         }
       } else {
-        scoringInput = { mode: "auto", perfMap, calendarEvents: calEvents };
+        scoringInput = { mode: "auto", perfMap, stddevMap, calendarEvents: calEvents, centralBankRates, barchart };
       }
     } else {
       scoringInput = { mode: "manual", calendar, perf, stddev, futures };
@@ -82,8 +82,16 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Save hourly snapshot
-    await saveHourlySnapshot(result);
+    // Snapshot persistence is useful for alignment checks, but a transient
+    // pooler issue should not block scoring itself.
+    try {
+      await saveHourlySnapshot(result);
+    } catch (error: any) {
+      console.error("Hourly snapshot warning:", error);
+      fetchErrors.push(
+        `Hourly snapshot warning: ${error?.message || "snapshot save failed"}`,
+      );
+    }
 
     // Optionally send Telegram
     if (sendAlert && result.priority1) {

@@ -4,7 +4,7 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'Elistas — Trading System',
-  description: 'Currency strength scoring, session alerts, trade journal & alignment monitoring',
+  description: 'Currency strength, session alerts, trade journal & alignment monitoring',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -15,22 +15,53 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;500;600&display=swap" rel="stylesheet" />
       </head>
-      <body className="bg-paper text-ink antialiased">
-        <nav className="border-b border-gray-200 bg-white sticky top-0 z-50">
-          <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-sm font-medium tracking-wider text-gray-400">ELISTAS</span>
-              <span className="text-gray-200">|</span>
-              <span className="font-sans text-sm font-medium">Trading System</span>
+      <body style={{ background: 'var(--bg-base)', color: 'var(--text-1)' }}>
+        {/* ── Top nav ── */}
+        <nav style={{
+          borderBottom: '1px solid var(--border)',
+          background: 'rgba(9,9,15,0.92)',
+          backdropFilter: 'blur(12px)',
+          position: 'sticky',
+          top: 0,
+          zIndex: 50,
+        }}>
+          <div style={{ maxWidth: 1280, margin: '0 auto', padding: '0 24px', height: 52, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            {/* Logo */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{
+                  width: 7, height: 7, borderRadius: '50%',
+                  background: 'var(--green)',
+                  display: 'inline-block',
+                  animation: 'pulse-dot 2s ease-in-out infinite'
+                }} />
+                <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 13, fontWeight: 500, letterSpacing: '0.14em', color: 'var(--text-1)' }}>
+                  ELISTAS
+                </span>
+              </div>
+              <span style={{ color: 'var(--border)', margin: '0 4px' }}>|</span>
+              <span style={{ fontSize: 12, color: 'var(--text-3)', fontWeight: 400 }}>
+                Trading System
+              </span>
             </div>
-            <div className="flex items-center gap-6">
-              <a href="/" className="text-sm text-gray-600 hover:text-black transition-colors">Alerts</a>
-              <a href="/journal" className="text-sm text-gray-600 hover:text-black transition-colors">Journal</a>
-              <a href="/analytics" className="text-sm text-gray-600 hover:text-black transition-colors">Analytics</a>
+
+            {/* Nav links */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
+              {[
+                { href: '/',          label: 'Dashboard' },
+                { href: '/accounts',  label: 'Accounts'  },
+                { href: '/journal',   label: 'Journal'   },
+                { href: '/analysis',  label: 'Analysis'  },
+                { href: '/analytics', label: 'Stats'     },
+              ].map(({ href, label }) => (
+                <a key={href} href={href} className="nav-link">{label}</a>
+              ))}
             </div>
           </div>
         </nav>
-        <main className="max-w-6xl mx-auto px-4 py-8">
+
+        {/* ── Page content ── */}
+        <main style={{ maxWidth: 1280, margin: '0 auto', padding: '28px 24px 60px' }}>
           {children}
         </main>
       </body>

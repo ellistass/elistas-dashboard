@@ -1,0 +1,1 @@
+{"version":1,"functions":{"/api/dashboard":{},"/api/trades":{},"/api/cron":{"maxDuration":60},"/api/upload":{},"/api/alerts":{"maxDuration":60}}}

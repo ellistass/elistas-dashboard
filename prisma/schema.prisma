@@ -8,46 +8,92 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model Account {
+  id                      String    @id @default(cuid())
+  createdAt               DateTime  @default(now())
+  name                    String                          // "FTMO #1", "My Funded Trader"
+  broker                  String                          // "FTMO", "MFF", "Pepperstone"
+  type                    String                          // "Prop" | "Live" | "Personal" | "Demo"
+  market                  String    @default("forex")     // "forex" | "futures" | "stocks" | "crypto"
+  status                  String                          // "Phase1" | "Phase2" | "Funded" | "Live" | "Passed" | "Failed" | "Breached" | "Archived"
+  currency                String    @default("USD")
+  startingBalance         Float
+  currentBalance          Float
+  profitTarget            Float?
+  maxDrawdownPct          Float                           // e.g. 10.0 for 10%
+  dailyDrawdownLimitPct   Float                           // e.g. 5.0 for 5%
+  currentDrawdownPct      Float     @default(0)
+  currentDailyDrawdownPct Float     @default(0)
+  payoutStatus            String    @default("None")      // "None" | "Requested" | "Paid"
+  notes                   String?
+  isActive                Boolean   @default(true)
+  trades                  Trade[]
+}
+
 model Trade {
-  id            String           @id @default(cuid())
-  createdAt     DateTime         @default(now())
-  date          DateTime
-  pair          String           // e.g. "NZD/USD"
-  direction     String           // "Long" | "Short"
-  model         String           // "A" | "B"
-  grade         String           // "A+" | "B" | "C"
-  session       String           // "London" | "New York" | "Tokyo"
-  entryPrice    Float
-  slPrice       Float
-  tpPrice       Float
-  closePrice    Float?
-  riskPercent   Float            @default(1.0)
-  resultR       Float?           // profit/loss in R
-  resultPips    Float?
-  outcome       String?          // "Win" | "Loss" | "BE" | "Open"
-  reason        String           // entry reason — one sentence
-  notes         String?          // post-trade notes
-  screenshotUrl String?          // Supabase storage URL
-  strongCcy     String           // top currency at time of trade
-  weakCcy       String           // bottom currency at time of trade
-  divScore      Float?           // divergence score at entry
-  tags          String[]         // e.g. ["wyckoff-spring", "ny-session"]
-  alignments    TradeAlignment[]
+  id                 String           @id @default(cuid())
+  createdAt          DateTime         @default(now())
+  date               DateTime
+  pair               String           // e.g. "NZD/USD"
+  direction          String           // "Long" | "Short"
+  model              String           // "A" | "B"
+  grade              String           // "A+" | "B" | "C"
+  session            String           // "London" | "New York" | "Tokyo"
+  entryPrice         Float
+  slPrice            Float
+  tpPrice            Float
+  closePrice         Float?
+  riskPercent        Float            @default(1.0)
+  resultR            Float?           // profit/loss in R
+  resultPips         Float?
+  outcome            String?          // "Win" | "Loss" | "BE" | "Open"
+  reason             String           // entry reason — one sentence
+  notes              String?          // general notes
+  preTradeNotes      String?          // written before entry
+  postTradeNotes     String?          // written after close
+  screenshotUrl      String?          // setup screenshot (Supabase storage)
+  closeScreenshotUrl String?          // review screenshot after close
+  strongCcy          String           // top currency at time of trade
+  weakCcy            String           // bottom currency at time of trade
+  divScore           Float?           // divergence score at entry
+  tags               String[]         // e.g. ["wyckoff-spring", "ny-session"]
+  assetClass         String           @default("forex")   // "forex" | "futures" | "stocks" | "crypto"
+  instrument         String?          // for non-forex: "ES", "AAPL" — mirrors pair for forex
+  accountId          String?          // foreign key to Account (nullable for existing trades)
+  account            Account?         @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  alignments         TradeAlignment[]
 }
 
 model DailyAlert {
-  id          String    @id @default(cuid())
-  createdAt   DateTime  @default(now())
-  date        DateTime  @unique
-  top3        Json      // [{cur, score, tag}]
-  bottom3     Json      // [{cur, score, tag}]
-  pairs9      Json      // 9-pair matrix results
-  priority1   Json      // top setup
-  rawCalendar String?
-  rawPerf     String?
-  rawStddev   String?
-  sentAt      DateTime?
+  id            String    @id @default(cuid())
+  createdAt     DateTime  @default(now())
+  date          DateTime  @unique
+  top3          Json      // [{cur, score, tag}]
+  bottom3       Json      // [{cur, score, tag}]
+  pairs9        Json      // 9-pair matrix results
+  priority1     Json      // top setup (kept for backwards compat — mirrors ideas[0])
+  ideas         Json?     // TradeIdea[] — all ranked setups (Phase 2)
+  fullAnalysis  Json?     // full 10-section structured output from Claude (Phase 2)
+  dataAge       Int?      // age of Barchart snapshot in minutes when analysis ran
+  rawCalendar   String?
+  rawPerf       String?
+  rawStddev     String?
+  sentAt        DateTime?
   telegramMsgId Int?
+}
+
+// Cron run health log — one row per cron execution
+model SyncHealth {
+  id                   String   @id @default(cuid())
+  checkedAt            DateTime @default(now())
+  barchartAgeMinutes   Int?
+  economicAgeMinutes   Int?
+  ratesAgeMinutes      Int?
+  status               String   // "Fresh" | "Stale" | "Missing"
+  action               String   // "Scored" | "Skipped" | "Warning"
+  errors               String[]
+
+  @@index([checkedAt])
 }
 
 model CurrencyScore {
@@ -75,6 +121,37 @@ model HourlyScore {
 
   @@unique([bucket, currency])
   @@index([bucket])
+}
+
+// Full ForexFactory weekly calendar — written by Railway sync service each hour
+model EconomicSnapshot {
+  id        String   @id @default(cuid())
+  fetchedAt DateTime @default(now())
+  events    Json     // EconomicEvent[] — full week, all supported currencies
+
+  @@map("economic_snapshots")
+  @@index([fetchedAt])
+}
+
+// Central bank interest rates — written by Railway sync service each hour
+model RatesSnapshot {
+  id        String   @id @default(cuid())
+  fetchedAt DateTime @default(now())
+  rates     Json     // CentralBankRate[] — current rate per currency
+
+  @@map("rates_snapshots")
+  @@index([fetchedAt])
+}
+
+// Hourly Barchart snapshot written by the Railway sync service
+model BarchartSnapshot {
+  id        String   @id @default(cuid())
+  fetchedAt DateTime @default(now())
+  data      Json     // full BarchartSnapshot shape: { forex, futures, fetchedAt, errors }
+  errors    String[]
+
+  @@map("barchart_snapshots")
+  @@index([fetchedAt])
 }
 
 // Alignment check result for an open trade at a point in time

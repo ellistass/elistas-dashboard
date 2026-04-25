@@ -189,6 +189,13 @@ Return ONLY valid JSON (no markdown, no explanation, no code fences). Use this e
 
 IMPORTANT: Include ALL 10 currencies in the scores array (even if score is 0). Sort scores by total descending. Every currency must appear.`;
 
+const DEFAULT_ANTHROPIC_MODELS = [
+  process.env.ANTHROPIC_MODEL,
+  "claude-sonnet-4-20250514",
+  "claude-3-7-sonnet-latest",
+  "claude-3-5-haiku-20241022",
+].filter((model): model is string => Boolean(model));
+
 /**
  * Call Claude to score currencies from raw market data.
  * Supports both auto-fetched structured data and manual pasted text.
@@ -197,6 +204,7 @@ export async function scoreWithClaude(input: {
   mode: "auto" | "manual";
   // Auto mode
   perfMap?: Record<string, number>;
+  stddevMap?: Record<string, number>;
   calendarEvents?: Array<{
     title: string;
     country: string;
@@ -205,6 +213,23 @@ export async function scoreWithClaude(input: {
     actual: string | null;
     previous: string | null;
   }>;
+  centralBankRates?: Array<{
+    currency: string;
+    country: string;
+    bankName: string;
+    currentRate: number;
+    previousRate: number | null;
+  }>;
+  barchart?: {
+    forex: {
+      performance: { today: { bullish: any[]; bearish: any[] } };
+      surprises: { bullish: any[]; bearish: any[] };
+    };
+    futures: {
+      performance: { today: { bullish: any[]; bearish: any[] } };
+      surprises: { bullish: any[]; bearish: any[] };
+    };
+  } | null;
   // Manual mode
   calendar?: string;
   perf?: string;
@@ -218,6 +243,7 @@ export async function scoreWithClaude(input: {
   let userMessage = "";
 
   if (input.mode === "auto") {
+    // ── 1. Forex performance (aggregated per currency) ──────────────────────
     if (input.perfMap && Object.keys(input.perfMap).length > 0) {
       userMessage += `## FOREX PERFORMANCE (auto-fetched from Barchart)\nAverage % change per currency today:\n`;
       const sorted = Object.entries(input.perfMap).sort((a, b) => b[1] - a[1]);
@@ -227,6 +253,61 @@ export async function scoreWithClaude(input: {
       userMessage += "\n";
     }
 
+    // ── 2. Std dev / price surprises (aggregated per currency) ──────────────
+    if (input.stddevMap && Object.keys(input.stddevMap).length > 0) {
+      userMessage += `## PRICE SURPRISES / STD DEV (auto-fetched from Barchart)\nAverage std dev per currency (higher = more unusual move today):\n`;
+      const sorted = Object.entries(input.stddevMap).sort((a, b) => b[1] - a[1]);
+      for (const [cur, sd] of sorted) {
+        userMessage += `${cur}: ${sd.toFixed(4)}\n`;
+      }
+      userMessage += "\n";
+    }
+
+    // ── 3. Individual forex surprise pairs (raw) ─────────────────────────────
+    if (input.barchart?.forex.surprises) {
+      const bull = input.barchart.forex.surprises.bullish.slice(0, 10);
+      const bear = input.barchart.forex.surprises.bearish.slice(0, 10);
+      if (bull.length > 0 || bear.length > 0) {
+        userMessage += `## FOREX PRICE SURPRISES — RAW PAIRS (Barchart)\n`;
+        if (bull.length > 0) {
+          userMessage += `Unusually strong (bullish surprise):\n`;
+          for (const r of bull) {
+            userMessage += `  ${r.symbol}: stddev=${r.standardDeviation ?? r.percentChange} change=${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
+          }
+        }
+        if (bear.length > 0) {
+          userMessage += `Unusually weak (bearish surprise):\n`;
+          for (const r of bear) {
+            userMessage += `  ${r.symbol}: stddev=${r.standardDeviation ?? r.percentChange} change=${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
+          }
+        }
+        userMessage += "\n";
+      }
+    }
+
+    // ── 4. Futures performance (for futures pillar) ──────────────────────────
+    if (input.barchart?.futures.performance.today) {
+      const bull = input.barchart.futures.performance.today.bullish.slice(0, 10);
+      const bear = input.barchart.futures.performance.today.bearish.slice(0, 10);
+      if (bull.length > 0 || bear.length > 0) {
+        userMessage += `## FUTURES PERFORMANCE (Barchart — use for Futures Pillar)\n`;
+        if (bull.length > 0) {
+          userMessage += `Bullish futures:\n`;
+          for (const r of bull) {
+            userMessage += `  ${r.name || r.symbol}: ${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
+          }
+        }
+        if (bear.length > 0) {
+          userMessage += `Bearish futures:\n`;
+          for (const r of bear) {
+            userMessage += `  ${r.name || r.symbol}: ${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
+          }
+        }
+        userMessage += "\n";
+      }
+    }
+
+    // ── 5. Economic calendar ─────────────────────────────────────────────────
     if (input.calendarEvents && input.calendarEvents.length > 0) {
       userMessage += `## ECONOMIC CALENDAR (auto-fetched from ForexFactory)\n`;
       for (const e of input.calendarEvents) {
@@ -234,6 +315,19 @@ export async function scoreWithClaude(input: {
           ? `Actual: ${e.actual} | Forecast: ${e.forecast || "n/a"} | Previous: ${e.previous || "n/a"}`
           : `Not yet released | Forecast: ${e.forecast || "n/a"}`;
         userMessage += `[${e.country}] [${e.impact}] ${e.title} — ${status}\n`;
+      }
+      userMessage += "\n";
+    }
+
+    // ── 6. Central bank rates (context for divergence) ───────────────────────
+    if (input.centralBankRates && input.centralBankRates.length > 0) {
+      userMessage += `## CENTRAL BANK INTEREST RATES (context — use for divergence/carry analysis)\n`;
+      const sorted = [...input.centralBankRates].sort((a, b) => b.currentRate - a.currentRate);
+      for (const r of sorted) {
+        const change = r.previousRate !== null && r.previousRate !== r.currentRate
+          ? ` (prev: ${r.previousRate}%)`
+          : "";
+        userMessage += `${r.currency} (${r.bankName}): ${r.currentRate}%${change}\n`;
       }
       userMessage += "\n";
     }
@@ -258,27 +352,47 @@ export async function scoreWithClaude(input: {
 
   userMessage += `\nToday's date: ${new Date().toISOString().split("T")[0]}\nCurrent time (WAT): ${new Date().toLocaleTimeString("en-GB", { timeZone: "Africa/Lagos", hour: "2-digit", minute: "2-digit" })}\n\nScore all 10 currencies using the RFDM rules and return the JSON.`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6-20250514",
-      max_tokens: 4096,
-      system: RFDM_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userMessage }],
-    }),
-  });
+  let data: any = null;
+  let lastError = "";
 
-  if (!res.ok) {
+  for (const model of DEFAULT_ANTHROPIC_MODELS) {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 4096,
+        system: RFDM_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: userMessage }],
+      }),
+    });
+
+    if (res.ok) {
+      data = await res.json();
+      break;
+    }
+
     const err = await res.text();
-    throw new Error(`Claude API error ${res.status}: ${err}`);
+    lastError = `Claude API error ${res.status}: ${err}`;
+
+    const modelMissing =
+      res.status === 404 &&
+      err.includes('"type":"not_found_error"') &&
+      err.includes('"message":"model:');
+
+    if (!modelMissing) {
+      throw new Error(lastError);
+    }
   }
 
-  const data = await res.json();
+  if (!data) {
+    throw new Error(lastError || "Claude API error: no supported model available");
+  }
+
   const text = data.content?.[0]?.text || "";
 
   // Parse JSON from response — handle potential markdown wrapping
