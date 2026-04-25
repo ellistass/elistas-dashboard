@@ -71,6 +71,7 @@ export async function POST(req: NextRequest) {
         priority1: result.priority1 as any,
         ideas: (result as any).ideas ?? null,
         scoringModel: result.scoringModel ?? null,
+        fullAnalysis: result.debugData as any,
         sentAt: sendAlert ? new Date() : null,
       },
       update: {
@@ -83,6 +84,7 @@ export async function POST(req: NextRequest) {
         priority1: result.priority1 as any,
         ideas: (result as any).ideas ?? undefined,
         scoringModel: result.scoringModel ?? undefined,
+        fullAnalysis: result.debugData as any,
         sentAt: sendAlert ? new Date() : undefined,
       },
     });

@@ -65,6 +65,13 @@ export interface NormalisedScoringResult {
   divergenceWarnings: string[];
   generatedAt: Date;
   scoringModel: string;
+  // Persisted debug data — saved to DailyAlert.fullAnalysis so it survives server restarts
+  debugData: {
+    systemPrompt: string;
+    userMessage: string;
+    rawResponse: string;
+    promptLength: number;
+  };
 }
 
 const RFDM_SYSTEM_PROMPT = `You are the RFDM (Relative Flow Divergence Model) scoring engine for a forex trader based in Lagos, Nigeria (WAT = GMT+1).
@@ -209,11 +216,12 @@ const DEFAULT_ANTHROPIC_MODELS = [
 // Last prompt/response debug log — readable via GET /api/debug/prompt
 export const debugLog: {
   model: string;
+  promptLength: number;
   systemPrompt: string;
   userMessage: string;
   rawResponse: string;
   timestamp: string;
-} = { model: "", systemPrompt: "", userMessage: "", rawResponse: "", timestamp: "" };
+} = { model: "", promptLength: 0, systemPrompt: "", userMessage: "", rawResponse: "", timestamp: "" };
 
 /**
  * Call Claude to score currencies from raw market data.
@@ -400,6 +408,7 @@ export async function scoreWithClaude(input: {
       usedModel = model;
       // Save debug log
       debugLog.model = model;
+      debugLog.promptLength = RFDM_SYSTEM_PROMPT.length + userMessage.length;
       debugLog.systemPrompt = RFDM_SYSTEM_PROMPT;
       debugLog.userMessage = userMessage;
       debugLog.rawResponse = data.content?.[0]?.text || rawText;
@@ -426,27 +435,47 @@ export async function scoreWithClaude(input: {
   const text = data?.content?.[0]?.text || "";
   console.log(`[ai-scoring] Scored with model: ${usedModel} | prompt length: ${userMessage.length} chars`);
 
-  // Parse JSON from response — handle potential markdown wrapping
+  // Parse JSON from response — robust extraction handles markdown, preamble, postamble
   let jsonStr = text.trim();
-  if (jsonStr.startsWith("```")) {
-    jsonStr = jsonStr.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+
+  // Strip markdown code fences
+  if (jsonStr.includes("```")) {
+    const fenceMatch = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (fenceMatch) jsonStr = fenceMatch[1].trim();
   }
+
+  // If there's text before the first { — strip it (Claude sometimes adds a sentence first)
+  const firstBrace = jsonStr.indexOf("{");
+  const lastBrace  = jsonStr.lastIndexOf("}");
+  if (firstBrace > 0) jsonStr = jsonStr.slice(firstBrace);
+  if (lastBrace !== -1 && lastBrace < jsonStr.length - 1) jsonStr = jsonStr.slice(0, lastBrace + 1);
 
   let parsed: AIScoringResult;
   try {
     parsed = JSON.parse(jsonStr);
   } catch (e) {
-    console.error("Claude returned invalid JSON:", text.substring(0, 500));
-    throw new Error("Claude returned invalid JSON — scoring failed");
+    console.error("[ai-scoring] Claude returned invalid JSON.\nRaw (first 800 chars):", text.substring(0, 800));
+    debugLog.rawResponse = text; // always save so prompt inspector shows the bad response
+    debugLog.timestamp   = new Date().toISOString();
+    throw new Error(`Claude returned invalid JSON — scoring failed. Check /api/debug for the raw response.`);
   }
 
-  return normaliseResult(parsed, usedModel);
+  return normaliseResult(parsed, usedModel, {
+    systemPrompt: RFDM_SYSTEM_PROMPT,
+    userMessage,
+    rawResponse:  debugLog.rawResponse,
+    promptLength: RFDM_SYSTEM_PROMPT.length + userMessage.length,
+  });
 }
 
 /**
  * Convert Claude's AI output to the normalised format the rest of the app expects.
  */
-function normaliseResult(ai: AIScoringResult, _usedModel: string = ""): NormalisedScoringResult {
+function normaliseResult(
+  ai: AIScoringResult,
+  _usedModel: string = "",
+  _debugData?: { systemPrompt: string; userMessage: string; rawResponse: string; promptLength: number },
+): NormalisedScoringResult {
   const allScores = ai.scores
     .map((s) => ({
       cur: s.currency,
@@ -508,6 +537,7 @@ function normaliseResult(ai: AIScoringResult, _usedModel: string = ""): Normalis
     divergenceWarnings: ai.divergenceWarnings || [],
     generatedAt: new Date(),
     scoringModel: _usedModel,
+    debugData: _debugData ?? { systemPrompt: "", userMessage: "", rawResponse: "", promptLength: 0 },
   };
 }
 

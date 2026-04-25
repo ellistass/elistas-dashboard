@@ -45,6 +45,7 @@ export async function POST() {
       divergenceWarnings: [] as string[],
       generatedAt:        alert.createdAt,
       scoringModel:       (alert as any).scoringModel ?? "claude-ai",
+      debugData:          { systemPrompt: "", userMessage: "", rawResponse: "", promptLength: 0 },
     };
 
     const session = currentSessionName();

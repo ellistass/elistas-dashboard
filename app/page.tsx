@@ -122,6 +122,12 @@ function Spinner() {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
+interface AccountAggregate {
+  totalAccounts: number; activeAccounts: number;
+  byStatus: Record<string, number>;
+  totalEquity: number; totalPnL: number; dangerAccounts: number;
+}
+
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -135,6 +141,7 @@ export default function Dashboard() {
   const [perf, setPerf] = useState("");
   const [stddev, setStddev] = useState("");
   const [futures, setFutures] = useState("");
+  const [accounts, setAccounts] = useState<AccountAggregate | null>(null);
 
   // Clock tick
   useEffect(() => {
@@ -144,8 +151,15 @@ export default function Dashboard() {
 
   const fetchDashboard = useCallback(async () => {
     try {
-      const res = await fetch("/api/dashboard");
-      if (res.ok) setData(await res.json());
+      const [dashRes, accRes] = await Promise.all([
+        fetch("/api/dashboard"),
+        fetch("/api/accounts"),
+      ]);
+      if (dashRes.ok) setData(await dashRes.json());
+      if (accRes.ok) {
+        const j = await accRes.json();
+        setAccounts(j.aggregate ?? null);
+      }
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -352,6 +366,40 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
+      {/* ── Accounts summary strip ── */}
+      {accounts && accounts.totalAccounts > 0 && (
+        <a href="/accounts" style={{ textDecoration: "none" }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 0,
+            background: "var(--bg-card)", border: "1px solid var(--border)",
+            borderRadius: 12, padding: "12px 18px", marginBottom: 16,
+            cursor: "pointer", transition: "border-color 0.15s",
+          }}
+            onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
+            onMouseLeave={e => (e.currentTarget.style.borderColor = "var(--border)")}>
+            <span style={{ fontSize: 11, color: "var(--text-3)", marginRight: 16, flexShrink: 0 }}>ACCOUNTS</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", flex: 1 }}>
+              <span style={{ fontSize: 12, color: "var(--text-2)" }}>
+                <span className="font-mono" style={{ fontWeight: 600, color: "var(--text-1)" }}>{accounts.activeAccounts}</span>
+                <span style={{ color: "var(--text-3)", marginLeft: 4 }}>active</span>
+              </span>
+              <span style={{ fontSize: 12 }}>
+                <span className="font-mono" style={{ fontWeight: 600 }}>
+                  {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(accounts.totalEquity)}
+                </span>
+                <span style={{ color: "var(--text-3)", marginLeft: 4, fontSize: 11 }}>equity</span>
+              </span>
+              {(accounts.byStatus.Phase1 ?? 0) > 0 && <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 20, background: "var(--blue-dim)", color: "var(--blue)", border: "1px solid var(--blue-border)" }}>Phase 1 · {accounts.byStatus.Phase1}</span>}
+              {(accounts.byStatus.Phase2 ?? 0) > 0 && <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 20, background: "rgba(167,139,250,0.1)", color: "#a78bfa", border: "1px solid rgba(167,139,250,0.25)" }}>Phase 2 · {accounts.byStatus.Phase2}</span>}
+              {((accounts.byStatus.Funded ?? 0) + (accounts.byStatus.Live ?? 0)) > 0 && <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 20, background: "var(--green-dim)", color: "var(--green)", border: "1px solid var(--green-border)" }}>Funded · {(accounts.byStatus.Funded ?? 0) + (accounts.byStatus.Live ?? 0)}</span>}
+              {(accounts.byStatus.Breached ?? 0) > 0 && <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 20, background: "var(--red-dim)", color: "var(--red)", border: "1px solid var(--red-border)" }}>Breached · {accounts.byStatus.Breached}</span>}
+              {accounts.dangerAccounts > 0 && <span style={{ fontSize: 11, color: "var(--amber)" }}>⚠ {accounts.dangerAccounts} drawdown danger</span>}
+            </div>
+            <span style={{ fontSize: 13, color: "var(--text-3)", marginLeft: 12, flexShrink: 0 }}>→</span>
+          </div>
+        </a>
+      )}
 
       {/* ── Main grid ── */}
       <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16 }}>
