@@ -23,6 +23,9 @@ export interface AIPairSetup {
   grade: "A+" | "B" | "C" | "Skip";
   session: string[];
   reason: string;
+  timeframe?: "short-term" | "longer-term";
+  pricedInRisk?: boolean;
+  confidence?: "High" | "Medium" | "Low";
 }
 
 export interface AIScoringResult {
@@ -30,7 +33,8 @@ export interface AIScoringResult {
   top3: string[];
   bottom3: string[];
   pairs9: AIPairSetup[];
-  priority1: {
+  ideas: AIPairSetup[];        // all ranked setups (A+, B, C) sorted by divergence
+  priority1?: {                // kept for backwards compat — mirrors ideas[0]
     pair: string;
     direction: string;
     divergence: number;
@@ -44,33 +48,19 @@ export interface AIScoringResult {
 // Normalised result that the rest of the app uses (matches existing interfaces)
 export interface NormalisedScoringResult {
   top3: Array<{
-    cur: string;
-    score: number;
-    fundamental: number;
-    pricePerf: number;
-    stdDev: number;
-    tag: string;
-    notes: string[];
+    cur: string; score: number; fundamental: number;
+    pricePerf: number; stdDev: number; tag: string; notes: string[];
   }>;
   bottom3: Array<{
-    cur: string;
-    score: number;
-    fundamental: number;
-    pricePerf: number;
-    stdDev: number;
-    tag: string;
-    notes: string[];
+    cur: string; score: number; fundamental: number;
+    pricePerf: number; stdDev: number; tag: string; notes: string[];
   }>;
   pairs9: AIPairSetup[];
-  priority1: AIPairSetup;
+  ideas: AIPairSetup[];       // ranked setups — A+, B, C, sorted by divergence
+  priority1: AIPairSetup;     // top idea (= ideas[0])
   allScores: Array<{
-    cur: string;
-    score: number;
-    fundamental: number;
-    pricePerf: number;
-    stdDev: number;
-    tag: string;
-    notes: string[];
+    cur: string; score: number; fundamental: number;
+    pricePerf: number; stdDev: number; tag: string; notes: string[];
   }>;
   divergenceWarnings: string[];
   generatedAt: Date;
@@ -173,28 +163,56 @@ Return ONLY valid JSON (no markdown, no explanation, no code fences). Use this e
       "divergence": 8.5,
       "grade": "A+",
       "session": ["London", "New York"],
-      "reason": "GBP retail massive beat vs NZD credit card miss"
+      "reason": "GBP retail massive beat vs NZD credit card miss",
+      "timeframe": "short-term",
+      "pricedInRisk": false,
+      "confidence": "High"
     }
   ],
-  "priority1": {
-    "pair": "GBP/NZD",
-    "direction": "Long",
-    "divergence": 8.5,
-    "grade": "A+",
-    "reason": "GBP retail massive beat vs NZD double miss"
-  },
+  "ideas": [
+    {
+      "pair": "GBP/NZD",
+      "direction": "Long",
+      "strong": "GBP",
+      "weak": "NZD",
+      "strongScore": 5.5,
+      "weakScore": -3.0,
+      "divergence": 8.5,
+      "grade": "A+",
+      "session": ["London", "New York"],
+      "reason": "GBP retail massive beat vs NZD credit card miss",
+      "timeframe": "short-term",
+      "pricedInRisk": false,
+      "confidence": "High"
+    }
+  ],
   "divergenceWarnings": [],
   "date": "2026-04-24"
 }
 
-IMPORTANT: Include ALL 10 currencies in the scores array (even if score is 0). Sort scores by total descending. Every currency must appear.`;
+CRITICAL RULES FOR ideas ARRAY:
+- Include ALL pairs9 setups that are grade A+, B, or C (exclude Skip)
+- Sort ideas by divergence descending (highest divergence first)
+- Every idea must have: timeframe ("short-term" if divergence driven by today's data, "longer-term" if driven by rate differentials/sustained trend), pricedInRisk (true if fundamentals already heavily reflected), confidence ("High"/"Medium"/"Low")
+- The first item in ideas is automatically the priority setup
+- IMPORTANT: Include ALL 10 currencies in the scores array (even if score is 0). Sort scores by total descending.`;
 
+// Model priority: use the same model Claude chat uses for consistent results
 const DEFAULT_ANTHROPIC_MODELS = [
-  process.env.ANTHROPIC_MODEL,
-  "claude-sonnet-4-20250514",
-  "claude-3-7-sonnet-latest",
-  "claude-3-5-haiku-20241022",
+  process.env.ANTHROPIC_MODEL,   // override via ANTHROPIC_MODEL env var
+  "claude-sonnet-4-6",           // primary — matches Claude chat
+  "claude-opus-4-6",             // fallback if sonnet unavailable
+  "claude-haiku-4-5-20251001",   // last resort
 ].filter((model): model is string => Boolean(model));
+
+// Last prompt/response debug log — readable via GET /api/debug/prompt
+export const debugLog: {
+  model: string;
+  systemPrompt: string;
+  userMessage: string;
+  rawResponse: string;
+  timestamp: string;
+} = { model: "", systemPrompt: "", userMessage: "", rawResponse: "", timestamp: "" };
 
 /**
  * Call Claude to score currencies from raw market data.
@@ -354,8 +372,16 @@ export async function scoreWithClaude(input: {
 
   let data: any = null;
   let lastError = "";
+  let usedModel = "";
 
   for (const model of DEFAULT_ANTHROPIC_MODELS) {
+    const requestBody = {
+      model,
+      max_tokens: 4096,
+      system: RFDM_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userMessage }],
+    };
+
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -363,26 +389,29 @@ export async function scoreWithClaude(input: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        system: RFDM_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
+      body: JSON.stringify(requestBody),
     });
 
+    const rawText = await res.text();
+
     if (res.ok) {
-      data = await res.json();
+      data = JSON.parse(rawText);
+      usedModel = model;
+      // Save debug log
+      debugLog.model = model;
+      debugLog.systemPrompt = RFDM_SYSTEM_PROMPT;
+      debugLog.userMessage = userMessage;
+      debugLog.rawResponse = data.content?.[0]?.text || rawText;
+      debugLog.timestamp = new Date().toISOString();
       break;
     }
 
-    const err = await res.text();
-    lastError = `Claude API error ${res.status}: ${err}`;
+    lastError = `Claude API error ${res.status} (model: ${model}): ${rawText}`;
 
     const modelMissing =
       res.status === 404 &&
-      err.includes('"type":"not_found_error"') &&
-      err.includes('"message":"model:');
+      rawText.includes('"type":"not_found_error"') &&
+      rawText.includes('"message":"model:');
 
     if (!modelMissing) {
       throw new Error(lastError);
@@ -393,7 +422,8 @@ export async function scoreWithClaude(input: {
     throw new Error(lastError || "Claude API error: no supported model available");
   }
 
-  const text = data.content?.[0]?.text || "";
+  const text = data?.content?.[0]?.text || "";
+  console.log(`[ai-scoring] Scored with model: ${usedModel} | prompt length: ${userMessage.length} chars`);
 
   // Parse JSON from response — handle potential markdown wrapping
   let jsonStr = text.trim();
@@ -429,34 +459,32 @@ function normaliseResult(ai: AIScoringResult): NormalisedScoringResult {
     .sort((a, b) => b.score - a.score);
 
   const top3 = allScores.filter((s) => ai.top3.includes(s.cur)).slice(0, 3);
-  const bottom3 = allScores
-    .filter((s) => ai.bottom3.includes(s.cur))
-    .slice(0, 3);
+  const bottom3 = allScores.filter((s) => ai.bottom3.includes(s.cur)).slice(0, 3);
 
-  // Ensure top3 and bottom3 have 3 items each (fallback to allScores)
+  // Ensure top3 and bottom3 have 3 items each (fallback to allScores order)
   while (top3.length < 3 && allScores.length > top3.length) {
     const next = allScores.find(
-      (s) =>
-        !top3.some((t) => t.cur === s.cur) &&
-        !bottom3.some((b) => b.cur === s.cur),
+      (s) => !top3.some((t) => t.cur === s.cur) && !bottom3.some((b) => b.cur === s.cur),
     );
-    if (next) top3.push(next);
-    else break;
+    if (next) top3.push(next); else break;
   }
   while (bottom3.length < 3 && allScores.length > bottom3.length) {
-    const next = [...allScores]
-      .reverse()
-      .find(
-        (s) =>
-          !top3.some((t) => t.cur === s.cur) &&
-          !bottom3.some((b) => b.cur === s.cur),
-      );
-    if (next) bottom3.push(next);
-    else break;
+    const next = [...allScores].reverse().find(
+      (s) => !top3.some((t) => t.cur === s.cur) && !bottom3.some((b) => b.cur === s.cur),
+    );
+    if (next) bottom3.push(next); else break;
   }
 
-  // Build priority1 as a full PairSetup
-  const priority1Setup: AIPairSetup = ai.pairs9[0] || {
+  // Use the ideas array if Claude returned it; otherwise derive from pairs9
+  // Filter out Skip grades and sort by divergence descending
+  const rawIdeas: AIPairSetup[] = ai.ideas?.length
+    ? ai.ideas
+    : ai.pairs9.filter((p) => p.grade !== "Skip").sort((a, b) => b.divergence - a.divergence);
+
+  const ideas = rawIdeas.filter((p) => p.grade !== "Skip");
+
+  // priority1 = top idea (backwards compat)
+  const priority1Setup: AIPairSetup = ideas[0] ?? ai.pairs9[0] ?? {
     pair: ai.priority1?.pair || "N/A",
     direction: (ai.priority1?.direction as "Long" | "Short") || "Long",
     strong: ai.top3[0] || "",
@@ -473,6 +501,7 @@ function normaliseResult(ai: AIScoringResult): NormalisedScoringResult {
     top3,
     bottom3,
     pairs9: ai.pairs9,
+    ideas,
     priority1: priority1Setup,
     allScores,
     divergenceWarnings: ai.divergenceWarnings || [],

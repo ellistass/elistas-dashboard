@@ -39,6 +39,7 @@ export async function POST() {
       top3:               alert.top3    as any[],
       bottom3:            alert.bottom3 as any[],
       pairs9:             alert.pairs9  as any[],
+      ideas:              (alert as any).ideas ?? (alert.pairs9 as any[]) ?? [],
       priority1:          alert.priority1 as any,
       allScores:          [],
       divergenceWarnings: [],
