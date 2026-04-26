@@ -2,7 +2,7 @@
 // Vercel Cron jobs:
 //   - Session alerts: 7:30am WAT (06:30 UTC) + 2:30pm WAT (13:30 UTC)
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300; // Claude 8192-token responses can take 60-90s
 
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";

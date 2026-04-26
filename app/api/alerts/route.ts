@@ -2,7 +2,7 @@
 // Scoring API — uses Claude AI to score currencies
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300; // Claude 8192-token responses can take 60-90s
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";

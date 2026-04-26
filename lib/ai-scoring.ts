@@ -374,15 +374,31 @@ export async function scoreWithClaude(input: {
       messages: [{ role: "user", content: userMessage }],
     };
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify(requestBody),
-    });
+    // 90-second timeout — Claude generating 8192 tokens can take 60-70s
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90_000);
+
+    let res: globalThis.Response;
+    try {
+      res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+    } catch (fetchErr: any) {
+      clearTimeout(timeoutId);
+      // ECONNRESET / abort — retry with next model if available, otherwise throw
+      lastError = `Claude fetch error (model: ${model}): ${fetchErr.message}`;
+      console.warn(`[ai-scoring] ${lastError} — retrying…`);
+      continue;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const rawText = await res.text();
 
