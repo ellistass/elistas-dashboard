@@ -21,7 +21,7 @@ export async function GET() {
         pairs9: saved.pairs9 as any,
         priority1: saved.priority1 as any,
         ideas: (saved as any).ideas as any ?? null,
-        allScores: [],
+        allScores: (saved as any).fullAnalysis?.allScores ?? [],
         generatedAt: saved.createdAt,
         scoredBy: "claude-ai",
         scoringModel: (saved as any).scoringModel ?? null,

@@ -9,3 +9,5 @@ prisma/migrations/
 {app
 .vercel
 .env*.local
+startegy.md
+eleitas startegy.md
