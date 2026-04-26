@@ -20,6 +20,13 @@ interface ScoringResult {
   allScores: CurrencyScore[]; divergenceWarnings?: string[];
   generatedAt?: string; scoredBy?: string;
   scoringModel?: string | null; dataAge?: number | null;
+  // Context fields from Claude's reasoning
+  reasoning?: string | null;
+  neutralCurrencies?: string[];
+  excludedCurrencies?: string[];
+  excludedReasons?: string[];
+  marketCondition?: string | null;
+  sessionRecommendation?: string | null;
 }
 interface OpenTrade {
   id: string; pair: string; direction: string; model: string;
@@ -319,6 +326,38 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* ── Market condition banner (thin / holiday-heavy) ── */}
+      {scores?.marketCondition && scores.marketCondition !== "Normal" && (
+        <div style={{
+          marginBottom: 16, padding: "12px 16px", borderRadius: 10,
+          background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)",
+          color: "var(--red)",
+        }}>
+          <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 4px" }}>
+            ⚠ MARKET CONDITION — {scores.marketCondition.toUpperCase()}
+          </p>
+          {scores.sessionRecommendation && (
+            <p style={{ fontSize: 11, margin: 0, opacity: 0.85, lineHeight: 1.5 }}>
+              {scores.sessionRecommendation}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ── Session recommendation (normal days) ── */}
+      {scores?.sessionRecommendation && (!scores.marketCondition || scores.marketCondition === "Normal") && (
+        <div style={{
+          marginBottom: 16, padding: "10px 16px", borderRadius: 10,
+          background: "var(--bg-card)", border: "1px solid var(--border)",
+          display: "flex", alignItems: "flex-start", gap: 8,
+        }}>
+          <span style={{ fontSize: 13, flexShrink: 0 }}>💡</span>
+          <p style={{ fontSize: 11, color: "var(--text-2)", margin: 0, lineHeight: 1.5 }}>
+            {scores.sessionRecommendation}
+          </p>
+        </div>
+      )}
+
       {/* ── Divergence warnings ── */}
       {warnings.length > 0 && (
         <div style={{
@@ -459,6 +498,45 @@ export default function Dashboard() {
                         <div key={c.cur} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                           <span className="font-mono" style={{ fontSize: 11, color: "var(--text-2)" }}>{c.cur}</span>
                           <ScoreNum score={c.score} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Neutral currencies */}
+                {(scores as any).neutralCurrencies?.length > 0 && (
+                  <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 4 }}>
+                    <p style={{ fontSize: 10, color: "var(--text-3)", letterSpacing: "0.1em", marginBottom: 6 }}>NEUTRAL — BELOW THRESHOLD</p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {(scores as any).neutralCurrencies.map((cur: string) => (
+                        <span key={cur} className="font-mono" style={{
+                          fontSize: 10, padding: "2px 8px", borderRadius: 20,
+                          background: "var(--bg-elevated)", color: "var(--text-3)",
+                          border: "1px solid var(--border)",
+                        }}>{cur}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Excluded currencies (holidays) */}
+                {(scores as any).excludedCurrencies?.length > 0 && (
+                  <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 4 }}>
+                    <p style={{ fontSize: 10, color: "var(--amber)", letterSpacing: "0.1em", marginBottom: 6 }}>EXCLUDED — HOLIDAY / THIN DATA</p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {(scores as any).excludedCurrencies.map((cur: string, i: number) => (
+                        <div key={cur} style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                          <span className="font-mono" style={{
+                            fontSize: 10, padding: "2px 8px", borderRadius: 20, flexShrink: 0,
+                            background: "var(--amber-dim)", color: "var(--amber)",
+                            border: "1px solid var(--amber-border)",
+                          }}>{cur}</span>
+                          {(scores as any).excludedReasons?.[i] && (
+                            <span style={{ fontSize: 10, color: "var(--text-3)", lineHeight: 1.4, paddingTop: 2 }}>
+                              {(scores as any).excludedReasons[i].replace(`${cur}: `, "")}
+                            </span>
+                          )}
                         </div>
                       ))}
                     </div>

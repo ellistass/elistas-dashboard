@@ -155,7 +155,7 @@ export default function AnalysisPage() {
   const [detail, setDetail] = useState<AlertDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [promptTab, setPromptTab] = useState<
-    "ideas" | "data" | "response" | "system"
+    "ideas" | "context" | "data" | "response" | "system"
   >("ideas");
 
   // ── Load list ──────────────────────────────────────────────────────────────
@@ -669,9 +669,11 @@ export default function AnalysisPage() {
                                     gap: 4,
                                     padding: "12px 16px 0",
                                     borderBottom: "1px solid var(--border)",
+                                    flexWrap: "wrap",
                                   }}
                                 >
                                   {tabBtn("ideas", `Ideas (${ideas.length})`)}
+                                  {tabBtn("context", "Context")}
                                   {tabBtn("data", "Data sent")}
                                   {tabBtn("response", "Raw response")}
                                   {tabBtn("system", "System prompt")}
@@ -854,6 +856,99 @@ export default function AnalysisPage() {
                                         ))}
                                       </div>
                                     ))}
+
+                                  {/* Context tab */}
+                                  {promptTab === "context" && (() => {
+                                    const fa = detail.fullAnalysis as any;
+                                    const hasContext = fa?.marketCondition || fa?.sessionRecommendation || fa?.reasoning || fa?.excludedCurrencies?.length || fa?.neutralCurrencies?.length;
+                                    if (!hasContext) return (
+                                      <div style={{ padding: 24, textAlign: "center" }}>
+                                        <p style={{ fontSize: 12, color: "var(--text-3)" }}>Context not saved for this run — only available for runs after the prompt update.</p>
+                                      </div>
+                                    );
+                                    return (
+                                      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+                                        {/* Market condition */}
+                                        {fa?.marketCondition && (
+                                          <div style={{
+                                            padding: "10px 14px", borderRadius: 8,
+                                            background: fa.marketCondition === "Normal" ? "var(--bg-elevated)" : "rgba(239,68,68,0.08)",
+                                            border: `1px solid ${fa.marketCondition === "Normal" ? "var(--border)" : "rgba(239,68,68,0.25)"}`,
+                                          }}>
+                                            <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", color: "var(--text-3)", margin: "0 0 4px" }}>MARKET CONDITION</p>
+                                            <p style={{ fontSize: 12, fontWeight: 600, margin: 0, color: fa.marketCondition === "Normal" ? "var(--green)" : "var(--red)" }}>
+                                              {fa.marketCondition}
+                                            </p>
+                                          </div>
+                                        )}
+
+                                        {/* Session recommendation */}
+                                        {fa?.sessionRecommendation && (
+                                          <div style={{ padding: "10px 14px", borderRadius: 8, background: "var(--bg-elevated)", border: "1px solid var(--border)" }}>
+                                            <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", color: "var(--text-3)", margin: "0 0 6px" }}>SESSION RECOMMENDATION</p>
+                                            <p style={{ fontSize: 12, color: "var(--text-1)", margin: 0, lineHeight: 1.6 }}>{fa.sessionRecommendation}</p>
+                                          </div>
+                                        )}
+
+                                        {/* Excluded currencies */}
+                                        {fa?.excludedCurrencies?.length > 0 && (
+                                          <div style={{ padding: "10px 14px", borderRadius: 8, background: "var(--amber-dim)", border: "1px solid var(--amber-border)" }}>
+                                            <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", color: "var(--amber)", margin: "0 0 8px" }}>EXCLUDED — HOLIDAY / THIN DATA</p>
+                                            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                              {fa.excludedCurrencies.map((cur: string, i: number) => (
+                                                <div key={cur} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                                                  <span className="font-mono" style={{ fontSize: 11, fontWeight: 700, color: "var(--amber)", flexShrink: 0, minWidth: 32 }}>{cur}</span>
+                                                  <span style={{ fontSize: 11, color: "var(--text-2)", lineHeight: 1.5 }}>
+                                                    {fa.excludedReasons?.[i]?.replace(`${cur}: `, "") || "Excluded"}
+                                                  </span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        {/* Neutral currencies */}
+                                        {fa?.neutralCurrencies?.length > 0 && (
+                                          <div style={{ padding: "10px 14px", borderRadius: 8, background: "var(--bg-elevated)", border: "1px solid var(--border)" }}>
+                                            <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", color: "var(--text-3)", margin: "0 0 8px" }}>NEUTRAL — BELOW ±1.5 THRESHOLD</p>
+                                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                              {fa.neutralCurrencies.map((cur: string) => (
+                                                <span key={cur} className="font-mono" style={{
+                                                  fontSize: 11, padding: "3px 10px", borderRadius: 20,
+                                                  background: "var(--bg-card)", color: "var(--text-3)",
+                                                  border: "1px solid var(--border)",
+                                                }}>{cur}</span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        {/* Reasoning */}
+                                        {fa?.reasoning && (
+                                          <div>
+                                            <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", color: "var(--text-3)", margin: "0 0 6px" }}>CLAUDE'S REASONING</p>
+                                            <div style={{ position: "relative" }}>
+                                              <div style={{ position: "absolute", top: 8, right: 8 }}>
+                                                <CopyBtn text={fa.reasoning} />
+                                              </div>
+                                              <div style={{
+                                                padding: "12px 14px", paddingTop: 36,
+                                                background: "var(--bg-elevated)", borderRadius: 8,
+                                                border: "1px solid var(--border)",
+                                                fontSize: 11, color: "var(--text-2)",
+                                                lineHeight: 1.7, whiteSpace: "pre-wrap",
+                                                wordBreak: "break-word", maxHeight: 420, overflowY: "auto",
+                                              }}>
+                                                {fa.reasoning}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )}
+
+                                      </div>
+                                    );
+                                  })()}
 
                                   {/* Data sent tab */}
                                   {promptTab === "data" &&

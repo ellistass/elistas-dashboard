@@ -108,8 +108,14 @@ async function runSessionAlert() {
       return NextResponse.json({ ok: true, message: "DB read failed — reminder sent", errors });
     }
 
+    const openTradesRaw = await db.trade.findMany({
+      where: { outcome: "Open" },
+      select: { pair: true, direction: true, strongCcy: true, weakCcy: true, entryPrice: true, slPrice: true, tpPrice: true, grade: true, session: true, divScore: true, date: true },
+    });
+    const openTrades = openTradesRaw.map(t => ({ ...t, date: t.date.toISOString().split("T")[0] }));
+
     const result = await scoreWithClaude({
-      mode: "auto", perfMap, stddevMap, calendarEvents: calEvents, centralBankRates, barchart,
+      mode: "auto", perfMap, stddevMap, calendarEvents: calEvents, centralBankRates, barchart, openTrades,
     });
 
     const today = new Date();
@@ -156,7 +162,13 @@ async function runAlignmentCheck() {
       return NextResponse.json({ ok: true, message: "Skipped — no market data", errors });
     }
 
-    const result = await scoreWithClaude({ mode: "auto", perfMap, stddevMap, calendarEvents: calEvents, centralBankRates, barchart });
+    const openTradesRawA = await db.trade.findMany({
+      where: { outcome: "Open" },
+      select: { pair: true, direction: true, strongCcy: true, weakCcy: true, entryPrice: true, slPrice: true, tpPrice: true, grade: true, session: true, divScore: true, date: true },
+    });
+    const openTradesForAlignment = openTradesRawA.map(t => ({ ...t, date: t.date.toISOString().split("T")[0] }));
+
+    const result = await scoreWithClaude({ mode: "auto", perfMap, stddevMap, calendarEvents: calEvents, centralBankRates, barchart, openTrades: openTradesForAlignment });
     try { await saveHourlySnapshot(result); } catch (e) { console.error("Snapshot warning:", e); }
     await checkOpenTradeAlignment(result);
     await logSyncHealth({ ages, status: "Fresh", action: "Scored", errors });

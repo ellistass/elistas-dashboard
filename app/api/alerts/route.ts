@@ -45,7 +45,12 @@ export async function POST(req: NextRequest) {
           );
         }
       } else {
-        scoringInput = { mode: "auto", perfMap, stddevMap, calendarEvents: calEvents, centralBankRates, barchart };
+        const openTradesRaw = await db.trade.findMany({
+        where: { outcome: "Open" },
+        select: { pair: true, direction: true, strongCcy: true, weakCcy: true, entryPrice: true, slPrice: true, tpPrice: true, grade: true, session: true, divScore: true, date: true },
+      });
+      const openTrades = openTradesRaw.map(t => ({ ...t, date: t.date.toISOString().split("T")[0] }));
+      scoringInput = { mode: "auto", perfMap, stddevMap, calendarEvents: calEvents, centralBankRates, barchart, openTrades };
       }
     } else {
       scoringInput = { mode: "manual", calendar, perf, stddev, futures };
