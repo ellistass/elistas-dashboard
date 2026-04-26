@@ -270,65 +270,48 @@ export async function scoreWithClaude(input: {
   let userMessage = "";
 
   if (input.mode === "auto") {
-    // ── 1. Forex performance (aggregated per currency) ──────────────────────
-    if (input.perfMap && Object.keys(input.perfMap).length > 0) {
-      userMessage += `## FOREX PERFORMANCE (auto-fetched from Barchart)\nAverage % change per currency today:\n`;
-      const sorted = Object.entries(input.perfMap).sort((a, b) => b[1] - a[1]);
-      for (const [cur, pct] of sorted) {
-        userMessage += `${cur}: ${pct > 0 ? "+" : ""}${pct.toFixed(4)}%\n`;
-      }
-      userMessage += "\n";
-    }
-
-    // ── 2. Std dev / price surprises (aggregated per currency) ──────────────
-    if (input.stddevMap && Object.keys(input.stddevMap).length > 0) {
-      userMessage += `## PRICE SURPRISES / STD DEV (auto-fetched from Barchart)\nAverage std dev per currency (higher = more unusual move today):\n`;
-      const sorted = Object.entries(input.stddevMap).sort((a, b) => b[1] - a[1]);
-      for (const [cur, sd] of sorted) {
-        userMessage += `${cur}: ${sd.toFixed(4)}\n`;
-      }
-      userMessage += "\n";
-    }
-
-    // ── 3. Individual forex surprise pairs (raw) ─────────────────────────────
-    if (input.barchart?.forex.surprises) {
-      const bull = input.barchart.forex.surprises.bullish.slice(0, 10);
-      const bear = input.barchart.forex.surprises.bearish.slice(0, 10);
-      if (bull.length > 0 || bear.length > 0) {
-        userMessage += `## FOREX PRICE SURPRISES — RAW PAIRS (Barchart)\n`;
-        if (bull.length > 0) {
-          userMessage += `Unusually strong (bullish surprise):\n`;
-          for (const r of bull) {
-            userMessage += `  ${r.symbol}: stddev=${r.standardDeviation ?? r.percentChange} change=${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
-          }
-        }
-        if (bear.length > 0) {
-          userMessage += `Unusually weak (bearish surprise):\n`;
-          for (const r of bear) {
-            userMessage += `  ${r.symbol}: stddev=${r.standardDeviation ?? r.percentChange} change=${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
-          }
+    // ── 1. Forex performance — ALL raw pairs (no pre-aggregation) ───────────
+    // Sending raw pairs preserves directional context: USD/CAD falling means
+    // USD is the weak base and CAD is the strong quote. Pre-aggregation loses this.
+    if (input.barchart?.forex.performance.today) {
+      const bull = input.barchart.forex.performance.today.bullish;
+      const bear = input.barchart.forex.performance.today.bearish;
+      const allPairs = [...bull, ...bear].sort((a, b) => b.percentChange - a.percentChange);
+      if (allPairs.length > 0) {
+        userMessage += `## FOREX PERFORMANCE — ALL PAIRS (raw — do not pre-aggregate; apply base/quote direction rules)\n`;
+        for (const r of allPairs) {
+          userMessage += `${r.symbol}: ${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
         }
         userMessage += "\n";
       }
     }
 
-    // ── 4. Futures performance (for futures pillar) ──────────────────────────
-    if (input.barchart?.futures.performance.today) {
-      const bull = input.barchart.futures.performance.today.bullish.slice(0, 10);
-      const bear = input.barchart.futures.performance.today.bearish.slice(0, 10);
-      if (bull.length > 0 || bear.length > 0) {
-        userMessage += `## FUTURES PERFORMANCE (Barchart — use for Futures Pillar)\n`;
-        if (bull.length > 0) {
-          userMessage += `Bullish futures:\n`;
-          for (const r of bull) {
-            userMessage += `  ${r.name || r.symbol}: ${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
-          }
+    // ── 2. Forex price surprises / std dev — ALL pairs (no slicing) ─────────
+    if (input.barchart?.forex.surprises) {
+      const bull = input.barchart.forex.surprises.bullish;
+      const bear = input.barchart.forex.surprises.bearish;
+      const allSurprises = [...bull, ...bear].sort(
+        (a, b) => (b.standardDeviation ?? b.percentChange) - (a.standardDeviation ?? a.percentChange),
+      );
+      if (allSurprises.length > 0) {
+        userMessage += `## FOREX PRICE SURPRISES — ALL PAIRS (std dev; positive = unusually strong base, negative = unusually weak base)\n`;
+        for (const r of allSurprises) {
+          const sd = r.standardDeviation ?? r.percentChange;
+          userMessage += `${r.symbol}: stddev=${sd} change=${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
         }
-        if (bear.length > 0) {
-          userMessage += `Bearish futures:\n`;
-          for (const r of bear) {
-            userMessage += `  ${r.name || r.symbol}: ${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
-          }
+        userMessage += "\n";
+      }
+    }
+
+    // ── 3. Futures performance — ALL contracts (no slicing) ─────────────────
+    if (input.barchart?.futures.performance.today) {
+      const bull = input.barchart.futures.performance.today.bullish;
+      const bear = input.barchart.futures.performance.today.bearish;
+      const allFutures = [...bull, ...bear].sort((a, b) => b.percentChange - a.percentChange);
+      if (allFutures.length > 0) {
+        userMessage += `## FUTURES PERFORMANCE — ALL CONTRACTS (Barchart — use for Futures Pillar)\n`;
+        for (const r of allFutures) {
+          userMessage += `${r.name || r.symbol}: ${r.percentChange > 0 ? "+" : ""}${r.percentChange}%\n`;
         }
         userMessage += "\n";
       }
@@ -386,7 +369,7 @@ export async function scoreWithClaude(input: {
   for (const model of DEFAULT_ANTHROPIC_MODELS) {
     const requestBody = {
       model,
-      max_tokens: 4096,
+      max_tokens: 8192,
       system: RFDM_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userMessage }],
     };
@@ -513,19 +496,26 @@ function normaliseResult(
 
   const ideas = rawIdeas.filter((p) => p.grade !== "Skip");
 
-  // priority1 = top idea (backwards compat)
-  const priority1Setup: AIPairSetup = ideas[0] ?? ai.pairs9[0] ?? {
-    pair: ai.priority1?.pair || "N/A",
-    direction: (ai.priority1?.direction as "Long" | "Short") || "Long",
-    strong: ai.top3[0] || "",
-    weak: ai.bottom3[0] || "",
-    strongScore: top3[0]?.score || 0,
-    weakScore: bottom3[0]?.score || 0,
-    divergence: ai.priority1?.divergence || 0,
-    grade: (ai.priority1?.grade as "A+" | "B" | "C" | "Skip") || "C",
-    session: ["London", "New York"],
-    reason: ai.priority1?.reason || "",
-  };
+  // priority1 = crossing of rank #1 strongest × rank #1 weakest currency
+  // This is the correct RFDM definition: best setup is always the top strong vs top weak.
+  // Falls back to highest-divergence idea if that exact crossing isn't in pairs9.
+  const rank1Strong = ai.top3[0];
+  const rank1Weak   = ai.bottom3[0];
+  const priority1Setup: AIPairSetup =
+    ideas.find((p) => p.strong === rank1Strong && p.weak === rank1Weak) ??
+    ideas.sort((a, b) => b.divergence - a.divergence)[0] ??
+    ai.pairs9[0] ?? {
+      pair: ai.priority1?.pair || "N/A",
+      direction: (ai.priority1?.direction as "Long" | "Short") || "Long",
+      strong: rank1Strong || "",
+      weak: rank1Weak || "",
+      strongScore: top3[0]?.score || 0,
+      weakScore: bottom3[0]?.score || 0,
+      divergence: ai.priority1?.divergence || 0,
+      grade: (ai.priority1?.grade as "A+" | "B" | "C" | "Skip") || "C",
+      session: ["London", "New York"],
+      reason: ai.priority1?.reason || "",
+    };
 
   return {
     top3,
