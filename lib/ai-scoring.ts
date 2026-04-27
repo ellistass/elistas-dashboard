@@ -303,20 +303,24 @@ USD/SEK, EUR/SEK
 
 ## OUTPUT FORMAT
 
-Return ONLY valid JSON. No markdown, no explanation, no code fences. Exactly this structure.
-
-**CRITICAL — reasoning field must be FIRST:**
-Before populating any scored fields, write your complete reasoning in the "reasoning" field. Cover every judgement you made:
+**Step 1 — Reason first (plain text, before the JSON):**
+Before writing any JSON, write your complete step-by-step reasoning as plain text. Cover:
 - Which currencies are genuinely vs passively strong and why
 - Which currencies failed the ±1.5 threshold and why
 - Which currencies are excluded (holiday) and why
 - What the active vs passive filter concluded for each currency
 - What the self-check found and what it moved to neutral
 
-The "reasoning" field must be the first field in the JSON. All subsequent fields (scores, top3, bottom3, pairs9) must be consistent with what you wrote in reasoning. If you cannot make them consistent, fix the scored fields — not the reasoning. The reasoning is the ground truth.
+This reasoning is the ground truth. All scored fields in the JSON that follows must be consistent with it. If they conflict, fix the JSON — not the reasoning.
+
+**Step 2 — Output the JSON (no reasoning field inside):**
+After your reasoning text, output ONLY the JSON object. No markdown fences, no extra text after the closing `}`.
+
+Example output structure (reasoning as plain text, then JSON):
+
+GBP appears as base in GBPUSD (+0.005%), GBPCHF (+0.003%), GBPJPY (+0.003%), GBPAUD (+0.002%) — four pairs as base all positive, stddev confirming on all four (1.36, 1.24, 0.73, 0.76). GBP is genuinely and actively bought. EUR gains as quote against USD in EURUSD but loses as base in EURGBP (-1.01σ) — partially passive, net slightly positive but below +1.5 threshold. NOK only gains as quote against weak USD in USDNOK — fully passive, cannot be in top3. USD loses as base across 7+ pairs — systematic broad weakness, DXY -0.80σ confirms. NZD and AUD both on bank holiday — excluded entirely. Self-check: EUR note says passive/below threshold → neutralCurrencies. Final top3 contains only GBP. Final bottom3 contains only USD.
 
 {
-  "reasoning": "Step-by-step: GBP appears as base in GBPUSD (+0.005%), GBPCHF (+0.003%), GBPJPY (+0.003%), GBPAUD (+0.002%) — four pairs as base all positive, stddev confirming on all four (1.36, 1.24, 0.73, 0.76). GBP is genuinely and actively bought. Score high. EUR gains as quote against USD in EURUSD but loses as base in EURGBP (-1.01σ) — partially passive, net slightly positive but below +1.5 threshold. NOK only gains as quote against weak USD in USDNOK — fully passive, score negative. Cannot be in top3. USD loses as base across 7+ pairs — systematic broad weakness, DXY -0.80σ confirms. Score deeply negative. NZD and AUD both on bank holiday — excluded entirely regardless of score. Self-check: EUR note says passive/below threshold → neutralCurrencies. NOK score is negative → neutralCurrencies. Final top3 contains only GBP. Final bottom3 contains only USD. Insufficient ranking warning triggered.",
   "scores": [
     {
       "currency": "GBP",
@@ -392,7 +396,7 @@ The "reasoning" field must be the first field in the JSON. All subsequent fields
 }
 
 CRITICAL RULES:
-- reasoning must be the FIRST field and must justify every decision that follows
+- Write your full reasoning as plain text BEFORE the JSON block. Do not include a reasoning field inside the JSON.
 - Include ALL 10 currencies in the scores array (even if score is 0). Sort scores by total descending.
 - Include ALL pairs9 setups that are grade A+, B, or C in the ideas array (exclude Skip). Sort ideas by divergence descending.
 - Every score entry must have activeStrength (boolean), confidence, and holiday (boolean) fields.
@@ -417,6 +421,54 @@ export const debugLog: {
   rawResponse: string;
   timestamp: string;
 } = { model: "", promptLength: 0, systemPrompt: "", userMessage: "", rawResponse: "", timestamp: "" };
+
+/**
+ * Walk the raw string character-by-character and replace any literal
+ * control characters (newline, carriage return, tab) that appear INSIDE
+ * a JSON string value with their proper escape sequences.
+ *
+ * Claude sometimes writes the reasoning field as a multi-line paragraph
+ * with real line-breaks, which is not legal inside a JSON string and
+ * causes JSON.parse to throw.  This pass fixes that without touching the
+ * structural JSON tokens (braces, commas, colons, etc.).
+ */
+function sanitiseJsonLiterals(s: string): string {
+  let out = "";
+  let inStr = false;
+  let escaped = false;
+
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+
+    if (escaped) {
+      out += c;
+      escaped = false;
+      continue;
+    }
+
+    if (c === "\\" && inStr) {
+      out += c;
+      escaped = true;
+      continue;
+    }
+
+    if (c === '"') {
+      inStr = !inStr;
+      out += c;
+      continue;
+    }
+
+    if (inStr) {
+      if      (c === "\n") { out += "\\n";  continue; }
+      else if (c === "\r") { out += "\\r";  continue; }
+      else if (c === "\t") { out += "\\t";  continue; }
+    }
+
+    out += c;
+  }
+
+  return out;
+}
 
 /**
  * Call Claude to score currencies from raw market data.
@@ -615,7 +667,7 @@ export async function scoreWithClaude(input: {
   for (const model of DEFAULT_ANTHROPIC_MODELS) {
     const requestBody = {
       model,
-      max_tokens: 8192,
+      max_tokens: 16000,   // reasoning + 10 scores + pairs9 + ideas can exceed 8192
       system: RFDM_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userMessage }],
     };
@@ -632,6 +684,7 @@ export async function scoreWithClaude(input: {
           "Content-Type": "application/json",
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "output-128k-2025-02-19",  // allows max_tokens up to 16k+
         },
         body: JSON.stringify(requestBody),
         signal: controller.signal,
@@ -689,11 +742,19 @@ export async function scoreWithClaude(input: {
     if (fenceMatch) jsonStr = fenceMatch[1].trim();
   }
 
-  // If there's text before the first { — strip it (Claude sometimes adds a sentence first)
+  // Capture any text Claude wrote BEFORE the opening { as the reasoning.
+  // The prompt now instructs Claude to reason as plain text first, then output
+  // the JSON — so the pre-JSON block IS the reasoning. This avoids putting a
+  // multi-line string inside a JSON value (the source of literal-newline errors).
   const firstBrace = jsonStr.indexOf("{");
   const lastBrace  = jsonStr.lastIndexOf("}");
+  const preJsonReasoning = firstBrace > 0 ? jsonStr.slice(0, firstBrace).trim() : "";
   if (firstBrace > 0) jsonStr = jsonStr.slice(firstBrace);
   if (lastBrace !== -1 && lastBrace < jsonStr.length - 1) jsonStr = jsonStr.slice(0, lastBrace + 1);
+
+  // Safety net: sanitise any remaining literal control characters inside JSON
+  // string values (handles edge cases where Claude still writes inline newlines).
+  jsonStr = sanitiseJsonLiterals(jsonStr);
 
   let parsed: AIScoringResult;
   try {
@@ -703,6 +764,12 @@ export async function scoreWithClaude(input: {
     debugLog.rawResponse = text; // always save so prompt inspector shows the bad response
     debugLog.timestamp   = new Date().toISOString();
     throw new Error(`Claude returned invalid JSON — scoring failed. Check /api/debug for the raw response.`);
+  }
+
+  // Inject the pre-JSON reasoning into the parsed object if Claude didn't
+  // include a reasoning field inside the JSON (new prompt format).
+  if (preJsonReasoning && !parsed.reasoning) {
+    parsed.reasoning = preJsonReasoning;
   }
 
   return normaliseResult(parsed, usedModel, {
