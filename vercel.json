@@ -2,11 +2,19 @@
   "crons": [
     {
       "path": "/api/cron?job=session",
-      "schedule": "30 6 * * 1-5"
+      "schedule": "15 7 * * 1-5"
     },
     {
       "path": "/api/cron?job=session",
-      "schedule": "30 13 * * 1-5"
+      "schedule": "15 14 * * 1-5"
+    },
+    {
+      "path": "/api/cron?job=session",
+      "schedule": "15 22 * * 0"
+    },
+    {
+      "path": "/api/cron?job=alignment",
+      "schedule": "15 9-17 * * 1-5"
     }
   ]
 }
