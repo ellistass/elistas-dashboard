@@ -13,6 +13,9 @@
     "create-user": "tsx --env-file=.env scripts/create-user.ts",
     "delete-user": "tsx --env-file=.env scripts/delete-user.ts"
   },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
   "dependencies": {
     "next": "^14.2.0",
     "next-auth": "^4.24.7",
