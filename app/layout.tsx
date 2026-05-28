@@ -1,5 +1,6 @@
 // app/layout.tsx
 import type { Metadata } from 'next'
+import { Suspense } from 'react'
 import './globals.css'
 import { Providers } from './providers'
 import { Sidebar } from './_components/Sidebar'
@@ -20,7 +21,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body style={{ background: 'var(--bg-base)', color: 'var(--text-1)' }}>
         <Providers>
-          <TopProgress />
+          <Suspense fallback={null}>
+            <TopProgress />
+          </Suspense>
           <Sidebar />
           <main className="app-main">
             {children}

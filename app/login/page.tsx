@@ -3,7 +3,7 @@
 // app/login/page.tsx — single-user login.
 // Background: slow-scrolling candlestick chart + live-looking currency ticker
 // at the bottom. Both honor prefers-reduced-motion (see globals.css).
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { signIn } from 'next-auth/react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
@@ -80,7 +80,7 @@ const TICKER_ROWS: Array<{ pair: string; price: string; change: number }> = [
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const callbackUrl = searchParams.get('callbackUrl') || '/'
@@ -316,5 +316,13 @@ export default function LoginPage() {
       </div>
 
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageContent />
+    </Suspense>
   )
 }
