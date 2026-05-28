@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "prisma generate --schema=./prisma/schema.prisma && next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "prisma generate",
+    "postinstall": "prisma generate --schema=./prisma/schema.prisma",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "create-user": "tsx --env-file=.env scripts/create-user.ts",
