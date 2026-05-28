@@ -99,7 +99,7 @@ export interface NormalisedScoringResult {
   };
 }
 
-const RFDM_SYSTEM_PROMPT = `You are the RFDM (Relative Flow Divergence Model) currency scoring engine for a professional forex trader based in Lagos, Nigeria.
+export const RFDM_SYSTEM_PROMPT = `You are the RFDM (Relative Flow Divergence Model) currency scoring engine for a professional forex trader based in Lagos, Nigeria.
 
 Your job is not just to follow rules mechanically. You must reason about what the data actually means — the same way an experienced institutional trader would read it. When data is ambiguous, thin, or conflicting, say so explicitly rather than forcing a clean answer that isn't there.
 
@@ -314,7 +314,7 @@ Before writing any JSON, write your complete step-by-step reasoning as plain tex
 This reasoning is the ground truth. All scored fields in the JSON that follows must be consistent with it. If they conflict, fix the JSON — not the reasoning.
 
 **Step 2 — Output the JSON (no reasoning field inside):**
-After your reasoning text, output ONLY the JSON object. No markdown fences, no extra text after the closing `}`.
+After your reasoning text, output ONLY the JSON object. No markdown fences, no extra text after the closing \`}\`.
 
 Example output structure (reasoning as plain text, then JSON):
 
@@ -493,6 +493,19 @@ export async function scoreWithClaude(input: {
     bankName: string;
     currentRate: number;
     previousRate: number | null;
+    // Optional macro fields (TE matrix scrape adds these)
+    gdpGrowth?: number;
+    inflationRate?: number;
+    joblessRate?: number;
+    govBudget?: number;
+    debtToGdp?: number;
+    currentAccount?: number;
+  }>;
+  // S&P 500 sector map — risk-on/off context for the AI
+  sectors?: Array<{
+    sector: string;
+    symbol?: string;
+    percentChange: number;
   }>;
   barchart?: {
     forex: {
@@ -609,15 +622,41 @@ export async function scoreWithClaude(input: {
       userMessage += "\n";
     }
 
-    // ── 6. Central bank rates (context for divergence) ───────────────────────
+    // ── 6. Central bank rates + macro context ────────────────────────────────
+    // When the TE matrix scrape ran successfully, each row carries gdpGrowth,
+    // inflation, jobless, etc. — much richer than just the rate. Use this for
+    // carry/divergence AND for sniffing stagflation, recession, debt risk etc.
     if (input.centralBankRates && input.centralBankRates.length > 0) {
-      userMessage += `## CENTRAL BANK INTEREST RATES (context — use for divergence/carry analysis)\n`;
+      userMessage += `## CENTRAL BANK RATES + MACRO CONTEXT (use for divergence/carry/stagflation analysis)\n`;
       const sorted = [...input.centralBankRates].sort((a, b) => b.currentRate - a.currentRate);
       for (const r of sorted) {
-        const change = r.previousRate !== null && r.previousRate !== r.currentRate
-          ? ` (prev: ${r.previousRate}%)`
+        const rateChange = r.previousRate !== null && r.previousRate !== r.currentRate
+          ? ` (prev ${r.previousRate}%)`
           : "";
-        userMessage += `${r.currency} (${r.bankName}): ${r.currentRate}%${change}\n`;
+        const macroParts: string[] = [];
+        if (r.inflationRate  != null) macroParts.push(`CPI ${r.inflationRate}%`);
+        if (r.gdpGrowth      != null) macroParts.push(`GDP ${r.gdpGrowth > 0 ? '+' : ''}${r.gdpGrowth}%`);
+        if (r.joblessRate    != null) macroParts.push(`unemp ${r.joblessRate}%`);
+        if (r.govBudget      != null) macroParts.push(`budget ${r.govBudget > 0 ? '+' : ''}${r.govBudget}%`);
+        if (r.debtToGdp      != null) macroParts.push(`debt/GDP ${r.debtToGdp}%`);
+        if (r.currentAccount != null) macroParts.push(`CA ${r.currentAccount > 0 ? '+' : ''}${r.currentAccount}%`);
+        const macroStr = macroParts.length ? `  ·  ${macroParts.join(' · ')}` : '';
+        userMessage += `${r.currency} (${r.bankName}): rate ${r.currentRate}%${rateChange}${macroStr}\n`;
+      }
+      userMessage += "\n";
+    }
+
+    // ── 6b. S&P 500 sector map (risk-on/off backdrop) ────────────────────────
+    // Use this to gauge whether the market is risk-on (cyclicals leading: XLK,
+    // XLY, XLF, XLC up; XLU, XLP, XLV down) or risk-off (defensives leading).
+    // Risk-on → USD-funded carry trades favoured (long AUD/JPY, NZD/JPY).
+    // Risk-off → JPY/CHF strength, USD safe-haven bid, short risk pairs.
+    if (input.sectors && input.sectors.length > 0) {
+      userMessage += `## S&P 500 SECTOR MAP (today's % change — risk-on/risk-off context)\n`;
+      const sorted = [...input.sectors].sort((a, b) => b.percentChange - a.percentChange);
+      for (const s of sorted) {
+        const sign = s.percentChange > 0 ? "+" : "";
+        userMessage += `${s.sector}${s.symbol ? ` (${s.symbol})` : ""}: ${sign}${s.percentChange}%\n`;
       }
       userMessage += "\n";
     }

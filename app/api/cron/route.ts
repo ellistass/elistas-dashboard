@@ -96,6 +96,25 @@ async function runSessionAlert() {
     return NextResponse.json({ ok: true, message: `Stale data (${ages.barchart}min) — skipped` });
   }
 
+  // ── Hybrid: skip if Claude Desktop Routine already saved today's analysis ──
+  // Routine runs on the user's subscription via /api/scoring/save. When today's
+  // alert already exists we don't burn API credits scoring again — we just exit.
+  try {
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todaysAlert = await db.dailyAlert.findUnique({ where: { date: todayStart } });
+    if (todaysAlert) {
+      await logSyncHealth({ ages, status: "Fresh", action: "Scored", errors: [`Routine/prior alert exists — API skipped`] });
+      return NextResponse.json({
+        ok: true,
+        message: `Today's alert already exists (source: ${(todaysAlert as any).scoringModel ?? 'unknown'}) — API skipped`,
+        scoredBy: (todaysAlert as any).scoringModel ?? 'unknown',
+      });
+    }
+  } catch (err: any) {
+    console.error("[cron] hybrid check failed (non-fatal):", err?.message ?? err);
+  }
+
   try {
     const { perfMap, stddevMap, calEvents, centralBankRates, barchart, errors } =
       await fetchAllMarketData();

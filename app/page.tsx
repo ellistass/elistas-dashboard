@@ -2,6 +2,21 @@
 // app/page.tsx — Elistas Dashboard (dark redesign)
 
 import { useState, useEffect, useCallback } from "react";
+import {
+  FreshnessStrip,
+  DailyRBar,
+  NextEventCountdown,
+  MacroStrip,
+  TradePlanBoard,
+  AlertsLog,
+  NewsCollisionBadge,
+} from "./_components/DashboardWidgets";
+import { PositionSizeCalc } from "./_components/PositionSizeCalc";
+import { AccountTiles } from "./_components/AccountTiles";
+import { MultiIdeaHero } from "./_components/MultiIdeaHero";
+import { SourceChip, RiskLine } from "./_components/TradeChips";
+import { RoutineSetupCard } from "./_components/RoutineSetupCard";
+import { DiagnosticsPanel } from "./_components/DiagnosticsPanel";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -35,9 +50,29 @@ interface OpenTrade {
   weakCcy: string; divScore?: number;
   alignmentStatus: "Green" | "Amber" | "Red" | "Unknown";
   alignmentReason: string; date: string;
+  newsCollisions?: Array<{ title: string; country: string; currency: string; date: string; impact: string }>;
+  source?: string; accountId?: string | null; riskPercent?: number;
+  lotSize?: number | null; profitCcy?: number | null;
 }
+interface SectorRow { sector: string; symbol?: string; percentChange: number }
+interface CentralBankRateLite { currency: string; bankName: string; currentRate: number; previousRate: number | null; source?: string }
+interface FreshnessTile { source: string; label: string; fetchedAt: string | null; ageMinutes: number | null; status: 'fresh' | 'stale' | 'missing' }
+interface DailyRStatus { todayR: number; cutoffR: number; pctOfCutoff: number; state: 'safe' | 'caution' | 'stop'; closedToday: number }
+interface CalEvent { title: string; country: string; currency: string; date: string; impact: string; forecast: string | null; previous: string | null; actual: string | null }
+interface MacroTile { symbol: string; name: string; latest: number; percentChange: number }
+interface RecentAlert { id: string; date: string; sentAt: string | null; pair: string | null; direction: string | null; grade: string | null }
 interface DashboardData {
   scores: ScoringResult | null; openTrades: OpenTrade[];
+  sectors?: SectorRow[];
+  centralBankRates?: CentralBankRateLite[];
+  freshness?: FreshnessTile[];
+  dailyR?: DailyRStatus;
+  nextEvent?: CalEvent | null;
+  macros?: MacroTile[];
+  todaysIdeas?: any[];
+  recentAlerts?: RecentAlert[];
+  barchartFetchedAt?: string | null;
+  ratesFetchedAt?: string | null;
   fetchedAt: string; fetchErrors: string[];
   hasLiveData: boolean; scoredAt?: string | null;
 }
@@ -72,6 +107,23 @@ function currentSession(): string | null {
   if (h >= 13 && h < 15) return "Pre-NY";
   if (h >= 15 && h < 22) return "New York";
   return null;
+}
+
+// Cyclical sectors leading vs defensives = the simplest risk-on/off read.
+// Cyclicals: XLK, XLY, XLF, XLC, XLI    Defensives: XLP, XLV, XLU
+function sectorRegime(sectors: { sector: string; symbol?: string; percentChange: number }[]): string {
+  if (!sectors || sectors.length < 3) return "";
+  const cyclicalSyms = new Set(["XLK", "XLY", "XLF", "XLC", "XLI"]);
+  const defensiveSyms = new Set(["XLP", "XLV", "XLU"]);
+  const cyclical = sectors.filter((s) => s.symbol && cyclicalSyms.has(s.symbol));
+  const defensive = sectors.filter((s) => s.symbol && defensiveSyms.has(s.symbol));
+  if (!cyclical.length || !defensive.length) return "";
+  const cycAvg = cyclical.reduce((a, b) => a + b.percentChange, 0) / cyclical.length;
+  const defAvg = defensive.reduce((a, b) => a + b.percentChange, 0) / defensive.length;
+  const delta = cycAvg - defAvg;
+  if (delta > 0.3) return "risk-on";
+  if (delta < -0.3) return "risk-off";
+  return "mixed";
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -177,13 +229,28 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [fetchDashboard]);
 
+  // Engine the user has picked (defaults to Sonnet via API)
+  const [engine, setEngine] = useState<'sonnet' | 'haiku' | 'rules' | 'routine'>('sonnet')
+  useEffect(() => {
+    const stored = typeof window !== 'undefined' ? localStorage.getItem('elistas:scoring-engine') : null
+    if (stored === 'sonnet' || stored === 'haiku' || stored === 'rules' || stored === 'routine') setEngine(stored as any)
+  }, [])
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('elistas:scoring-engine', engine)
+  }, [engine])
+
   async function runAnalysis(sendAlert = false) {
+    // If user picked "routine", just nudge them to use Claude Desktop instead
+    if (engine === 'routine') {
+      setScoreStatus({ ok: true, msg: "Routine mode: open Claude Desktop → trading project → paste your trigger prompt (see Routine card above)." });
+      return;
+    }
     setScoring(true); setScoreStatus(null);
     try {
       const res = await fetch("/api/alerts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "auto", sendAlert }),
+        body: JSON.stringify({ mode: "auto", sendAlert, engine }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -232,6 +299,51 @@ export default function Dashboard() {
 
   const scores = data?.scores;
   const openTrades = data?.openTrades || [];
+  const sectors = data?.sectors ?? [];
+  const centralBankRates = data?.centralBankRates ?? [];
+  const freshness = data?.freshness;
+  const dailyR = data?.dailyR;
+  const nextEvent = data?.nextEvent;
+  const macros = data?.macros;
+  const todaysIdeas = data?.todaysIdeas ?? [];
+  const recentAlerts = data?.recentAlerts;
+  const ideaActions = (data as any)?.ideaActions ?? {};
+
+  // Compute which ideas have already been taken so the trade plan board can
+  // mark them — match on pair + direction against open trades.
+  const takenPairs = new Set<string>(
+    openTrades.map((t) => `${t.pair}|${t.direction}`),
+  );
+
+  async function handleTakeIdea(idea: any) {
+    try {
+      await fetch('/api/ideas/take', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(idea),
+      });
+      await fetchDashboard();
+    } catch (e) {
+      console.error('Failed to take idea:', e);
+    }
+  }
+
+  // Full per-account list — powers both the AccountTiles row and the calc.
+  // Refreshed alongside the dashboard data (every 3 min) so equity/today's R stay live.
+  const [accountList, setAccountList] = useState<any[]>([]);
+  useEffect(() => {
+    const loadAccounts = () => {
+      fetch('/api/accounts').then((r) => r.json()).then((d) => {
+        setAccountList(d.accounts ?? []);
+      }).catch(() => {});
+    };
+    loadAccounts();
+    const t = setInterval(loadAccounts, 3 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+  const calcAccounts = accountList
+    .filter((a) => a.isActive)
+    .map((a) => ({ id: a.id, name: a.name, currency: a.currency, currentBalance: a.currentBalance }));
   const warnings = (scores as any)?.divergenceWarnings || [];
   const session = currentSession();
 
@@ -270,8 +382,21 @@ export default function Dashboard() {
           </p>
         </div>
 
-        {/* Action buttons */}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {/* Action buttons + engine picker */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "stretch" }}>
+          {/* Engine picker — choose which scoring engine to use */}
+          <select value={engine} onChange={(e) => setEngine(e.target.value as any)}
+                  title="Choose the scoring engine"
+                  style={{
+                    padding: "8px 10px", borderRadius: 10, fontSize: 12,
+                    background: "var(--bg-card-2)", border: "1px solid var(--border)",
+                    color: "var(--text-2)", cursor: "pointer",
+                  }}>
+            <option value="sonnet">⚡ Sonnet (API)</option>
+            <option value="haiku">💨 Haiku (cheap API)</option>
+            <option value="rules">📐 Rules-only (no API)</option>
+            <option value="routine">🔁 Routine (Desktop)</option>
+          </select>
           <button
             onClick={() => runAnalysis(false)} disabled={scoring}
             style={{
@@ -387,30 +512,89 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── Quick stats strip ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 24 }}>
-        {[
-          { label: "Open Trades",   value: openTrades.length.toString(), sub: openTrades.filter(t => t.alignmentStatus === "Red").length > 0 ? `${openTrades.filter(t => t.alignmentStatus === "Red").length} red` : "all aligned", danger: openTrades.filter(t => t.alignmentStatus === "Red").length > 0 },
-          { label: "Top Currency",  value: scores?.top3?.[0]?.cur ?? "—", sub: scores?.top3?.[0] ? `+${scores.top3[0].score.toFixed(1)} score` : "run analysis", danger: false },
-          { label: "Weak Currency", value: scores?.bottom3?.[0]?.cur ?? "—", sub: scores?.bottom3?.[0] ? `${scores.bottom3[0].score.toFixed(1)} score` : "run analysis", danger: false },
-          { label: "Priority Setup",value: scores?.priority1?.pair ?? "—", sub: scores?.priority1 ? `${scores.priority1.grade} · div ${scores.priority1.divergence.toFixed(1)}` : "run analysis", danger: false },
-        ].map(({ label, value, sub, danger }) => (
-          <div key={label} style={{
-            background: "var(--bg-card)", border: `1px solid ${danger ? "var(--red-border)" : "var(--border)"}`,
-            borderRadius: 12, padding: "14px 18px",
-          }}>
-            <p style={{ fontSize: 10, color: "var(--text-3)", letterSpacing: "0.1em", textTransform: "uppercase", margin: "0 0 6px" }}>{label}</p>
-            <p className="font-mono" style={{ fontSize: 20, fontWeight: 600, margin: "0 0 2px", color: danger ? "var(--red)" : "var(--text-1)" }}>{value}</p>
-            <p style={{ fontSize: 11, color: danger ? "var(--red)" : "var(--text-3)", margin: 0 }}>{sub}</p>
-          </div>
-        ))}
-      </div>
+      {/* ── Routine setup (collapsible — only expanded on first run / when configuring) ── */}
+      <RoutineSetupCard />
 
-      {/* ── Accounts summary strip ── */}
-      {accounts && accounts.totalAccounts > 0 && (
+      {/* ── Data flow diagnostics — collapsible, helps debug "why isn't X showing" ── */}
+      <DiagnosticsPanel
+        sectors={sectors}
+        rates={centralBankRates}
+        freshness={freshness}
+        todaysIdeas={todaysIdeas}
+        macros={macros as any}
+        nextEvent={nextEvent}
+        barchartFetchedAt={(data as any)?.barchartFetchedAt}
+        ratesFetchedAt={(data as any)?.ratesFetchedAt}
+        scoredAt={data?.scoredAt}
+        scoringModel={data?.scores?.scoringModel}
+      />
+
+      {/* ── Per-account tiles — the morning "where am I right now" snapshot ── */}
+      <AccountTiles accounts={accountList as any} />
+
+      {/* ── Today's calls (multi-idea hero) — Claude's ideas + your discretionary logs ── */}
+      <MultiIdeaHero
+        ideas={todaysIdeas as any}
+        ideaActions={ideaActions}
+        accounts={calcAccounts.map((a: any) => ({ ...a, status: accountList.find((x: any) => x.id === a.id)?.status ?? '' })) as any}
+        onChanged={fetchDashboard}
+      />
+
+      {/* ── Status row — only shown when there's data worth showing.
+           Without an analysis run, accounts + ready-to-score card carry everything. ── */}
+      {scores && (
+        <div className="dash-status">
+          {(() => {
+            const redCount = openTrades.filter(t => t.alignmentStatus === "Red").length;
+            const newsCount = openTrades.reduce((n, t) => n + (t.newsCollisions?.length ?? 0), 0);
+            const tiles = [
+              {
+                label: "Open trades",
+                value: openTrades.length.toString(),
+                sub: redCount > 0 ? `${redCount} red` : newsCount > 0 ? `${newsCount} news` : openTrades.length > 0 ? "all aligned" : "no positions",
+                danger: redCount > 0 || newsCount > 0,
+              },
+              {
+                label: "Top currency",
+                value: scores?.top3?.[0]?.cur ?? "—",
+                sub: scores?.top3?.[0] ? `+${scores.top3[0].score.toFixed(1)}` : "no score",
+                danger: false,
+              },
+              {
+                label: "Weak currency",
+                value: scores?.bottom3?.[0]?.cur ?? "—",
+                sub: scores?.bottom3?.[0] ? `${scores.bottom3[0].score.toFixed(1)}` : "no score",
+                danger: false,
+              },
+              {
+                label: "Priority setup",
+                value: scores?.priority1?.pair ?? "—",
+                sub: scores?.priority1 ? `${scores.priority1.grade} · div ${scores.priority1.divergence.toFixed(1)}` : "no setup",
+                danger: false,
+              },
+              {
+                label: "Daily R",
+                value: dailyR ? `${dailyR.todayR > 0 ? "+" : ""}${dailyR.todayR.toFixed(2)}R` : "0.00R",
+                sub: dailyR?.state === "stop" ? "STOP — cutoff hit" : dailyR?.state === "caution" ? "near cutoff" : `${dailyR?.closedToday ?? 0} closed today`,
+                danger: dailyR?.state !== "safe" && dailyR?.state !== undefined,
+              },
+            ];
+            return tiles.map(({ label, value, sub, danger }) => (
+              <div key={label} className={`dash-stat${danger ? " danger" : ""}`}>
+                <p className="lbl">{label}</p>
+                <p className="val">{value}</p>
+                <p className="sub">{sub}</p>
+              </div>
+            ));
+          })()}
+        </div>
+      )}
+
+      {/* ── (Legacy accounts strip removed — replaced by AccountTiles above) ── */}
+      {false && accounts && accounts.totalAccounts > 0 && (
         <a href="/accounts" style={{ textDecoration: "none" }}>
           <div style={{
-            display: "flex", alignItems: "center", gap: 0,
+            display: "flex", alignItems: "center", gap: 0, flexWrap: "wrap",
             background: "var(--bg-card)", border: "1px solid var(--border)",
             borderRadius: 12, padding: "12px 18px", marginBottom: 16,
             cursor: "pointer", transition: "border-color 0.15s",
@@ -440,8 +624,22 @@ export default function Dashboard() {
         </a>
       )}
 
-      {/* ── Main grid ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16 }}>
+      {/* ── Freshness heartbeat (always on top so stale data is unmissable) ── */}
+      <FreshnessStrip tiles={freshness as any} />
+
+      {/* ── Risk row: daily R progression + next event + DXY/VIX ──
+           Only renders when at least one of the three has real data. Avoids
+           three half-empty cards when no analysis has run and no trades closed. */}
+      {(dailyR || nextEvent || (macros && macros.length > 0)) && (
+        <div className="dash-risk-row">
+          {dailyR && <DailyRBar data={dailyR as any} />}
+          {nextEvent && <NextEventCountdown event={nextEvent as any} />}
+          {macros && macros.length > 0 && <MacroStrip macros={macros as any} />}
+        </div>
+      )}
+
+      {/* ── Main grid (sidebar + main pane, collapses to single col on tablet) ── */}
+      <div className="dash-main">
 
         {/* ── LEFT column ── */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -546,6 +744,95 @@ export default function Dashboard() {
             )}
           </div>
 
+          {/* ── S&P Sector map — risk-on/off context, populated by barchart-sync ── */}
+          {sectors.length > 0 && (
+            <div className="card" style={{ padding: "16px 18px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <p className="section-label" style={{ margin: 0 }}>S&amp;P Sectors</p>
+                <span style={{ fontSize: 10, color: "var(--text-3)" }}>{sectorRegime(sectors)}</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {[...sectors].sort((a, b) => b.percentChange - a.percentChange).map((s) => {
+                  const pos = s.percentChange >= 0;
+                  const mag = Math.min(Math.abs(s.percentChange) / 2, 1); // |2%| ≈ full bar
+                  const barW = Math.max(mag * 100, 4);
+                  return (
+                    <div key={s.sector} style={{
+                      display: "grid", gridTemplateColumns: "92px 1fr 46px",
+                      alignItems: "center", gap: 8, fontSize: 11,
+                    }}>
+                      <span style={{ color: "var(--text-2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                            title={`${s.sector}${s.symbol ? ` (${s.symbol})` : ""}`}>
+                        {s.sector}
+                      </span>
+                      <div style={{ height: 6, background: "var(--bg-card-2)", borderRadius: 3, position: "relative" }}>
+                        <div style={{
+                          position: "absolute", top: 0, bottom: 0,
+                          [pos ? "left" : "right"]: "50%",
+                          width: `${barW / 2}%`,
+                          background: pos ? "var(--green)" : "var(--red)",
+                          borderRadius: 3,
+                        }} />
+                        <div style={{ position: "absolute", top: -2, bottom: -2, left: "50%", width: 1, background: "var(--border)" }} />
+                      </div>
+                      <span className="font-mono" style={{
+                        fontSize: 11, fontWeight: 500, textAlign: "right",
+                        color: pos ? "var(--green)" : "var(--red)",
+                      }}>
+                        {pos ? "+" : ""}{s.percentChange.toFixed(2)}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              {data?.barchartFetchedAt && (
+                <p style={{ fontSize: 10, color: "var(--text-3)", marginTop: 10, marginBottom: 0 }}>
+                  Updated {timeAgo(data.barchartFetchedAt)}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* ── Macro snapshot — rate + CPI + GDP per currency (TE matrix) ── */}
+          {centralBankRates.length > 0 && (
+            <div className="card" style={{ padding: "16px 18px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <p className="section-label" style={{ margin: 0 }}>Macro snapshot</p>
+                <span style={{ fontSize: 10, color: "var(--text-3)" }}>
+                  {centralBankRates.some((r: any) => r.inflationRate != null) ? "matrix" :
+                   centralBankRates.some((r) => r.source === "scraped") ? "rates only" : "config"}
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {[...centralBankRates].sort((a, b) => b.currentRate - a.currentRate).map((r: any) => {
+                  const hasMacro = r.inflationRate != null || r.gdpGrowth != null;
+                  // Real rate proxy: nominal rate − inflation. Positive → restrictive policy.
+                  const realRate = (r.currentRate != null && r.inflationRate != null)
+                    ? r.currentRate - r.inflationRate : null;
+                  return (
+                    <div key={r.currency} style={{ minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                        <span className="font-mono" style={{ fontSize: 11, color: "var(--text-2)", flexShrink: 0 }} title={r.bankName}>{r.currency}</span>
+                        <span className="font-mono" style={{ fontSize: 12, fontWeight: 500, color: "var(--text-1)" }}>{r.currentRate.toFixed(2)}%</span>
+                      </div>
+                      {hasMacro && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 8px", fontSize: 9, color: "var(--text-3)", marginTop: 1 }}>
+                          {r.inflationRate != null && <span title="CPI inflation">CPI {r.inflationRate}%</span>}
+                          {r.gdpGrowth != null && <span title="Quarterly GDP growth" style={{ color: r.gdpGrowth >= 0 ? "var(--text-3)" : "var(--red)" }}>
+                            GDP {r.gdpGrowth > 0 ? "+" : ""}{r.gdpGrowth}%
+                          </span>}
+                          {realRate != null && <span title="Real rate = nominal − CPI">
+                            real {realRate > 0 ? "+" : ""}{realRate.toFixed(2)}%
+                          </span>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Session windows */}
           <div className="card" style={{ padding: "16px 18px" }}>
             <p className="section-label" style={{ marginTop: 0 }}>Sessions — WAT</p>
@@ -583,25 +870,49 @@ export default function Dashboard() {
               })}
             </div>
           </div>
+
+          {/* Position size calculator */}
+          {calcAccounts.length > 0 && (
+            <PositionSizeCalc
+              accounts={calcAccounts}
+              defaultPair={scores?.priority1?.pair}
+            />
+          )}
+
+          {/* Recent Telegram alerts (audit trail) */}
+          <AlertsLog alerts={recentAlerts} />
         </div>
 
         {/* ── RIGHT column ── */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
+          {/* (Trade plan board removed — MultiIdeaHero at the top of the page handles this now) */}
+
           {!scores ? (
-            /* Empty state */
-            <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 300, textAlign: "center" }}>
+            /* Empty state — compact horizontal hero, ~70px tall */
+            <div className="card" style={{
+              padding: scoring ? "24px" : "14px 18px",
+              display: scoring ? "flex" : "grid",
+              gridTemplateColumns: scoring ? undefined : "1fr auto",
+              alignItems: "center", gap: 16,
+              backgroundImage: "radial-gradient(ellipse at top right, rgba(0,212,138,0.04) 0%, transparent 60%)",
+            }}>
               {scoring ? (
-                <>
-                  <div style={{ width: 40, height: 40, border: "3px solid var(--border)", borderTopColor: "var(--green)", borderRadius: "50%", animation: "spin 0.75s linear infinite", marginBottom: 16 }} />
-                  <p style={{ fontSize: 13, color: "var(--text-2)", fontWeight: 500 }}>Claude is analysing the markets…</p>
-                  <p style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>Fetching data · Scoring currencies · Building matrix</p>
-                </>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1 }}>
+                  <div style={{ width: 32, height: 32, border: "3px solid var(--border)", borderTopColor: "var(--green)", borderRadius: "50%", animation: "spin 0.75s linear infinite", marginBottom: 10 }} />
+                  <p style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500, margin: 0 }}>Claude is analysing the markets…</p>
+                </div>
               ) : (
                 <>
-                  <div style={{ width: 56, height: 56, borderRadius: 16, background: "var(--bg-elevated)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, marginBottom: 16 }}>⚡</div>
-                  <p style={{ fontSize: 14, fontWeight: 500, color: "var(--text-1)" }}>No analysis yet</p>
-                  <p style={{ fontSize: 12, color: "var(--text-3)", marginTop: 4, marginBottom: 20 }}>Tap Run Analysis to score today's market with Claude AI</p>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                    <span style={{ fontSize: 14 }}>⚡</span>
+                    <p style={{ fontSize: 13, fontWeight: 500, color: "var(--text-1)", margin: 0 }}>Ready to score the {session ? `${session.toLowerCase()} session` : "market"}</p>
+                  </div>
+                  <p style={{ fontSize: 11, color: "var(--text-3)", margin: 0, lineHeight: 1.4 }}>
+                    Rank all 10 currencies, build the 9-pair matrix and surface today's setups.
+                  </p>
+                </div>
                   <button onClick={() => runAnalysis(false)}
                     style={{ padding: "10px 22px", borderRadius: 10, border: "none", background: "var(--green)", color: "#000", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                     ⚡ Run Analysis
@@ -730,11 +1041,16 @@ export default function Dashboard() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
                 {openTrades.map(trade => (
                   <div key={trade.id} className="card" style={{ padding: "14px 16px" }}>
-                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 10 }}>
-                      <div>
-                        <p className="font-mono" style={{ fontSize: 15, fontWeight: 600, margin: "0 0 2px" }}>{trade.pair}</p>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2, flexWrap: "wrap" }}>
+                          <p className="font-mono" style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>{trade.pair}</p>
+                          {trade.source && <SourceChip source={trade.source} compact />}
+                        </div>
                         <p style={{ fontSize: 11, margin: 0, color: trade.direction === "Short" ? "var(--red)" : "var(--green)", fontWeight: 500 }}>
-                          {trade.direction} · Model {trade.model} · {trade.session}
+                          {trade.direction}
+                          {trade.model ? ` · Model ${trade.model}` : ""}
+                          {trade.session ? ` · ${trade.session}` : ""}
                         </p>
                       </div>
                       <AlignBadge status={trade.alignmentStatus} />
@@ -754,13 +1070,37 @@ export default function Dashboard() {
                     </div>
 
                     <div style={{ display: "flex", alignItems: "center", gap: 6, paddingTop: 8, borderTop: "1px solid var(--border-subtle)" }}>
-                      <span className="font-mono" style={{ fontSize: 11, color: "var(--green)" }}>{trade.strongCcy}</span>
-                      <span style={{ fontSize: 10, color: "var(--text-3)" }}>vs</span>
-                      <span className="font-mono" style={{ fontSize: 11, color: "var(--red)" }}>{trade.weakCcy}</span>
+                      {trade.strongCcy && (
+                        <>
+                          <span className="font-mono" style={{ fontSize: 11, color: "var(--green)" }}>{trade.strongCcy}</span>
+                          <span style={{ fontSize: 10, color: "var(--text-3)" }}>vs</span>
+                          <span className="font-mono" style={{ fontSize: 11, color: "var(--red)" }}>{trade.weakCcy}</span>
+                        </>
+                      )}
                       {trade.divScore && (
                         <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-3)" }}>div {trade.divScore.toFixed(1)}</span>
                       )}
                     </div>
+
+                    {/* Risk + dollar amount + lot size + live P&L from MT4 */}
+                    {(() => {
+                      const account = accountList.find((a: any) => a.id === trade.accountId);
+                      return (
+                        <div style={{ marginTop: 8 }}>
+                          <RiskLine
+                            riskPercent={trade.riskPercent}
+                            accountBalance={account?.currentBalance ?? null}
+                            accountCcy={account?.currency ?? 'USD'}
+                            lotSize={trade.lotSize ?? null}
+                            profitCcy={trade.profitCcy ?? null}
+                            outcome="Open"
+                          />
+                          {account && (
+                            <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 2 }}>{account.name}</div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {(trade.alignmentStatus === "Amber" || trade.alignmentStatus === "Red") && (
                       <p style={{
@@ -772,6 +1112,9 @@ export default function Dashboard() {
                         {trade.alignmentReason}
                       </p>
                     )}
+
+                    {/* News-collision badge — upcoming high-impact events on this trade's currencies */}
+                    <NewsCollisionBadge events={trade.newsCollisions as any} />
                   </div>
                 ))}
               </div>

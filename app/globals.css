@@ -112,3 +112,167 @@ textarea { resize: vertical; }
 .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.75s linear infinite; }
+
+/* ── Login page input — slightly larger and with focus glow ── */
+.login-input {
+  font-family: 'DM Mono', monospace;
+  background: var(--bg-card-2);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.login-input::placeholder { color: var(--text-3); }
+.login-input:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(0, 212, 138, 0.12);
+}
+/* Kill Chrome's autofill paint so inputs stay dark when the browser fills them */
+.login-input:-webkit-autofill,
+.login-input:-webkit-autofill:hover,
+.login-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text-1);
+  -webkit-box-shadow: 0 0 0 1000px var(--bg-card-2) inset;
+  caret-color: var(--text-1);
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+/* ── Login background animations: scrolling chart + ticker tape ── */
+@keyframes chart-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+.chart-drift {
+  animation: chart-drift 90s linear infinite;
+  will-change: transform;
+}
+
+@keyframes ticker-scroll {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+.ticker-scroll {
+  animation: ticker-scroll 80s linear infinite;
+  will-change: transform;
+  display: inline-flex;
+}
+
+@keyframes price-flicker {
+  0%, 90%, 100% { opacity: 1; }
+  92%           { opacity: 0.55; }
+  94%           { opacity: 1; }
+}
+.price-flicker { animation: price-flicker 6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-drift, .ticker-scroll, .price-flicker, .pulse-dot { animation: none; }
+}
+
+/* ── Dashboard responsive grids ─────────────────────────────────────────── */
+/* Status row at top of dashboard: 1 col on mobile, fluid grid on tablet+,
+   five tiles in a row on full desktop. */
+.dash-status {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+@media (max-width: 1100px) {
+  .dash-status { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 720px) {
+  .dash-status { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Risk row (Daily R + Next event + Macros) collapses cleanly */
+.dash-risk-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+@media (max-width: 900px) {
+  .dash-risk-row { grid-template-columns: 1fr; }
+}
+
+/* Main grid: 320px sidebar on desktop, single column on tablet/mobile */
+.dash-main {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 16px;
+}
+@media (max-width: 1100px) {
+  .dash-main { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Page header collapses gracefully */
+.dash-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.dash-header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Generic compact tile used by the status row */
+.dash-stat {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-width: 0;
+}
+.dash-stat .lbl {
+  font-size: 10px; color: var(--text-3);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  margin: 0 0 4px;
+}
+.dash-stat .val {
+  font-family: 'DM Mono', monospace;
+  font-size: 18px; font-weight: 600;
+  color: var(--text-1);
+  margin: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dash-stat .sub {
+  font-size: 11px; color: var(--text-3);
+  margin: 2px 0 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dash-stat.danger { border-color: var(--red-border); }
+.dash-stat.danger .val, .dash-stat.danger .sub { color: var(--red); }
+
+/* Main content area — sits to the right of the sidebar on desktop,
+   full-width on mobile (sidebar becomes a slide-in drawer). */
+.app-main {
+  margin-left: 200px;
+  padding: 28px 24px 60px;
+  max-width: 1280px;
+}
+@media (max-width: 900px) {
+  .app-main { margin-left: 0; padding: 16px 16px 60px; }
+}
+
+/* Account tiles — adaptive:
+     1 tile  → full width
+     2-3     → flex evenly across the row
+     4+      → fixed 280px each, horizontal scroll
+   Achieved with `flex: 1 1 0` + `min-width: 280px`. As soon as 4 × 280px
+   exceeds the container, overflow-x kicks in and scroll-snap aligns to tiles. */
+.account-tile-grid {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding-bottom: 4px;
+}
+.account-tile-grid > * {
+  flex: 1 1 0;
+  min-width: 280px;
+  scroll-snap-align: start;
+}
+@media (max-width: 720px) {
+  .account-tile-grid > * { min-width: 85%; }
+}

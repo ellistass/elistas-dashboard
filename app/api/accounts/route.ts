@@ -8,11 +8,18 @@ import { db } from "@/lib/db";
 // ── GET — list all accounts with computed P&L ─────────────────────────────────
 export async function GET() {
   try {
+    // Compute "today" boundary once so per-account today stats are consistent
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
     const accounts = await db.account.findMany({
       orderBy: { createdAt: "desc" },
       include: {
         trades: {
-          select: { outcome: true, resultR: true, riskPercent: true },
+          select: {
+            outcome: true, resultR: true, riskPercent: true,
+            profitCcy: true, date: true, direction: true, pair: true,
+          },
         },
       },
     });
@@ -23,6 +30,11 @@ export async function GET() {
       const totalR = closed.reduce((s, t) => s + (t.resultR ?? 0), 0);
       const wins   = closed.filter((t) => t.outcome === "Win").length;
       const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+
+      // Today's stats — closed today
+      const closedToday = closed.filter((t) => new Date(t.date as any) >= todayStart);
+      const todayR = closedToday.reduce((s, t) => s + (t.resultR ?? 0), 0);
+      const todayPnLDollars = closedToday.reduce((s, t) => s + (t.profitCcy ?? 0), 0);
 
       // Computed P&L from trades (using avg risk% × starting balance × R)
       const avgRiskPct = acc.trades.length > 0
@@ -35,6 +47,22 @@ export async function GET() {
       const drawdownUsedPct = acc.currentDrawdownPct;
       const drawdownRemaining = acc.maxDrawdownPct - drawdownUsedPct;
       const drawdownDanger = drawdownRemaining <= acc.maxDrawdownPct * 0.3; // < 30% left
+
+      // Daily DD: how much of the daily-loss limit is used today (in $)
+      const dailyDdLimitDollars = (acc.dailyDrawdownLimitPct / 100) * acc.startingBalance;
+      const dailyDdUsedDollars = todayPnLDollars < 0 ? Math.abs(todayPnLDollars) : 0;
+      const dailyDdPctOfLimit = dailyDdLimitDollars > 0
+        ? Math.min(1, dailyDdUsedDollars / dailyDdLimitDollars)
+        : 0;
+
+      // Profit target progress (only meaningful for Phase1/Phase2 challenges)
+      const profitTargetDollars = acc.profitTarget != null
+        ? (acc.profitTarget / 100) * acc.startingBalance
+        : null;
+      const profitFromStart = (acc.currentEquity ?? acc.currentBalance) - acc.startingBalance;
+      const profitTargetPct = profitTargetDollars && profitTargetDollars > 0
+        ? Math.max(0, Math.min(1, profitFromStart / profitTargetDollars))
+        : null;
 
       return {
         ...acc,
@@ -50,6 +78,21 @@ export async function GET() {
           pnl: Math.round((acc.currentBalance - acc.startingBalance) * 100) / 100,
           drawdownRemaining: Math.round(drawdownRemaining * 100) / 100,
           drawdownDanger,
+          // Today's slice — drives the per-account tile
+          todayR: Math.round(todayR * 100) / 100,
+          todayPnLDollars: Math.round(todayPnLDollars * 100) / 100,
+          closedToday: closedToday.length,
+          // Daily DD progress (red zones if approaching the firm's limit)
+          dailyDdLimitDollars: Math.round(dailyDdLimitDollars * 100) / 100,
+          dailyDdUsedDollars: Math.round(dailyDdUsedDollars * 100) / 100,
+          dailyDdPctOfLimit,
+          // Profit target progress (null = no target set, e.g. live retail accounts)
+          profitTargetDollars: profitTargetDollars != null ? Math.round(profitTargetDollars * 100) / 100 : null,
+          profitFromStart: Math.round(profitFromStart * 100) / 100,
+          profitTargetPct,
+          // Direction of open positions (first one — handy for the inline summary)
+          firstOpenPair: open[0]?.pair ?? null,
+          firstOpenDirection: open[0]?.direction ?? null,
         },
       };
     });

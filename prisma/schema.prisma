@@ -27,6 +27,12 @@ model Account {
   payoutStatus            String    @default("None")      // "None" | "Requested" | "Paid"
   notes                   String?
   isActive                Boolean   @default(true)
+  // MT4 auto-logging integration
+  mt4AccountNumber        Int?      @unique               // broker-assigned MT4 login number (e.g. 1234567)
+  mt4Server               String?                         // MT4 server name (e.g. "FTMO-Server2")
+  apiKey                  String?   @unique               // bearer token the EA sends on every request
+  lastSyncedAt            DateTime?                       // last time the EA POSTed anything for this account
+  currentEquity           Float?                          // live equity from MT4 (balance + floating P&L); MT4 EA writes this on every trade event
   trades                  Trade[]
 }
 
@@ -62,6 +68,20 @@ model Trade {
   accountId          String?          // foreign key to Account (nullable for existing trades)
   account            Account?         @relation(fields: [accountId], references: [id], onDelete: SetNull)
   alignments         TradeAlignment[]
+  // MT4 auto-logging + idea provenance
+  ticket             Int?             // MT4 broker ticket number — unique within an account
+  source             String           @default("manual")  // "manual" | "mt4" | "mt4-catchup" | "claude-idea" | "user-discretionary"
+  ideaId             String?          // FK back to IdeaOutcome — set when trade was opened from an idea card
+  lotSize            Float?           // MT4 contract size (e.g. 0.10)
+  commission         Float?           // broker commission in account currency
+  swap               Float?           // overnight swap charges
+  profitCcy          Float?           // raw P&L in account currency from MT4
+  openTimeUtc        DateTime?        // broker-stamped open time (UTC)
+  closeTimeUtc       DateTime?        // broker-stamped close time (UTC)
+  ruleViolations     String[]         // computed flags: ["after-7pm-wat", "within-30min-ny-open", "no-model", "sub-1to2-rr", "c-grade-full-risk"]
+  behaviorFlags      String[]         // computed flags: ["overtrading", "revenge", "sizing-drift"]
+  @@unique([accountId, ticket])
+  @@index([source, date])
 }
 
 model DailyAlert {
@@ -167,4 +187,87 @@ model TradeAlignment {
   trade            Trade    @relation(fields: [tradeId], references: [id], onDelete: Cascade)
 
   @@index([tradeId, checkedAt])
+}
+
+// ScoringRequest — queue of "please score now" requests from the dashboard.
+// The Claude Desktop routine polls this on each fire; if pending, scores; if not, exits cheaply.
+// Routes that consume the queue mark it completed so the same request isn't picked up twice.
+model ScoringRequest {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  reason      String?                                // why this was requested (e.g. "manual", "api-failed")
+  requestedBy String                                 // userId or "system"
+  status      String    @default("pending")          // "pending" | "running" | "completed" | "expired"
+  completedAt DateTime?
+
+  @@index([status, createdAt])
+}
+
+// News-collision warning — tracks Telegram alerts sent for open-trade × upcoming-event
+// combinations so we don't spam the same event twice. One row per (tradeId, eventKey).
+model NewsWarning {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  tradeId   String
+  eventKey  String   // hash of "title|country|date" — uniquely identifies a calendar event
+  eventAt   DateTime
+  currency  String   // which side of the trade the event hits ("strong" or "weak")
+  impact    String   // "High" | "Medium"
+
+  @@unique([tradeId, eventKey])
+  @@index([eventAt])
+}
+
+// Single-user auth — credentials provider via NextAuth
+model User {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+  email        String   @unique
+  passwordHash String                                       // bcrypt hash, never the plaintext
+  name         String?
+  lastLoginAt  DateTime?
+}
+
+// IdeaOutcome — every surfaced idea (from Claude OR from the user's own log) gets a row.
+// Daily cron evaluates each one's outcome from next-day price action. Drives the
+// algorithm scoreboard: directional accuracy, grade hit rates, invalidation accuracy.
+model IdeaOutcome {
+  id            String    @id @default(cuid())
+  createdAt     DateTime  @default(now())
+  alertDate     DateTime                                    // the DailyAlert.date this idea belonged to
+  pair          String                                      // "GBP/USD"
+  direction     String                                      // "Long" | "Short"
+  grade         String                                      // "A+" | "B" | "C" | "Skip"
+  strong        String                                      // ranked-strongest currency at time of idea
+  weak          String                                      // ranked-weakest currency at time of idea
+  divergence    Float                                       // divergence score (or user-perceived strength)
+
+  // ── Source: where the idea came from ──────────────────────────────────────
+  source        String    @default("claude")                // "claude" | "user-discretionary"
+  priorityRank  Int?                                        // Claude ideas: rank within the day (1=top); user ideas: null
+  // Fields populated when source = "user-discretionary"
+  userModel     String?                                     // "A" (Wyckoff) | "B" (liquidity run)
+  userReason    String?                                     // one-sentence rationale
+  userSession   String?                                     // "London" | "New York" | "Tokyo" | "Pre-NY"
+
+  // ── User action: clear three-way outcome on every idea ───────────────────
+  userAction          String   @default("none")             // "taken" | "watched" | "invalidated" | "none"
+  actedAt             DateTime?                             // when the user took/watched/invalidated
+  invalidationReason  String?                               // free text + preset reasons
+  takenByUser         Boolean  @default(false)              // shorthand for userAction == "taken" (kept for backwards compat)
+  tradeId             String?                               // link to the Trade if taken
+
+  // ── Outcome: computed by daily cron from next-day price ──────────────────
+  evaluatedAt     DateTime?
+  outcome         String?                                   // "Win" | "Loss" | "Neutral" | "Pending"
+  priceMoveR      Float?                                    // R-multiple the idea would have produced (using ATR-derived SL)
+  pipMove         Float?                                    // signed pip move from idea direction (positive = idea correct)
+  actualDirection String?                                   // "up" | "down" | "flat" — raw next-day direction regardless of idea
+  closePrice      Float?                                    // next-day close price for transparency
+  notes           String?
+
+  @@unique([alertDate, pair, direction, source])
+  @@index([alertDate])
+  @@index([outcome])
+  @@index([source, userAction])
 }

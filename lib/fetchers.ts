@@ -22,8 +22,24 @@ export interface CentralBankRate {
   bankName: string
   currentRate: number
   previousRate: number | null
-  source: 'live' | 'config'
+  source: 'live' | 'scraped' | 'config'
   lastUpdated: string
+  // Optional richer macro data — populated when scraped from TE matrix
+  gdp?: number
+  gdpGrowth?: number
+  inflationRate?: number
+  joblessRate?: number
+  govBudget?: number
+  debtToGdp?: number
+  currentAccount?: number
+}
+
+// S&P 500 sector — populated by the new barchart-sync sectors scraper
+export interface SectorRow {
+  sector: string
+  symbol?: string
+  percentChange: number
+  fetchedAt?: string
 }
 
 export interface BarchartRow {
@@ -54,6 +70,7 @@ export interface BarchartMarketData {
     }
     surprises: { bullish: BarchartRow[]; bearish: BarchartRow[] }
   }
+  sectors?: SectorRow[]   // S&P 500 sector map (new in May 2026)
   fetchedAt: string
 }
 
@@ -65,6 +82,7 @@ export interface FetchResult {
   // Extended shape — extra context for the AI
   centralBankRates: CentralBankRate[]
   barchart: BarchartMarketData | null
+  sectors: SectorRow[]                 // S&P sector map for risk-on/off context
   fetchedAt: Date
   errors: string[]
 }
@@ -140,6 +158,7 @@ export async function fetchAllMarketData(): Promise<FetchResult> {
   let calEvents: CalendarEvent[] = []
   let centralBankRates: CentralBankRate[] = []
   let barchart: BarchartMarketData | null = null
+  let sectors: SectorRow[] = []
 
   // ── 1. Barchart snapshot ────────────────────────────────────────────────
   try {
@@ -163,6 +182,9 @@ export async function fetchAllMarketData(): Promise<FetchResult> {
         ...barchart.forex.surprises.bearish,
       ]
       stddevMap = buildStddevMap(allForexSurp)
+
+      // Sectors live inside the same snapshot — extract for direct use
+      sectors = Array.isArray(barchart.sectors) ? barchart.sectors : []
     } else {
       errors.push('No Barchart snapshot found in DB — Railway sync may not have run yet')
     }
@@ -213,6 +235,7 @@ export async function fetchAllMarketData(): Promise<FetchResult> {
     calEvents,
     centralBankRates,
     barchart,
+    sectors,
     fetchedAt: new Date(),
     errors,
   }

@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     let scoringInput: Parameters<typeof scoreWithClaude>[0];
 
     if (mode === "auto") {
-      const { perfMap, stddevMap, calEvents, centralBankRates, barchart, errors } = await fetchAllMarketData();
+      const { perfMap, stddevMap, calEvents, centralBankRates, barchart, sectors, errors } = await fetchAllMarketData();
       fetchErrors = errors;
 
       if (Object.keys(perfMap).length === 0 && calEvents.length === 0) {
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
         select: { pair: true, direction: true, strongCcy: true, weakCcy: true, entryPrice: true, slPrice: true, tpPrice: true, grade: true, session: true, divScore: true, date: true },
       });
       const openTrades = openTradesRaw.map(t => ({ ...t, date: t.date.toISOString().split("T")[0] }));
-      scoringInput = { mode: "auto", perfMap, stddevMap, calendarEvents: calEvents, centralBankRates, barchart, openTrades };
+      scoringInput = { mode: "auto", perfMap, stddevMap, calendarEvents: calEvents, centralBankRates, barchart, sectors, openTrades };
       }
     } else {
       scoringInput = { mode: "manual", calendar, perf, stddev, futures };
@@ -93,6 +93,48 @@ export async function POST(req: NextRequest) {
         sentAt: sendAlert ? new Date() : undefined,
       },
     });
+
+    // ── Create / refresh IdeaOutcome rows for each surfaced idea ────────────
+    // Done immediately on score so the dashboard can let the user Take / Watch /
+    // Invalidate during the trading day. The evening cron later fills in outcome.
+    try {
+      const ideas = ((result as any).ideas as any[] | undefined) ?? (result.priority1 ? [result.priority1] : []);
+      for (let i = 0; i < ideas.length; i++) {
+        const idea = ideas[i];
+        if (!idea?.pair || !idea?.direction) continue;
+        await (db as any).ideaOutcome.upsert({
+          where: {
+            alertDate_pair_direction_source: {
+              alertDate: today, pair: idea.pair, direction: idea.direction, source: 'claude',
+            },
+          },
+          create: {
+            alertDate: today,
+            pair: idea.pair,
+            direction: idea.direction,
+            grade: idea.grade ?? 'C',
+            strong: idea.strong ?? '',
+            weak: idea.weak ?? '',
+            divergence: idea.divergence ?? 0,
+            source: 'claude',
+            priorityRank: i + 1,
+            userAction: 'none',
+            outcome: 'Pending',
+          },
+          update: {
+            // Don't clobber userAction if the user already took/watched/invalidated
+            grade: idea.grade ?? 'C',
+            strong: idea.strong ?? '',
+            weak: idea.weak ?? '',
+            divergence: idea.divergence ?? 0,
+            priorityRank: i + 1,
+          },
+        });
+      }
+    } catch (error: any) {
+      console.error("IdeaOutcome upsert warning:", error?.message ?? error);
+      // Non-fatal: dashboard still works without these rows, just no scoreboard data
+    }
 
     // Snapshot persistence is useful for alignment checks, but a transient
     // pooler issue should not block scoring itself.
