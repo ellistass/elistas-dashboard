@@ -5,24 +5,8 @@
       "schedule": "15 7 * * 1-5"
     },
     {
-      "path": "/api/cron?job=session",
-      "schedule": "15 14 * * 1-5"
-    },
-    {
-      "path": "/api/cron?job=session",
-      "schedule": "15 22 * * 0"
-    },
-    {
-      "path": "/api/cron?job=alignment",
-      "schedule": "15 9-17 * * 1-5"
-    },
-    {
       "path": "/api/cron/idea-outcomes",
       "schedule": "0 21 * * 1-5"
-    },
-    {
-      "path": "/api/cron/news-warning",
-      "schedule": "*/15 6-21 * * 1-5"
     }
   ]
 }
