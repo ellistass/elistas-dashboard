@@ -159,11 +159,25 @@ function GradePill({ grade }: { grade: string }) {
   );
 }
 
-function ScoreNum({ score }: { score: number }) {
-  const color = score > 0 ? "var(--green)" : score < 0 ? "var(--red)" : "var(--text-3)";
+// Safe number formatters — return "—" for undefined/null/NaN so a missing
+// numeric field in a scoring payload doesn't crash the whole page render.
+// LLM outputs can be patchy; render code stays defensive.
+function fmt(n: unknown, digits = 1): string {
+  return typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "—";
+}
+function fmtSigned(n: unknown, digits = 1): string {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  return (n > 0 ? "+" : "") + n.toFixed(digits);
+}
+
+function ScoreNum({ score }: { score: number | null | undefined }) {
+  const valid = typeof score === "number" && Number.isFinite(score);
+  const color = !valid
+    ? "var(--text-3)"
+    : score! > 0 ? "var(--green)" : score! < 0 ? "var(--red)" : "var(--text-3)";
   return (
     <span className="font-mono" style={{ fontSize: 12, fontWeight: 500, color }}>
-      {score > 0 ? "+" : ""}{score.toFixed(1)}
+      {fmtSigned(score, 1)}
     </span>
   );
 }
@@ -557,24 +571,24 @@ export default function Dashboard() {
               {
                 label: "Top currency",
                 value: scores?.top3?.[0]?.cur ?? "—",
-                sub: scores?.top3?.[0] ? `+${scores.top3[0].score.toFixed(1)}` : "no score",
+                sub: scores?.top3?.[0] ? fmtSigned(scores.top3[0].score, 1) : "no score",
                 danger: false,
               },
               {
                 label: "Weak currency",
                 value: scores?.bottom3?.[0]?.cur ?? "—",
-                sub: scores?.bottom3?.[0] ? `${scores.bottom3[0].score.toFixed(1)}` : "no score",
+                sub: scores?.bottom3?.[0] ? fmt(scores.bottom3[0].score, 1) : "no score",
                 danger: false,
               },
               {
                 label: "Priority setup",
                 value: scores?.priority1?.pair ?? "—",
-                sub: scores?.priority1 ? `${scores.priority1.grade} · div ${scores.priority1.divergence.toFixed(1)}` : "no setup",
+                sub: scores?.priority1 ? `${scores.priority1.grade} · div ${fmt(scores.priority1.divergence, 1)}` : "no setup",
                 danger: false,
               },
               {
                 label: "Daily R",
-                value: dailyR ? `${dailyR.todayR > 0 ? "+" : ""}${dailyR.todayR.toFixed(2)}R` : "0.00R",
+                value: dailyR ? `${fmtSigned(dailyR.todayR, 2)}R` : "0.00R",
                 sub: dailyR?.state === "stop" ? "STOP — cutoff hit" : dailyR?.state === "caution" ? "near cutoff" : `${dailyR?.closedToday ?? 0} closed today`,
                 danger: dailyR?.state !== "safe" && dailyR?.state !== undefined,
               },
@@ -781,7 +795,7 @@ export default function Dashboard() {
                         fontSize: 11, fontWeight: 500, textAlign: "right",
                         color: pos ? "var(--green)" : "var(--red)",
                       }}>
-                        {pos ? "+" : ""}{s.percentChange.toFixed(2)}%
+                        {fmtSigned(s.percentChange, 2)}%
                       </span>
                     </div>
                   );
@@ -815,7 +829,7 @@ export default function Dashboard() {
                     <div key={r.currency} style={{ minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
                         <span className="font-mono" style={{ fontSize: 11, color: "var(--text-2)", flexShrink: 0 }} title={r.bankName}>{r.currency}</span>
-                        <span className="font-mono" style={{ fontSize: 12, fontWeight: 500, color: "var(--text-1)" }}>{r.currentRate.toFixed(2)}%</span>
+                        <span className="font-mono" style={{ fontSize: 12, fontWeight: 500, color: "var(--text-1)" }}>{fmt(r.currentRate, 2)}%</span>
                       </div>
                       {hasMacro && (
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 8px", fontSize: 9, color: "var(--text-3)", marginTop: 1 }}>
@@ -824,7 +838,7 @@ export default function Dashboard() {
                             GDP {r.gdpGrowth > 0 ? "+" : ""}{r.gdpGrowth}%
                           </span>}
                           {realRate != null && <span title="Real rate = nominal − CPI">
-                            real {realRate > 0 ? "+" : ""}{realRate.toFixed(2)}%
+                            real {fmtSigned(realRate, 2)}%
                           </span>}
                         </div>
                       )}
@@ -947,7 +961,7 @@ export default function Dashboard() {
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <p className="font-mono" style={{ fontSize: 36, fontWeight: 600, color: "var(--green)", lineHeight: 1, margin: 0 }}>
-                        {scores.priority1.divergence.toFixed(1)}
+                        {fmt(scores.priority1.divergence, 1)}
                       </p>
                       <p style={{ fontSize: 10, color: "var(--text-3)", marginTop: 4, letterSpacing: "0.1em" }}>DIVERGENCE</p>
                     </div>
@@ -983,7 +997,7 @@ export default function Dashboard() {
                           <th key={w.cur} style={{ padding: "10px 16px", textAlign: "center" }}>
                             <span className="font-mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--red)" }}>{w.cur}</span>
                             <br />
-                            <span style={{ fontSize: 10, color: "var(--text-3)" }}>{w.score.toFixed(1)}</span>
+                            <span style={{ fontSize: 10, color: "var(--text-3)" }}>{fmt(w.score, 1)}</span>
                           </th>
                         ))}
                       </tr>
@@ -994,7 +1008,7 @@ export default function Dashboard() {
                           <td style={{ padding: "12px 18px" }}>
                             <span className="font-mono" style={{ fontSize: 13, fontWeight: 600, color: "var(--green)" }}>{s.cur}</span>
                             <br />
-                            <span style={{ fontSize: 10, color: "var(--text-3)" }}>{s.score.toFixed(1)}</span>
+                            <span style={{ fontSize: 10, color: "var(--text-3)" }}>{fmt(s.score, 1)}</span>
                           </td>
                           {scores.bottom3.map(w => {
                             const p = scores.pairs9.find(x => x.strong === s.cur && x.weak === w.cur);
@@ -1010,7 +1024,7 @@ export default function Dashboard() {
                                 </p>
                                 <GradePill grade={p.grade} />
                                 <p style={{ fontSize: 10, color: "var(--text-3)", margin: "4px 0 0" }}>
-                                  {p.direction} · {p.divergence.toFixed(1)}
+                                  {p.direction} · {fmt(p.divergence, 1)}
                                 </p>
                               </td>
                             );
@@ -1080,7 +1094,7 @@ export default function Dashboard() {
                         </>
                       )}
                       {trade.divScore && (
-                        <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-3)" }}>div {trade.divScore.toFixed(1)}</span>
+                        <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-3)" }}>div {fmt(trade.divScore, 1)}</span>
                       )}
                     </div>
 
