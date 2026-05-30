@@ -1,0 +1,31 @@
+name: Production build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://user:password@localhost:5432/elistas?schema=public
+      DIRECT_URL: postgresql://user:password@localhost:5432/elistas?schema=public
+      NEXTAUTH_SECRET: ci-nextauth-secret-with-at-least-thirty-two-characters
+      NEXTAUTH_URL: https://elistas-dashboard.vercel.app
+      NEXT_PUBLIC_APP_URL: https://elistas-dashboard.vercel.app
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-supabase-anon-key
+      SUPABASE_SERVICE_KEY: ci-supabase-service-key
+      CRON_SECRET: ci-cron-secret-with-at-least-thirty-two-characters
+      ROUTINE_SECRET: ci-routine-secret-with-at-least-thirty-two-characters
+      ANTHROPIC_API_KEY: ci-anthropic-api-key
+      MCP_PUBLIC_SECRET: ci-mcp-secret-with-at-least-thirty-two-characters
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
