@@ -77,7 +77,9 @@ async function gated(
   ctx: { params: { secret: string; transport: string } },
 ): Promise<Response> {
   const expected = process.env.MCP_PUBLIC_SECRET
-  if (!expected || ctx.params.secret !== expected) {
+  const pathSecret = req.nextUrl.pathname.split('/')[3]
+  const provided = pathSecret ?? ctx.params?.secret
+  if (!expected || provided !== expected) {
     return new Response('Not found', { status: 404 })
   }
   // @vercel/mcp-adapter expects (req) and reads transport from the URL itself.
