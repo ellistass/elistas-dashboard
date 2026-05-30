@@ -1,29 +1,32 @@
 'use client'
 // app/_components/RoutineSetupCard.tsx
-// Collapsible card that gives the user everything they need to wire a
-// Claude Desktop Routine into their Elistas dashboard:
-//   • the ROUTINE_SECRET (reveal + copy)
+// Collapsible card with everything needed to wire a claude.ai Project Routine
+// to the Elistas dashboard via the MCP connector:
+//   • the MCP connector URL (reveal + copy — treat like a password)
 //   • the pre-filled routine prompt (one-click copy)
 //   • the 6× daily schedule string
 //   • the "Desktop must be on" disclosure
+//
+// Pre-requisite: register the URL once in claude.ai → Settings → Connectors,
+// then toggle it on inside the trading Project.
 
 import { useEffect, useState } from 'react'
 
 interface RoutineConfig {
-  promptDataUrl: string
-  saveUrl: string
-  secret: string
+  mcpUrl: string | null
+  mcpConfigured: boolean
   routinePrompt: string
   triggerPrompt: string
   schedules: { wat: string[]; utcCron: string[]; humanReadable: string }
+  setup: { step1: string; step2: string; step3: string }
 }
 
 export function RoutineSetupCard() {
   const [open, setOpen] = useState(false)
   const [cfg, setCfg] = useState<RoutineConfig | null>(null)
-  const [revealSecret, setRevealSecret] = useState(false)
+  const [revealUrl, setRevealUrl] = useState(false)
   const [copiedPrompt, setCopiedPrompt] = useState<'routine' | 'trigger' | null>(null)
-  const [copiedSecret, setCopiedSecret] = useState(false)
+  const [copiedUrl, setCopiedUrl] = useState(false)
   const [loading, setLoading] = useState(false)
   const [mode, setMode] = useState<'routine' | 'trigger'>('routine')
 
@@ -46,13 +49,18 @@ export function RoutineSetupCard() {
       setTimeout(() => setCopiedPrompt(null), 1500)
     } catch {}
   }
-  async function copySecret() {
-    if (!cfg) return
+  async function copyUrl() {
+    if (!cfg?.mcpUrl) return
     try {
-      await navigator.clipboard.writeText(cfg.secret)
-      setCopiedSecret(true)
-      setTimeout(() => setCopiedSecret(false), 1500)
+      await navigator.clipboard.writeText(cfg.mcpUrl)
+      setCopiedUrl(true)
+      setTimeout(() => setCopiedUrl(false), 1500)
     } catch {}
+  }
+
+  function maskedUrl(url: string): string {
+    // mask the secret segment: /api/mcp/<long-secret>/mcp → /api/mcp/••••/mcp
+    return url.replace(/\/api\/mcp\/[^/]+\//, '/api/mcp/••••••••/')
   }
 
   return (
@@ -77,15 +85,38 @@ export function RoutineSetupCard() {
           {loading && <div style={{ color: 'var(--text-3)' }}>Loading config…</div>}
           {!loading && cfg && (
             <>
-              {/* Project requirement — must be set up first */}
+              {/* Step 1 — register the MCP connector on claude.ai */}
               <div style={{
                 marginBottom: 12, padding: '10px 12px',
                 background: 'var(--blue-dim)', border: '1px solid var(--blue-border)',
                 borderRadius: 6, fontSize: 11, color: 'var(--text-2)', lineHeight: 1.5,
               }}>
-                <p style={{ margin: '0 0 4px', color: 'var(--blue)', fontWeight: 500 }}>1️⃣ Run inside your trading project on claude.ai</p>
-                Open <span className="font-mono">claude.ai</span> → your <strong>trading project</strong> (the regular chat one, NOT Cowork) — the one with <span className="font-mono">strategy.md</span> and <span className="font-mono">prompt.md</span> in Project Knowledge.
-                Create the routine inside that project so it inherits your RFDM context automatically. The routine prompt below stays short because the rules already live in your project knowledge.
+                <p style={{ margin: '0 0 4px', color: 'var(--blue)', fontWeight: 500 }}>1️⃣ Register the connector on claude.ai</p>
+                Open <span className="font-mono">claude.ai</span> → <strong>Settings → Connectors → Add custom connector</strong>. Paste the URL below.
+                Then open your <strong>trading project</strong> (with <span className="font-mono">strategy.md</span> + <span className="font-mono">prompt.md</span> in Project Knowledge) and toggle <strong>Elistas RFDM</strong> on.
+                Once enabled, every chat and routine inside the project can call <span className="font-mono">get_scoring_data</span> and <span className="font-mono">save_scoring_result</span> directly — no URLs or tokens in the prompt.
+              </div>
+
+              {/* MCP URL reveal */}
+              <div style={{ marginBottom: 12 }}>
+                <p style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 4px' }}>MCP connector URL · treat like a password</p>
+                {!cfg.mcpConfigured || !cfg.mcpUrl ? (
+                  <div style={{ padding: '6px 10px', background: 'var(--amber-dim)', border: '1px solid var(--amber-border)', borderRadius: 6, color: 'var(--amber)', fontSize: 11 }}>
+                    MCP_PUBLIC_SECRET is not set in Vercel. Add it (openssl rand -hex 32) and redeploy.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input value={revealUrl ? cfg.mcpUrl : maskedUrl(cfg.mcpUrl)}
+                           readOnly
+                           style={{ flex: 1, minWidth: 0, padding: '6px 8px', fontSize: 11 }} />
+                    <button onClick={() => setRevealUrl((v) => !v)} style={btn('ghost')}>
+                      {revealUrl ? 'Hide' : 'Reveal'}
+                    </button>
+                    <button onClick={copyUrl} style={btn(copiedUrl ? 'success' : 'ghost')}>
+                      {copiedUrl ? '✓' : 'Copy'}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Schedule */}
@@ -95,22 +126,6 @@ export function RoutineSetupCard() {
                 <p style={{ fontSize: 10, color: 'var(--text-3)', margin: '2px 0 0' }}>
                   UTC cron (if Claude Desktop asks): {cfg.schedules.utcCron.join('  ·  ')}
                 </p>
-              </div>
-
-              {/* Secret reveal */}
-              <div style={{ marginBottom: 12 }}>
-                <p style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 4px' }}>Routine secret</p>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input value={revealSecret ? cfg.secret : '•'.repeat(Math.min(24, cfg.secret.length))}
-                         readOnly
-                         style={{ flex: 1, minWidth: 0, padding: '6px 8px', fontSize: 11 }} />
-                  <button onClick={() => setRevealSecret((v) => !v)} style={btn('ghost')}>
-                    {revealSecret ? 'Hide' : 'Reveal'}
-                  </button>
-                  <button onClick={copySecret} style={btn(copiedSecret ? 'success' : 'ghost')}>
-                    {copiedSecret ? '✓' : 'Copy'}
-                  </button>
-                </div>
               </div>
 
               {/* Mode tabs — Routine (scheduled) vs Trigger (paste in chat) */}
@@ -162,7 +177,7 @@ export function RoutineSetupCard() {
               </div>
 
               <div style={{ marginTop: 10, fontSize: 10, color: 'var(--text-3)' }}>
-                Endpoint: <span className="font-mono">{cfg.promptDataUrl}</span> · save: <span className="font-mono">{cfg.saveUrl}</span>
+                Tools exposed via MCP: <span className="font-mono">get_scoring_data</span> · <span className="font-mono">save_scoring_result</span>
               </div>
             </>
           )}

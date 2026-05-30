@@ -639,10 +639,12 @@ export default function Dashboard() {
       )}
 
       {/* ── Main grid (sidebar + main pane, collapses to single col on tablet) ── */}
-      <div className="dash-main">
+      {/* When no scores yet, swap to auto-fit grid so cards reflow instead of
+          leaving the right column empty next to a tall left column. */}
+      <div className={`dash-main${!scores ? " dash-main--empty" : ""}`}>
 
         {/* ── LEFT column ── */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="dash-col">
 
           {/* Currency power ranking */}
           <div className="card" style={{ padding: "16px 18px" }}>
@@ -884,13 +886,13 @@ export default function Dashboard() {
         </div>
 
         {/* ── RIGHT column ── */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="dash-col">
 
           {/* (Trade plan board removed — MultiIdeaHero at the top of the page handles this now) */}
 
           {!scores ? (
-            /* Empty state — compact horizontal hero, ~70px tall */
-            <div className="card" style={{
+            /* Empty state — full-width hero (spans all grid columns in reflow mode) */
+            <div className="card dash-hero-empty" style={{
               padding: scoring ? "24px" : "14px 18px",
               display: scoring ? "flex" : "grid",
               gridTemplateColumns: scoring ? undefined : "1fr auto",

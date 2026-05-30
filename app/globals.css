@@ -206,6 +206,29 @@ textarea { resize: vertical; }
   .dash-main { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* Default column inside .dash-main — vertical stack with gap. Defined as a
+   class (not inline style) so the empty-state override below can win. */
+.dash-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Empty state — no analysis run yet. Reflow into an auto-fit grid so cards
+   distribute across the viewport instead of leaving a tall left column next
+   to an empty right column. Column wrappers use display:contents so their
+   children participate directly in the parent grid. */
+.dash-main--empty {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  align-items: start;
+}
+.dash-main--empty > .dash-col { display: contents; }
+.dash-main--empty .dash-hero-empty { grid-column: 1 / -1; }
+@media (max-width: 1100px) {
+  .dash-main--empty { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Page header collapses gracefully */
 .dash-header {
   display: flex; align-items: center; justify-content: space-between;
