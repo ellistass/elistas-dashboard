@@ -19,6 +19,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { formatTelegramAlertAI } from '@/lib/ai-scoring'
 import { sendTelegramMessage } from '@/lib/telegram'
+import { normalizeRanking } from '@/lib/normalize-ranking'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,6 +45,9 @@ function currentWatSession(): string {
   return 'Off-hours'
 }
 
+// normalizeRanking moved to lib/normalize-ranking.ts (also used by the
+// dashboard route on read).
+
 export async function POST(req: NextRequest) {
   if (!checkAuth(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -55,6 +59,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'result must include top3, bottom3, pairs9' }, { status: 400 })
   }
 
+  // Normalize ranking arrays to the {cur, score, ...} shape the dashboard
+  // expects. Preserves the original strings/objects in fullAnalysis for
+  // audit, but persists the structured form for top3/bottom3.
+  const top3 = normalizeRanking(result.top3, result.scores)
+  const bottom3 = normalizeRanking(result.bottom3, result.scores)
+
   const today = todayUtcStart()
 
   // Save / upsert today's DailyAlert
@@ -62,8 +72,8 @@ export async function POST(req: NextRequest) {
     where: { date: today },
     create: {
       date: today,
-      top3: result.top3,
-      bottom3: result.bottom3,
+      top3,
+      bottom3,
       pairs9: result.pairs9,
       priority1: result.priority1 ?? result.pairs9?.[0] ?? {},
       ideas: result.ideas ?? result.pairs9 ?? null,
@@ -76,8 +86,8 @@ export async function POST(req: NextRequest) {
       sentAt: sendTelegram ? new Date() : null,
     },
     update: {
-      top3: result.top3,
-      bottom3: result.bottom3,
+      top3,
+      bottom3,
       pairs9: result.pairs9,
       priority1: result.priority1 ?? result.pairs9?.[0] ?? {},
       ideas: result.ideas ?? result.pairs9 ?? undefined,

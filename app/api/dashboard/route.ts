@@ -28,6 +28,7 @@ import {
   nextHighImpactEvent,
   pickDxyVix,
 } from "@/lib/dashboard-context";
+import { normalizeRanking } from "@/lib/normalize-ranking";
 
 export async function GET() {
   try {
@@ -38,9 +39,14 @@ export async function GET() {
     let scores: any = null;
     const saved = await db.dailyAlert.findUnique({ where: { date: today } });
     if (saved) {
+      // Defensive normalize on read — handles legacy rows where top3/bottom3
+      // were saved as plain currency-code strings instead of score objects.
+      // Idempotent for new rows that already have the structured shape.
+      const fa: any = (saved as any).fullAnalysis ?? {};
+      const sourceScores = fa.scores ?? fa.allScores ?? [];
       scores = {
-        top3: saved.top3,
-        bottom3: saved.bottom3,
+        top3: normalizeRanking(saved.top3, sourceScores),
+        bottom3: normalizeRanking(saved.bottom3, sourceScores),
         pairs9: saved.pairs9,
         priority1: saved.priority1,
         ideas: (saved as any).ideas ?? null,
