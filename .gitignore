@@ -1,4 +1,5 @@
 .env
+.env.prod
 .env.local
 .next/
 node_modules/

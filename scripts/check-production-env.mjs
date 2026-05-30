@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const files = ['.env', '.env.local']
+const files = ['.env', '.env.prod', '.env.local']
 const externalEnv = new Set(Object.keys(process.env))
 
 for (const file of files) {
@@ -55,6 +55,7 @@ const placeholderPatterns = [
   /\[REGION\]/i,
   /^your-/i,
   /^generate-/i,
+  /^replace-with-/i,
   /placeholder/i,
 ]
 
