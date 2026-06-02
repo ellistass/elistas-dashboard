@@ -46,7 +46,8 @@ model Trade {
   grade              String           // "A+" | "B" | "C"
   session            String           // "London" | "New York" | "Tokyo"
   entryPrice         Float
-  slPrice            Float
+  slPrice            Float            // current SL — updated by EA modify events (BE moves, trailing). Do NOT use for R math.
+  initialSlPrice     Float?           // SL at the moment of fill — never modified. Source of truth for R calc.
   tpPrice            Float
   closePrice         Float?
   riskPercent        Float            @default(1.0)

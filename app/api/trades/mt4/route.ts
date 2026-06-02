@@ -133,6 +133,7 @@ export async function POST(req: NextRequest) {
             session: sessionFromUtcHour(openDate.getUTCHours()),
             entryPrice: e.entryPrice,
             slPrice: e.slPrice,
+            initialSlPrice: e.slPrice,    // freeze the original SL so R math survives BE moves / trails
             tpPrice: e.tpPrice,
             lotSize: e.lotSize,
             riskPercent: risk ?? 1.0,
@@ -140,7 +141,8 @@ export async function POST(req: NextRequest) {
             reason: e.comment || 'Auto-logged from MT4 — add reasoning',
           },
           update: {
-            // If catchup arrives after we already have the trade, don't overwrite user-added fields
+            // If catchup arrives after we already have the trade, don't overwrite user-added fields.
+            // Crucially: do NOT touch initialSlPrice here — it must reflect the fill-time SL only.
             slPrice: e.slPrice,
             tpPrice: e.tpPrice,
             lotSize: e.lotSize,
@@ -156,11 +158,16 @@ export async function POST(req: NextRequest) {
           continue
         }
         const closeDate = new Date(e.closeTimeUtc)
+        // R must always be computed from the SL at fill, NOT the current SL.
+        // If the trader moved SL to BE or trailed it, `existing.slPrice` has changed —
+        // using it here would produce nonsense R values (BE-moved trades hit infinity/0).
+        // Fall back to `slPrice` only for legacy rows logged before initialSlPrice existed.
+        const slForR = existing.initialSlPrice ?? existing.slPrice
         const r =
-          existing.entryPrice && existing.slPrice && e.closePrice && existing.direction
+          existing.entryPrice && slForR && e.closePrice && existing.direction
             ? resultR({
                 entryPrice: existing.entryPrice,
-                slPrice: existing.slPrice,
+                slPrice: slForR,
                 closePrice: e.closePrice,
                 direction: existing.direction as 'Long' | 'Short',
                 symbol: existing.instrument || existing.pair,

@@ -91,6 +91,7 @@ export async function POST(req: NextRequest) {
         session: body.session,
         entryPrice: parseFloat(body.entryPrice),
         slPrice: parseFloat(body.slPrice),
+        initialSlPrice: parseFloat(body.initialSlPrice ?? body.slPrice),
         tpPrice: parseFloat(body.tpPrice),
         closePrice: body.closePrice ? parseFloat(body.closePrice) : null,
         riskPercent: parseFloat(body.riskPercent || '1'),
