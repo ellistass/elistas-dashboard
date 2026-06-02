@@ -5,6 +5,7 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { extractCurrencies } from "@/lib/normalize-ranking";
 
 export async function GET(req: NextRequest) {
   try {
@@ -45,8 +46,8 @@ export async function GET(req: NextRequest) {
       priorityPair: (r.priority1 as any)?.pair ?? null,
       priorityGrade:(r.priority1 as any)?.grade ?? null,
       divergence:   (r.priority1 as any)?.divergence ?? null,
-      top3:         (r.top3 as any[])?.map((c: any) => c.cur) ?? [],
-      bottom3:      (r.bottom3 as any[])?.map((c: any) => c.cur) ?? [],
+      top3:         extractCurrencies(r.top3),
+      bottom3:      extractCurrencies(r.bottom3),
       ideasCount:   (r.ideas as any[])?.length ?? 0,
     }));
 

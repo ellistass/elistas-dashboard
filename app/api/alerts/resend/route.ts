@@ -7,6 +7,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { formatTelegramAlertAI } from "@/lib/ai-scoring";
 import { sendTelegramMessage } from "@/lib/telegram";
+import { normalizeRanking } from "@/lib/normalize-ranking";
 
 function currentSessionName(): string {
   const watHour = new Date().toLocaleString("en-GB", {
@@ -34,15 +35,19 @@ export async function POST() {
       );
     }
 
-    // Reconstruct the normalised result shape formatTelegramAlertAI expects
+    // Reconstruct the normalised result shape formatTelegramAlertAI expects.
+    // top3/bottom3 may be strings (legacy routine save) or objects (post-fix);
+    // normalize defensively so Telegram message renders currency codes either way.
+    const fa: any = (alert as any).fullAnalysis ?? {};
+    const sourceScores = fa.scores ?? fa.allScores ?? [];
     const result = {
-      top3:               alert.top3    as any[],
-      bottom3:            alert.bottom3 as any[],
+      top3:               normalizeRanking(alert.top3, sourceScores),
+      bottom3:            normalizeRanking(alert.bottom3, sourceScores),
       pairs9:             alert.pairs9  as any[],
       ideas:              (alert as any).ideas ?? (alert.pairs9 as any[]) ?? [],
       priority1:          alert.priority1 as any,
-      allScores:          [] as any[],
-      divergenceWarnings: [] as string[],
+      allScores:          sourceScores as any[],
+      divergenceWarnings: fa.divergenceWarnings ?? [] as string[],
       generatedAt:        alert.createdAt,
       scoringModel:       (alert as any).scoringModel ?? "claude-ai",
       debugData:          { systemPrompt: "", userMessage: "", rawResponse: "", promptLength: 0 },

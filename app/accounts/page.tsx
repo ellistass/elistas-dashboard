@@ -316,6 +316,10 @@ export default function AccountsPage() {
 
                     {/* Actions */}
                     <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <a href={`/accounts/${acc.id}`}
+                        style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-card-2)", color: "var(--text-2)", fontSize: 12, textDecoration: "none" }}>
+                        History →
+                      </a>
                       <button onClick={() => openEdit(acc)}
                         style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-card-2)", color: "var(--text-2)", fontSize: 12, cursor: "pointer" }}>
                         Edit

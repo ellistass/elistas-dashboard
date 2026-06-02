@@ -32,7 +32,7 @@ input string  ApiKey      = "REPLACE_WITH_ACCOUNT_API_KEY";  // per-account bear
 input bool    SendScreenshots = true;                        // capture chart on open/close
 input int     ScreenshotW   = 1280;
 input int     ScreenshotH   = 720;
-input int     CatchupHistoryDays = 14;                       // sweep history this far back on init
+input int     CatchupHistoryDays = 0;                        // sweep history this far back on init; 0 = ALL history the broker exposes
 input int     PollMillis    = 2000;                          // diff frequency
 input bool    VerboseLog    = false;
 
@@ -147,25 +147,48 @@ bool IsTicketStillOpen(int ticket)
 
 //+------------------------------------------------------------------+
 //| Sweep history on init — catch trades made while terminal was off |
+//|                                                                  |
+//| CatchupHistoryDays semantics:                                    |
+//|   0       → sweep ALL history the broker exposes (default — full |
+//|              first-run backfill so balance reconciles end-to-end)|
+//|   N > 0   → sweep only trades closed within the last N days      |
+//|                                                                  |
+//| Safe to run repeatedly: /api/trades/mt4 upserts by               |
+//| (accountId, ticket), so duplicate POSTs are no-ops.              |
 //+------------------------------------------------------------------+
 void SweepHistoryCatchup()
 {
-   datetime cutoff = TimeCurrent() - CatchupHistoryDays * 86400;
-   int total = OrdersHistoryTotal();
-   int posted = 0;
+   bool   sweepAll = (CatchupHistoryDays <= 0);
+   datetime cutoff = sweepAll ? 0 : (TimeCurrent() - CatchupHistoryDays * 86400);
+   int    total    = OrdersHistoryTotal();
+   int    posted   = 0;
+   int    skipped  = 0;
+
+   Print("[ElistasJournal] Catchup sweep starting — ",
+         (sweepAll ? "ALL history" : StringConcatenate("last ", CatchupHistoryDays, "d")),
+         " · ", total, " history rows");
+
    for(int i = 0; i < total; i++)
    {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) continue;
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) { skipped++; continue; }
       int type = OrderType();
-      if(type != OP_BUY && type != OP_SELL) continue;
-      if(OrderCloseTime() < cutoff) continue;
+      if(type != OP_BUY && type != OP_SELL) { skipped++; continue; }
+      if(!sweepAll && OrderCloseTime() < cutoff) { skipped++; continue; }
 
-      // Post both open and close events — the API upserts by ticket so it's safe
+      // Post both open and close events — API upserts by ticket so it's safe
       PostOpenEvent(OrderTicket(), "catchup");
       PostCloseEvent(OrderTicket(), "catchup");
       posted++;
+
+      // Progress log every 50 trades so a multi-year backfill doesn't look hung.
+      if(posted % 50 == 0)
+         Print("[ElistasJournal] Catchup progress: ", posted, " posted, ", (i + 1), "/", total, " scanned");
+
+      // Tiny throttle on big backfills — keeps Vercel from rate-limiting and
+      // lets the terminal stay responsive. Skip when small.
+      if(sweepAll && posted > 50) Sleep(40);
    }
-   if(posted > 0) Print("[ElistasJournal] Catchup: posted ", posted, " historical trade(s)");
+   Print("[ElistasJournal] Catchup done — ", posted, " posted, ", skipped, " skipped (non-trades or pre-cutoff)");
 }
 
 //+------------------------------------------------------------------+

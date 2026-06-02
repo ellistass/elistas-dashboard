@@ -358,7 +358,23 @@ export default function Dashboard() {
   const calcAccounts = accountList
     .filter((a) => a.isActive)
     .map((a) => ({ id: a.id, name: a.name, currency: a.currency, currentBalance: a.currentBalance }));
-  const warnings = (scores as any)?.divergenceWarnings || [];
+  // Defensive normalize — Claude has historically returned strings, {currency,type,warning},
+  // and pair-level {note,pair,type,stddev} objects. Coerce all variants to a display string
+  // so a schema drift never crashes the dashboard with React #31.
+  const warnings: string[] = ((scores as any)?.divergenceWarnings || [])
+    .map((w: any): string => {
+      if (typeof w === "string") return w;
+      if (w && typeof w === "object") {
+        const text = w.warning ?? w.note ?? w.message ?? w.text;
+        if (typeof text === "string" && text.trim()) {
+          const tag = w.pair || w.currency;
+          return tag ? `${tag}: ${text}` : text;
+        }
+        try { return JSON.stringify(w); } catch { return String(w); }
+      }
+      return String(w);
+    })
+    .filter((s: string) => s && s.trim().length > 0);
   const session = currentSession();
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -505,7 +521,7 @@ export default function Dashboard() {
           color: "var(--amber)",
         }}>
           <p style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>⚠ DIVERGENCE WARNINGS</p>
-          {warnings.map((w: string, i: number) => (
+          {warnings.map((w, i) => (
             <p key={i} style={{ fontSize: 11, margin: "2px 0", opacity: 0.85 }}>→ {w}</p>
           ))}
         </div>

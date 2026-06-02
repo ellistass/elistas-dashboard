@@ -21,7 +21,9 @@ This EA logs every trade on the MT4 account to the Elistas dashboard. One EA per
 6. In the EA settings dialog:
    - **ApiKey**: paste the per-account key from the dashboard
    - **SendScreenshots**: leave on (entry + close)
-   - **CatchupHistoryDays**: how far back to sweep when the terminal starts up after being offline (default 14)
+   - **CatchupHistoryDays**: how far back to sweep when the terminal starts up. **`0` (default) = sweep ALL history the broker exposes** — best for the first run so account balance reconciles against the trade ledger. Use a positive number (e.g. 30, 90) to limit the sweep window once you've completed an initial backfill.
+
+   > First-run note: with `CatchupHistoryDays = 0` on a multi-year account, the initial sweep can take several minutes — the EA throttles POSTs after the first 50 to avoid rate limits. Watch the Experts tab for `Catchup progress: N posted` lines.
 7. **Common tab → tick "Allow live trading"** → OK.
 8. Check the smiley face is happy in the top-right corner of the chart.
 

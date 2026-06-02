@@ -26,6 +26,23 @@ export type RankingItem = {
   holiday?: boolean
 }
 
+/* Extract just the currency codes from a ranking array. Handles both
+   shapes — plain strings (routine save before normalization) and score
+   objects (legacy /api/alerts save, post-normalization rows). Used by
+   list endpoints and the analysis history page where we only want codes,
+   not the full score objects.
+   Returns [] for any non-array input. */
+export function extractCurrencies(input: unknown): string[] {
+  if (!Array.isArray(input)) return []
+  return input
+    .map((item: any) =>
+      typeof item === 'string'
+        ? item
+        : (item?.cur ?? item?.currency ?? ''),
+    )
+    .filter((cur): cur is string => Boolean(cur))
+}
+
 export function normalizeRanking(input: unknown, scores: unknown): RankingItem[] {
   if (!Array.isArray(input)) return []
   const scoresArr: any[] = Array.isArray(scores) ? scores : []

@@ -20,6 +20,23 @@ import { db } from '@/lib/db'
 import { formatTelegramAlertAI } from '@/lib/ai-scoring'
 import { sendTelegramMessage } from '@/lib/telegram'
 import { normalizeRanking } from '@/lib/normalize-ranking'
+import { pickDxyVix } from '@/lib/dashboard-context'
+
+// Capture the macro snapshot active at scoring time so the analysis page can
+// replay the sector/DXY/VIX context the model saw, even years later. We pull
+// from the same barchartSnapshot the dashboard uses — single source of truth.
+async function captureMacroSnapshot() {
+  const snap = await db.barchartSnapshot.findFirst({
+    orderBy: { fetchedAt: 'desc' },
+    select: { data: true, fetchedAt: true },
+  })
+  const data: any = snap?.data ?? {}
+  return {
+    sectors: (data?.sectors as any[]) ?? [],
+    macros: pickDxyVix(data),
+    barchartFetchedAt: snap?.fetchedAt ?? null,
+  }
+}
 
 export const dynamic = 'force-dynamic'
 
@@ -65,6 +82,10 @@ export async function POST(req: NextRequest) {
   const top3 = normalizeRanking(result.top3, result.scores)
   const bottom3 = normalizeRanking(result.bottom3, result.scores)
 
+  // Snapshot the macro context the model was scoring against, so the
+  // analysis page can replay it later.
+  const macroSnapshot = await captureMacroSnapshot()
+
   const today = todayUtcStart()
 
   // Save / upsert today's DailyAlert
@@ -82,6 +103,7 @@ export async function POST(req: NextRequest) {
         ...result,
         scoredBy,
         savedVia: 'routine',
+        ...macroSnapshot,
       } as any,
       sentAt: sendTelegram ? new Date() : null,
     },
@@ -96,6 +118,7 @@ export async function POST(req: NextRequest) {
         ...result,
         scoredBy,
         savedVia: 'routine',
+        ...macroSnapshot,
       } as any,
       sentAt: sendTelegram ? new Date() : undefined,
     },

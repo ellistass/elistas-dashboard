@@ -874,10 +874,22 @@ function normaliseResult(
       reason: ai.priority1?.reason || "",
     };
 
-  // Normalise divergenceWarnings — Claude may return strings or {currency,type,warning} objects
-  const divergenceWarnings: string[] = (ai.divergenceWarnings || []).map((w) =>
-    typeof w === "string" ? w : w.warning,
-  );
+  // Normalise divergenceWarnings — Claude has returned strings, {currency,type,warning}, and
+  // pair-level {note,pair,type,stddev} objects. Coerce every variant to a display string so
+  // the dashboard never has to render a raw object (which throws React error #31).
+  const divergenceWarnings: string[] = (ai.divergenceWarnings || [])
+    .map((w: any): string => {
+      if (typeof w === "string") return w;
+      if (w && typeof w === "object") {
+        const text = w.warning ?? w.note ?? w.message ?? w.text;
+        if (typeof text === "string" && text.trim()) {
+          const tag = w.pair || w.currency;
+          return tag ? `${tag}: ${text}` : text;
+        }
+      }
+      return "";
+    })
+    .filter((s) => s.length > 0);
 
   const contextFields = {
     reasoning:             ai.reasoning,

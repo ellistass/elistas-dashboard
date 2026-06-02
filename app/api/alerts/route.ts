@@ -9,6 +9,22 @@ import { db } from "@/lib/db";
 import { scoreWithClaude, formatTelegramAlertAI } from "@/lib/ai-scoring";
 import { fetchAllMarketData } from "@/lib/fetchers";
 import { sendTelegramMessage } from "@/lib/telegram";
+import { pickDxyVix } from "@/lib/dashboard-context";
+
+// Same macro snapshot helper as /api/scoring/save — keeps the analysis page
+// able to replay sectors + DXY/VIX from any saved row.
+async function captureMacroSnapshot() {
+  const snap = await db.barchartSnapshot.findFirst({
+    orderBy: { fetchedAt: "desc" },
+    select: { data: true, fetchedAt: true },
+  });
+  const data: any = snap?.data ?? {};
+  return {
+    sectors: (data?.sectors as any[]) ?? [],
+    macros: pickDxyVix(data),
+    barchartFetchedAt: snap?.fetchedAt ?? null,
+  };
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -63,6 +79,8 @@ export async function POST(req: NextRequest) {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
+    const macroSnapshot = await captureMacroSnapshot();
+
     await (db.dailyAlert.upsert as any)({
       where: { date: today },
       create: {
@@ -76,7 +94,7 @@ export async function POST(req: NextRequest) {
         priority1: result.priority1 as any,
         ideas: (result as any).ideas ?? null,
         scoringModel: result.scoringModel ?? null,
-        fullAnalysis: result.debugData as any,
+        fullAnalysis: { ...(result.debugData as any), ...macroSnapshot } as any,
         sentAt: sendAlert ? new Date() : null,
       },
       update: {
@@ -89,7 +107,7 @@ export async function POST(req: NextRequest) {
         priority1: result.priority1 as any,
         ideas: (result as any).ideas ?? undefined,
         scoringModel: result.scoringModel ?? undefined,
-        fullAnalysis: result.debugData as any,
+        fullAnalysis: { ...(result.debugData as any), ...macroSnapshot } as any,
         sentAt: sendAlert ? new Date() : undefined,
       },
     });

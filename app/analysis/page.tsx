@@ -58,6 +58,14 @@ interface AlertDetail {
     rawResponse: string;
     promptLength: number;
   } | null;
+  // Macro snapshot captured at score time (saved into fullAnalysis) or the
+  // current snapshot used as fallback for legacy rows that pre-date that.
+  // macroSource tells the UI whether the data is point-in-time correct
+  // ("saved") or just a current proxy ("current-fallback" / "none").
+  sectors?: Array<{ sector: string; symbol?: string; percentChange: number }>;
+  macros?: Array<{ symbol: string; name: string; latest: number; percentChange: number }>;
+  macroSource?: "saved" | "current-fallback" | "none";
+  barchartFetchedAt?: string | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -155,7 +163,7 @@ export default function AnalysisPage() {
   const [detail, setDetail] = useState<AlertDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [promptTab, setPromptTab] = useState<
-    "ideas" | "context" | "data" | "response" | "system"
+    "ideas" | "context" | "sectors" | "data" | "response" | "system"
   >("ideas");
 
   // ── Load list ──────────────────────────────────────────────────────────────
@@ -674,6 +682,7 @@ export default function AnalysisPage() {
                                 >
                                   {tabBtn("ideas", `Ideas (${ideas.length})`)}
                                   {tabBtn("context", "Context")}
+                                  {tabBtn("sectors", "S&P sectors")}
                                   {tabBtn("data", "Data sent")}
                                   {tabBtn("response", "Raw response")}
                                   {tabBtn("system", "System prompt")}
@@ -946,6 +955,111 @@ export default function AnalysisPage() {
                                           </div>
                                         )}
 
+                                      </div>
+                                    );
+                                  })()}
+
+                                  {/* Sectors tab — S&P sector map + DXY/VIX
+                                      captured at score time (or current snapshot
+                                      as fallback for legacy rows). */}
+                                  {promptTab === "sectors" && (() => {
+                                    const sectors = detail.sectors ?? [];
+                                    const macros = detail.macros ?? [];
+                                    const src = detail.macroSource ?? "none";
+                                    if (sectors.length === 0 && macros.length === 0) {
+                                      return (
+                                        <div style={{ padding: 24, textAlign: "center" }}>
+                                          <p style={{ fontSize: 12, color: "var(--text-3)" }}>
+                                            No sector data available for this run.
+                                          </p>
+                                        </div>
+                                      );
+                                    }
+                                    const sortedSectors = [...sectors].sort(
+                                      (a, b) => b.percentChange - a.percentChange,
+                                    );
+                                    const greenCount = sectors.filter(s => s.percentChange > 0).length;
+                                    const tilt = greenCount > sectors.length / 2 ? "risk-on" : greenCount < sectors.length / 2 ? "risk-off" : "mixed";
+                                    return (
+                                      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                                        {/* Provenance banner */}
+                                        <div style={{
+                                          padding: "8px 12px", borderRadius: 8,
+                                          background: src === "saved" ? "var(--bg-elevated)" : "rgba(245, 158, 11, 0.08)",
+                                          border: `1px solid ${src === "saved" ? "var(--border)" : "rgba(245, 158, 11, 0.25)"}`,
+                                          fontSize: 11, color: "var(--text-2)",
+                                        }}>
+                                          {src === "saved"
+                                            ? `Snapshot saved at score time · tilt: ${tilt}`
+                                            : `Current snapshot (this run pre-dates sector capture) · tilt now: ${tilt}`}
+                                          {detail.barchartFetchedAt && (
+                                            <span style={{ color: "var(--text-3)", marginLeft: 8 }}>
+                                              · barchart {new Date(detail.barchartFetchedAt).toUTCString().slice(5, 22)}
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {/* DXY / VIX tiles */}
+                                        {macros.length > 0 && (
+                                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
+                                            {macros.map(m => {
+                                              const pos = m.percentChange > 0;
+                                              return (
+                                                <div key={m.symbol} style={{
+                                                  padding: "10px 12px", borderRadius: 8,
+                                                  background: "var(--bg-card)", border: "1px solid var(--border)",
+                                                }}>
+                                                  <p style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--text-3)", margin: 0 }}>{m.name}</p>
+                                                  <p className="font-mono" style={{ fontSize: 16, fontWeight: 600, margin: "2px 0 2px", color: "var(--text-1)" }}>
+                                                    {m.latest.toFixed(2)}
+                                                  </p>
+                                                  <p className="font-mono" style={{ fontSize: 11, margin: 0, color: pos ? "var(--green)" : "var(--red)" }}>
+                                                    {pos ? "+" : ""}{m.percentChange.toFixed(2)}%
+                                                  </p>
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
+
+                                        {/* Sector list — bar chart style, matches dashboard */}
+                                        {sortedSectors.length > 0 && (
+                                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                            {sortedSectors.map(s => {
+                                              const pos = s.percentChange > 0;
+                                              const barW = Math.min(Math.abs(s.percentChange) * 30, 100);
+                                              return (
+                                                <div key={s.sector} style={{
+                                                  display: "grid", gridTemplateColumns: "140px 1fr 60px",
+                                                  alignItems: "center", gap: 10,
+                                                }}>
+                                                  <span style={{
+                                                    fontSize: 11, color: "var(--text-2)",
+                                                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                                  }} title={`${s.sector}${s.symbol ? ` (${s.symbol})` : ""}`}>
+                                                    {s.sector}
+                                                  </span>
+                                                  <div style={{ height: 6, background: "var(--bg-card-2)", borderRadius: 3, position: "relative" }}>
+                                                    <div style={{
+                                                      position: "absolute", top: 0, bottom: 0,
+                                                      [pos ? "left" : "right"]: "50%",
+                                                      width: `${barW / 2}%`,
+                                                      background: pos ? "var(--green)" : "var(--red)",
+                                                      borderRadius: 3,
+                                                    }} />
+                                                    <div style={{ position: "absolute", top: -2, bottom: -2, left: "50%", width: 1, background: "var(--border)" }} />
+                                                  </div>
+                                                  <span className="font-mono" style={{
+                                                    fontSize: 11, textAlign: "right",
+                                                    color: pos ? "var(--green)" : "var(--red)",
+                                                  }}>
+                                                    {pos ? "+" : ""}{s.percentChange.toFixed(2)}%
+                                                  </span>
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
                                       </div>
                                     );
                                   })()}
