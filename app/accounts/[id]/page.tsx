@@ -16,6 +16,9 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { EditTradeDrawer } from "@/app/_components/EditTradeDrawer";
+import { Pager } from "@/app/_components/Pager";
+
+const CLOSED_PAGE_SIZE = 50;
 
 interface ClosedTrade {
   id: string; ticket: number | null; source: string;
@@ -114,6 +117,9 @@ export default function AccountHistoryPage() {
   const [keyBusy, setKeyBusy] = useState(false);
   const [mt4NumDraft, setMt4NumDraft] = useState("");
   const [editing, setEditing] = useState<ClosedTrade | null>(null);
+  // Closed-trade table is shown newest-first. Pager works on that reversed
+  // ordering so "page 0" is the most recent N trades.
+  const [closedPage, setClosedPage] = useState(0);
 
   async function refreshHistory() {
     if (!params?.id) return;
@@ -509,7 +515,10 @@ export default function AccountHistoryPage() {
               </tr>
             </thead>
             <tbody>
-              {[...closedTrades].reverse().map((t) => (
+              {[...closedTrades].reverse().slice(
+                closedPage * CLOSED_PAGE_SIZE,
+                (closedPage + 1) * CLOSED_PAGE_SIZE,
+              ).map((t) => (
                 <tr
                   key={t.id}
                   onClick={() => setEditing(t)}
@@ -536,6 +545,12 @@ export default function AccountHistoryPage() {
             </tbody>
           </table>
         )}
+        <Pager
+          total={closedTrades.length}
+          pageSize={CLOSED_PAGE_SIZE}
+          page={closedPage}
+          onChange={setClosedPage}
+        />
       </div>
 
       {editing && (

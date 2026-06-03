@@ -3,6 +3,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import { EditTradeDrawer } from "@/app/_components/EditTradeDrawer";
+import { Pager } from "@/app/_components/Pager";
+
+const PAGE_SIZE = 50;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -95,8 +98,10 @@ export default function JournalPage() {
   const [closeInputs, setCloseInputs] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   // Edit drawer + multi-select state. Selection survives across drawer open/close
-  // so you can pick a batch, edit one, save, and the rest stay checked.
+  // so you can pick a batch, edit one, save, and the rest stay checked. Selection
+  // also persists across pages — flip pages, the selection set keeps growing.
   const [editing, setEditing] = useState<Trade | null>(null);
+  const [page, setPage] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkErr, setBulkErr] = useState<string | null>(null);
@@ -475,7 +480,7 @@ export default function JournalPage() {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {trades.map(trade => {
+          {trades.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map(trade => {
             const isOpen = trade.outcome === "Open";
             const isExpanded = expanded === trade.id;
             const resultColor = trade.resultR != null
@@ -628,6 +633,7 @@ export default function JournalPage() {
               </div>
             );
           })}
+          <Pager total={trades.length} pageSize={PAGE_SIZE} page={page} onChange={setPage} />
         </div>
       )}
 

@@ -10,7 +10,7 @@
 // from the same Trade table; the only difference is layout, so the drawer
 // is identical.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 // Superset of what any trade-shaped object needs to expose. Both pages
 // pre-fetch every field that gets edited here; if a field is missing
@@ -85,6 +85,7 @@ export function EditTradeDrawer({ trade, currency = "USD", startingBalance, onCl
   const [closeShotUrl, setCloseShotUrl] = useState<string | null>(trade.closeScreenshotUrl ?? null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [mergeOpen, setMergeOpen] = useState(false);
 
   // Client-side R computation — mirrors lib/mt4.ts resultR(). Pip size by pair
   // so JPY / metals don't blow up the calc.
@@ -331,6 +332,16 @@ export function EditTradeDrawer({ trade, currency = "USD", startingBalance, onCl
           />
         </Section>
 
+        <Section title="Maintenance">
+          <button
+            onClick={() => setMergeOpen(true)}
+            style={drawerBtn("ghost")}
+            title="Fold this trade's journal context into another trade row, then delete this one."
+          >
+            Merge into another trade…
+          </button>
+        </Section>
+
         <div style={{ display: "flex", gap: 8, marginTop: 16, position: "sticky", bottom: 0, paddingTop: 12, background: "var(--bg-card)" }}>
           <button onClick={save} disabled={busy} style={drawerBtn("primary")}>
             {busy ? "Saving…" : "Save changes"}
@@ -343,6 +354,174 @@ export function EditTradeDrawer({ trade, currency = "USD", startingBalance, onCl
               P&L: {fmtCcy(trade.profitCcy ?? 0, currency)}
             </span>
           )}
+        </div>
+      </div>
+
+      {mergeOpen && (
+        <MergePicker
+          source={trade}
+          onCancel={() => setMergeOpen(false)}
+          onMerged={async () => { setMergeOpen(false); await onSaved(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Merge picker ─────────────────────────────────────────────────────────────
+// Lists candidate target trades — same pair, same direction, within ±7 days —
+// and lets the user fold the current trade's journal context into one of them.
+// The endpoint /api/trades/merge handles the data move + delete in a tx.
+function MergePicker({
+  source, onCancel, onMerged,
+}: {
+  source: EditableTrade;
+  onCancel: () => void;
+  onMerged: () => void | Promise<void>;
+}) {
+  const [candidates, setCandidates] = useState<EditableTrade[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [targetId, setTargetId] = useState<string | null>(null);
+  const [overwrite, setOverwrite] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // /api/trades returns up to 50 most recent matching the pair filter —
+        // enough to surface candidates without hammering the DB.
+        const r = await fetch(`/api/trades?pair=${encodeURIComponent(source.pair)}&limit=50`);
+        const j = await r.json();
+        if (cancelled) return;
+        // Filter client-side by direction + exclude self + within ±7 days of source date.
+        const srcDate = new Date(source.date).getTime();
+        const week = 7 * 24 * 60 * 60 * 1000;
+        const list = (j.trades ?? []).filter((t: any) =>
+          t.id !== source.id
+          && t.direction === source.direction
+          && Math.abs(new Date(t.date).getTime() - srcDate) <= week
+        );
+        setCandidates(list);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [source.id, source.pair, source.direction, source.date]);
+
+  async function doMerge() {
+    if (!targetId) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch("/api/trades/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceId: source.id, targetId, overwrite }),
+      });
+      const j = await res.json();
+      if (j.error) { setErr(j.error); return; }
+      await onMerged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 120,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(560px, 95vw)", maxHeight: "85vh", overflow: "auto",
+          background: "var(--bg-card)", border: "1px solid var(--border)",
+          borderRadius: 10, padding: 18,
+        }}
+      >
+        <p style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--text-3)", margin: "0 0 12px" }}>
+          MERGE INTO ANOTHER TRADE
+        </p>
+
+        <p style={{ fontSize: 11, color: "var(--text-2)", margin: "0 0 6px", lineHeight: 1.5 }}>
+          Pick a target. Non-empty journal fields from <strong>{source.pair} {source.direction}{source.ticket ? ` #${source.ticket}` : ""}</strong> will be folded into it, then this row will be deleted.
+        </p>
+        <p style={{ fontSize: 10, color: "var(--text-3)", margin: "0 0 12px", lineHeight: 1.5 }}>
+          Tags are always unioned. Other fields only fill blanks on the target unless overwrite is checked.
+        </p>
+
+        {loading && <p style={{ fontSize: 11, color: "var(--text-3)" }}>Loading candidates…</p>}
+        {!loading && candidates.length === 0 && (
+          <p style={{ fontSize: 11, color: "var(--text-3)" }}>
+            No candidate trades found (same pair, same direction, within ±7 days).
+          </p>
+        )}
+
+        {candidates.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+            {candidates.map((c) => {
+              const on = targetId === c.id;
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => setTargetId(c.id)}
+                  style={{
+                    textAlign: "left", padding: "8px 10px", borderRadius: 6,
+                    border: `1px solid ${on ? "var(--blue-border)" : "var(--border)"}`,
+                    background: on ? "var(--blue-dim)" : "transparent",
+                    color: "var(--text-1)", fontSize: 12, cursor: "pointer",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <span>
+                      <span className="font-mono">{c.pair}</span>{" "}
+                      <span style={{ color: c.direction === "Long" ? "var(--green)" : "var(--red)" }}>{c.direction}</span>
+                      {c.ticket != null && (
+                        <span className="font-mono" style={{ fontSize: 10, color: "var(--text-3)", marginLeft: 6 }}>
+                          #{c.ticket}
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ fontSize: 10, color: "var(--text-3)" }}>
+                      {fmtDate(c.closeTimeUtc ?? c.date)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 3 }}>
+                    {c.outcome ?? "—"} · entry {fmtNum(c.entryPrice, 5)} · R {fmtNum(c.resultR, 2)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--text-2)", marginBottom: 12 }}>
+          <input
+            type="checkbox"
+            checked={overwrite}
+            onChange={(e) => setOverwrite(e.target.checked)}
+          />
+          Overwrite existing target values (default: only fill blanks)
+        </label>
+
+        {err && <p style={{ fontSize: 11, color: "var(--red)", marginBottom: 10 }}>{err}</p>}
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={doMerge}
+            disabled={busy || !targetId}
+            style={drawerBtn("primary")}
+          >
+            {busy ? "Merging…" : "Merge & delete this row"}
+          </button>
+          <button onClick={onCancel} disabled={busy} style={drawerBtn("ghost")}>
+            Cancel
+          </button>
         </div>
       </div>
     </div>
