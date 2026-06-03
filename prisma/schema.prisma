@@ -81,8 +81,26 @@ model Trade {
   closeTimeUtc       DateTime?        // broker-stamped close time (UTC)
   ruleViolations     String[]         // computed flags: ["after-7pm-wat", "within-30min-ny-open", "no-model", "sub-1to2-rr", "c-grade-full-risk"]
   behaviorFlags      String[]         // computed flags: ["overtrading", "revenge", "sizing-drift"]
+  modifications      TradeModification[]
   @@unique([accountId, ticket])
   @@index([source, date])
+}
+
+// Per-trade audit log of SL/TP modifications. The EA diffs each open ticket's
+// current SL/TP against the last-seen values on every timer poll and POSTs a
+// row here when they change. Lets us reconstruct the full risk timeline
+// (BE moves, trail steps) — and is what backfills initialSlPrice on the parent
+// Trade when the row was created before the schema had it.
+model TradeModification {
+  id         String   @id @default(cuid())
+  tradeId    String
+  trade      Trade    @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  field      String   // "sl" | "tp"
+  oldValue   Float
+  newValue   Float
+  changedAt  DateTime @default(now())  // server time of receipt; broker time isn't always available
+  createdAt  DateTime @default(now())
+  @@index([tradeId, changedAt])
 }
 
 model DailyAlert {

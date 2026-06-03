@@ -36,13 +36,16 @@ export async function GET(
       select: {
         id: true, ticket: true, source: true,
         pair: true, direction: true, lotSize: true,
-        entryPrice: true, slPrice: true, tpPrice: true, closePrice: true,
+        entryPrice: true, slPrice: true, initialSlPrice: true, tpPrice: true, closePrice: true,
         openTimeUtc: true, closeTimeUtc: true, date: true,
         outcome: true, resultR: true, resultPips: true,
         profitCcy: true, commission: true, swap: true,
         riskPercent: true, grade: true, session: true,
         strongCcy: true, weakCcy: true, divScore: true,
         model: true, reason: true, ruleViolations: true,
+        notes: true, preTradeNotes: true, postTradeNotes: true,
+        screenshotUrl: true, closeScreenshotUrl: true,
+        tags: true,
       },
     });
 

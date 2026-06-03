@@ -10,13 +10,19 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData()
     const file = formData.get('file') as File
     const tradeId = formData.get('tradeId') as string
+    // Optional. "entry" → setup screenshot (screenshotUrl). "close" → review screenshot (closeScreenshotUrl).
+    // Defaults to the legacy single-screenshot path so the existing journal flow stays intact.
+    const phaseRaw = (formData.get('phase') as string) || ''
+    const phase = phaseRaw === 'close' || phaseRaw === 'entry' ? phaseRaw : null
 
     if (!file || !tradeId) {
       return NextResponse.json({ error: 'Missing file or tradeId' }, { status: 400 })
     }
 
     const ext = file.name.split('.').pop() || 'png'
-    const path = `screenshots/${tradeId}.${ext}`
+    const path = phase
+      ? `screenshots/${tradeId}-${phase}.${ext}`
+      : `screenshots/${tradeId}.${ext}`
     const buffer = Buffer.from(await file.arrayBuffer())
 
     const { error } = await supabaseAdmin.storage

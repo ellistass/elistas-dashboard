@@ -183,8 +183,22 @@ export default function CalendarPage() {
           <StatTile label="Net R" value={`${data.summary.totalR > 0 ? '+' : ''}${data.summary.totalR.toFixed(2)}R`} color={data.summary.totalR >= 0 ? 'var(--green)' : 'var(--red)'} />
           <StatTile label="Net P&L" value={`${data.summary.totalDollars > 0 ? '+' : ''}${fmtMoney(data.summary.totalDollars)}`} color={data.summary.totalDollars >= 0 ? 'var(--green)' : 'var(--red)'} />
           <StatTile label="Day win rate" value={data.summary.winRateOfDays != null ? `${Math.round(data.summary.winRateOfDays * 100)}%` : '—'} sub={`${data.summary.greenDays}/${data.summary.tradingDays}`} />
-          <StatTile label="Best day" value={data.summary.bestDay ? `+${data.summary.bestDay.netR.toFixed(1)}R` : '—'} sub={data.summary.bestDay?.date.slice(8) ? `${MONTH_NAMES[month-1].slice(0,3)} ${data.summary.bestDay?.date.slice(8)}` : ''} color="var(--green)" />
-          <StatTile label="Worst day" value={data.summary.worstDay ? `${data.summary.worstDay.netR.toFixed(1)}R` : '—'} sub={data.summary.worstDay?.date.slice(8) ? `${MONTH_NAMES[month-1].slice(0,3)} ${data.summary.worstDay?.date.slice(8)}` : ''} color="var(--red)" />
+          <StatTile
+            label="Best day"
+            value={data.summary.bestDay ? `+${data.summary.bestDay.netR.toFixed(1)}R` : '—'}
+            sub={data.summary.bestDay
+              ? `${MONTH_NAMES[month-1].slice(0,3)} ${data.summary.bestDay.date.slice(8)} · ${data.summary.bestDay.netDollars >= 0 ? '+' : ''}${fmtMoney(data.summary.bestDay.netDollars)}`
+              : ''}
+            color="var(--green)"
+          />
+          <StatTile
+            label="Worst day"
+            value={data.summary.worstDay ? `${data.summary.worstDay.netR.toFixed(1)}R` : '—'}
+            sub={data.summary.worstDay
+              ? `${MONTH_NAMES[month-1].slice(0,3)} ${data.summary.worstDay.date.slice(8)} · ${data.summary.worstDay.netDollars >= 0 ? '+' : ''}${fmtMoney(data.summary.worstDay.netDollars)}`
+              : ''}
+            color="var(--red)"
+          />
         </div>
       )}
 
@@ -237,6 +251,13 @@ export default function CalendarPage() {
                       color: isPositive ? 'var(--green)' : isNegative ? 'var(--red)' : 'var(--text-2)',
                     }}>
                       {cell.day.netR > 0 ? '+' : ''}{cell.day.netR.toFixed(1)}R
+                    </div>
+                    <div className="font-mono" style={{
+                      fontSize: 11, fontWeight: 500,
+                      color: isPositive ? 'var(--green)' : isNegative ? 'var(--red)' : 'var(--text-2)',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
+                    }}>
+                      {cell.day.netDollars > 0 ? '+' : ''}{fmtMoney(cell.day.netDollars)}
                     </div>
                     <div style={{ fontSize: 9, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
                       {cell.day.trades}t · {cell.day.wins}w {cell.day.losses}l

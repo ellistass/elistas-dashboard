@@ -38,6 +38,11 @@ input bool    VerboseLog    = false;
 
 //--- Internal state — known open tickets, and the most recent history ticket we've processed
 int      knownOpenTickets[];
+//--- Parallel arrays — for each entry in knownOpenTickets we remember the last
+//--- SL / TP we saw. Every poll DetectModifications diffs current vs these and
+//--- posts a modify event (with both old + new values) when they change.
+double   knownOpenSL[];
+double   knownOpenTP[];
 int      lastHistoryTicket = 0;
 datetime lastPollTime      = 0;
 string   accountBroker     = "";
@@ -71,6 +76,7 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    DetectNewOpens();
+   DetectModifications();
    DetectClosed();
    lastPollTime = TimeCurrent();
 }
@@ -81,6 +87,8 @@ void OnTimer()
 void RebuildOpenSnapshot()
 {
    ArrayResize(knownOpenTickets, 0);
+   ArrayResize(knownOpenSL, 0);
+   ArrayResize(knownOpenTP, 0);
    int total = OrdersTotal();
    for(int i = 0; i < total; i++)
    {
@@ -88,6 +96,8 @@ void RebuildOpenSnapshot()
       int type = OrderType();
       if(type != OP_BUY && type != OP_SELL) continue;
       AppendInt(knownOpenTickets, OrderTicket());
+      AppendDouble(knownOpenSL, OrderStopLoss());
+      AppendDouble(knownOpenTP, OrderTakeProfit());
    }
 }
 
@@ -108,9 +118,62 @@ void DetectNewOpens()
       // New ticket — post an open event
       PostOpenEvent(ticket, "realtime");
       AppendInt(knownOpenTickets, ticket);
+      AppendDouble(knownOpenSL, OrderStopLoss());
+      AppendDouble(knownOpenTP, OrderTakeProfit());
 
       if(SendScreenshots) PostScreenshot(ticket, "entry");
    }
+}
+
+//+------------------------------------------------------------------+
+//| Detect SL / TP modifications on currently-open orders            |
+//|                                                                  |
+//| For each known open ticket we compare the live SL / TP against   |
+//| the values we remembered last poll. If they differ we POST a     |
+//| modify event with BOTH old and new prices — the server logs the  |
+//| change to TradeModification and backfills initialSlPrice on the  |
+//| Trade row if it's still null.                                    |
+//+------------------------------------------------------------------+
+void DetectModifications()
+{
+   int len = ArraySize(knownOpenTickets);
+   for(int i = 0; i < len; i++)
+   {
+      int ticket = knownOpenTickets[i];
+      if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) continue;
+
+      double curSL = OrderStopLoss();
+      double curTP = OrderTakeProfit();
+      double oldSL = knownOpenSL[i];
+      double oldTP = knownOpenTP[i];
+
+      // Tolerance covers float jitter — MT4 sometimes returns values that
+      // diverge by 0.5 of a point even when nothing was actually changed.
+      double tol = SymbolPipTolerance(OrderSymbol());
+      bool slChanged = MathAbs(curSL - oldSL) > tol;
+      bool tpChanged = MathAbs(curTP - oldTP) > tol;
+
+      if(slChanged || tpChanged)
+      {
+         PostModifyEvent(ticket,
+                         slChanged ? oldSL : -1.0, slChanged ? curSL : -1.0,
+                         tpChanged ? oldTP : -1.0, tpChanged ? curTP : -1.0,
+                         slChanged, tpChanged);
+         if(slChanged) knownOpenSL[i] = curSL;
+         if(tpChanged) knownOpenTP[i] = curTP;
+      }
+   }
+}
+
+// Half a pip — enough to absorb broker-side rounding without missing a real
+// SL move. JPY / metals use their own pip scale.
+double SymbolPipTolerance(string symbol)
+{
+   double pip = StringFind(symbol, "JPY") >= 0 ? 0.01
+              : StringFind(symbol, "XAU") == 0 ? 0.1
+              : StringFind(symbol, "XAG") == 0 ? 0.01
+              : 0.0001;
+   return(pip / 2.0);
 }
 
 //+------------------------------------------------------------------+
@@ -131,6 +194,8 @@ void DetectClosed()
          if(SendScreenshots) PostScreenshot(ticket, "close");
       }
       RemoveAt(knownOpenTickets, i);
+      RemoveAtDouble(knownOpenSL, i);
+      RemoveAtDouble(knownOpenTP, i);
    }
 }
 
@@ -254,6 +319,45 @@ void PostCloseEvent(int ticket, string source)
 }
 
 //+------------------------------------------------------------------+
+//| Post a "modify" event with old + new SL/TP                       |
+//|                                                                  |
+//| Only the fields that actually changed are sent. `includeSL` /    |
+//| `includeTP` flags say which side moved — the others are omitted  |
+//| from the JSON entirely so the server can write a clean audit row |
+//| and (when initialSlPrice is null) backfill from oldSL.           |
+//+------------------------------------------------------------------+
+void PostModifyEvent(int ticket,
+                     double oldSL, double newSL,
+                     double oldTP, double newTP,
+                     bool includeSL, bool includeTP)
+{
+   string parts = "";
+   if(includeSL)
+   {
+      parts = parts
+            + "\"slPrice\":"    + DoubleToString(newSL, 5) + ","
+            + "\"oldSlPrice\":" + DoubleToString(oldSL, 5) + ",";
+   }
+   if(includeTP)
+   {
+      parts = parts
+            + "\"tpPrice\":"    + DoubleToString(newTP, 5) + ","
+            + "\"oldTpPrice\":" + DoubleToString(oldTP, 5) + ",";
+   }
+
+   string body = StringConcatenate(
+      "{",
+      "\"event\":\"modify\",",
+      "\"ticket\":", IntegerToString(ticket), ",",
+      "\"accountNumber\":", IntegerToString(AccountNumber()), ",",
+      parts,
+      "\"source\":\"realtime\"",
+      "}"
+   );
+   PostJson("/api/trades/mt4", body);
+}
+
+//+------------------------------------------------------------------+
 //| Take a screenshot of the current chart and POST it               |
 //+------------------------------------------------------------------+
 void PostScreenshot(int ticket, string phase)
@@ -356,6 +460,20 @@ bool ContainsInt(const int &arr[], int v)
 }
 
 void RemoveAt(int &arr[], int idx)
+{
+   int n = ArraySize(arr);
+   for(int i = idx; i < n - 1; i++) arr[i] = arr[i + 1];
+   ArrayResize(arr, n - 1);
+}
+
+void AppendDouble(double &arr[], double v)
+{
+   int n = ArraySize(arr);
+   ArrayResize(arr, n + 1);
+   arr[n] = v;
+}
+
+void RemoveAtDouble(double &arr[], int idx)
 {
    int n = ArraySize(arr);
    for(int i = idx; i < n - 1; i++) arr[i] = arr[i + 1];

@@ -59,6 +59,11 @@ interface ModifyEvent {
   accountNumber: number
   slPrice?: number
   tpPrice?: number
+  // Optional but strongly recommended — the EA sends the previous value alongside
+  // the new one so we can log it to TradeModification and (when initialSlPrice
+  // is still null) backfill it from the first oldSlPrice we ever observe.
+  oldSlPrice?: number
+  oldTpPrice?: number
 }
 
 type Event = OpenEvent | CloseEvent | ModifyEvent
@@ -197,14 +202,56 @@ export async function POST(req: NextRequest) {
           results.push({ ticket: e.ticket, ok: false, error: 'No trade with this ticket' })
           continue
         }
+
+        // Build the audit-log rows for any field that actually changed.
+        // We log only when both old + new are present and differ — that way
+        // duplicate/no-op modify pings from the EA don't pollute the timeline.
+        const auditRows: Array<{ field: string; oldValue: number; newValue: number }> = []
+        if (
+          e.slPrice !== undefined &&
+          e.oldSlPrice !== undefined &&
+          Number.isFinite(e.slPrice) && Number.isFinite(e.oldSlPrice) &&
+          e.slPrice !== e.oldSlPrice
+        ) {
+          auditRows.push({ field: 'sl', oldValue: e.oldSlPrice, newValue: e.slPrice })
+        }
+        if (
+          e.tpPrice !== undefined &&
+          e.oldTpPrice !== undefined &&
+          Number.isFinite(e.tpPrice) && Number.isFinite(e.oldTpPrice) &&
+          e.tpPrice !== e.oldTpPrice
+        ) {
+          auditRows.push({ field: 'tp', oldValue: e.oldTpPrice, newValue: e.tpPrice })
+        }
+
+        // Backfill initialSlPrice for legacy rows. If the trade was opened
+        // before the schema had this column, initialSlPrice is null — but the
+        // EA's first observed `oldSlPrice` IS the prior state, which for a
+        // realtime-tracked trade is the original fill-time SL. Once set, it's
+        // never touched again.
+        const shouldBackfillInitialSl =
+          existing.initialSlPrice == null &&
+          e.oldSlPrice !== undefined &&
+          Number.isFinite(e.oldSlPrice)
+
         await (db.trade.update as any)({
           where: { id: existing.id },
           data: {
             ...(e.slPrice !== undefined && { slPrice: e.slPrice }),
             ...(e.tpPrice !== undefined && { tpPrice: e.tpPrice }),
+            ...(shouldBackfillInitialSl && { initialSlPrice: e.oldSlPrice }),
+            ...(auditRows.length > 0 && {
+              modifications: { create: auditRows },
+            }),
           },
         })
-        results.push({ ticket: e.ticket, ok: true, action: 'modify' })
+        results.push({
+          ticket: e.ticket,
+          ok: true,
+          action: 'modify',
+          recorded: auditRows.length,
+          backfilledInitialSl: shouldBackfillInitialSl ? e.oldSlPrice : undefined,
+        })
       }
     } catch (err: any) {
       results.push({ ticket: (e as any).ticket, ok: false, error: err.message ?? 'unknown' })
