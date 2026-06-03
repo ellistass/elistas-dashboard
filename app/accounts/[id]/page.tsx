@@ -691,8 +691,15 @@ export default function AccountHistoryPage() {
                   <Td><span className="font-mono">{t.pair}</span></Td>
                   <Td><span style={{ color: t.direction === "Long" ? "var(--green)" : "var(--red)" }}>{t.direction}</span></Td>
                   <Td><OutcomePill outcome={t.outcome} /></Td>
-                  <Td right mono color={(t.resultR ?? 0) >= 0 ? "var(--green)" : "var(--red)"}>
-                    {(t.resultR ?? 0) >= 0 ? "+" : ""}{fmtNum(t.resultR, 2)}R
+                  {/* R only shown when initialSlPrice is set — otherwise the value
+                      is computed from a moved SL and is misleading. The closed
+                      trade still has its $ result in the next column. */}
+                  <Td right mono color={t.initialSlPrice != null && t.resultR != null
+                    ? ((t.resultR ?? 0) >= 0 ? "var(--green)" : "var(--red)")
+                    : "var(--text-3)"}>
+                    {t.initialSlPrice != null && t.resultR != null
+                      ? `${t.resultR >= 0 ? "+" : ""}${fmtNum(t.resultR, 2)}R`
+                      : "—"}
                   </Td>
                   <Td right mono color={(t.profitCcy ?? 0) >= 0 ? "var(--green)" : "var(--red)"}>
                     {(t.profitCcy ?? 0) >= 0 ? "+" : ""}{fmtCcy(t.profitCcy ?? 0, ccy)}

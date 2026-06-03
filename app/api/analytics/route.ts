@@ -121,13 +121,34 @@ export async function GET(req: NextRequest) {
     byGrade[k].totalR += t.resultR ?? 0
   }
 
-  // Model A vs B
-  const byModel: Record<string, { wins: number; count: number; totalR: number }> = { A: { wins: 0, count: 0, totalR: 0 }, B: { wins: 0, count: 0, totalR: 0 } }
-  for (const t of closed) {
+  // Model A vs B — track both $ and "reliable R" (only sum R for trades that
+  // have initialSlPrice set, so the value isn't poisoned by broker-import rows
+  // whose SL was modified during the trade).
+  const emptyModelStats = () => ({
+    wins: 0, losses: 0, be: 0, count: 0,
+    totalR: 0, totalPnL: 0,
+    reliableR: 0, reliableCount: 0,
+    bestPnL: 0, worstPnL: 0,
+  })
+  const byModel: Record<string, ReturnType<typeof emptyModelStats>> = {
+    A: emptyModelStats(),
+    B: emptyModelStats(),
+  }
+  for (const t of closed as any[]) {
     if (t.model !== 'A' && t.model !== 'B') continue
-    byModel[t.model].count++
-    if (t.outcome === 'Win') byModel[t.model].wins++
-    byModel[t.model].totalR += t.resultR ?? 0
+    const m = byModel[t.model]
+    m.count++
+    if (t.outcome === 'Win')      m.wins++
+    else if (t.outcome === 'Loss') m.losses++
+    else if (t.outcome === 'BE')   m.be++
+    m.totalR   += t.resultR ?? 0
+    m.totalPnL += t.profitCcy ?? 0
+    if (t.initialSlPrice != null && t.resultR != null) {
+      m.reliableR     += t.resultR
+      m.reliableCount += 1
+    }
+    if ((t.profitCcy ?? 0) > m.bestPnL)  m.bestPnL  = t.profitCcy ?? 0
+    if ((t.profitCcy ?? 0) < m.worstPnL) m.worstPnL = t.profitCcy ?? 0
   }
 
   // ── Phase breakdown ────────────────────────────────────────────────────
@@ -138,10 +159,12 @@ export async function GET(req: NextRequest) {
     Phase1: phaseEmpty(), Phase2: phaseEmpty(), Funded: phaseEmpty(), Unphased: phaseEmpty(),
   }
   // Model × Phase cross-tab — the "model A on phase 1 win rate" view.
-  const byModelByPhase: Record<string, Record<'A' | 'B', { wins: number; count: number; totalR: number }>> = {
-    Phase1: { A: { wins: 0, count: 0, totalR: 0 }, B: { wins: 0, count: 0, totalR: 0 } },
-    Phase2: { A: { wins: 0, count: 0, totalR: 0 }, B: { wins: 0, count: 0, totalR: 0 } },
-    Funded: { A: { wins: 0, count: 0, totalR: 0 }, B: { wins: 0, count: 0, totalR: 0 } },
+  type CrossCell = { wins: number; count: number; totalR: number; totalPnL: number }
+  const emptyCross = (): CrossCell => ({ wins: 0, count: 0, totalR: 0, totalPnL: 0 })
+  const byModelByPhase: Record<string, Record<'A' | 'B', CrossCell>> = {
+    Phase1: { A: emptyCross(), B: emptyCross() },
+    Phase2: { A: emptyCross(), B: emptyCross() },
+    Funded: { A: emptyCross(), B: emptyCross() },
   }
 
   // The closed list was derived BEFORE applying the include, so re-map onto
@@ -162,7 +185,8 @@ export async function GET(req: NextRequest) {
     if (phase !== 'Unphased' && (t.model === 'A' || t.model === 'B')) {
       const cell = byModelByPhase[phase][t.model as 'A' | 'B']
       cell.count++
-      cell.totalR += t.resultR ?? 0
+      cell.totalR   += t.resultR ?? 0
+      cell.totalPnL += t.profitCcy ?? 0
       if (t.outcome === 'Win') cell.wins++
     }
   }

@@ -543,12 +543,24 @@ export default function JournalPage() {
                       <p style={{ fontSize: 9, color: "var(--text-3)", margin: "0 0 1px", letterSpacing: "0.06em" }}>TP</p>
                       <p className="font-mono" style={{ fontSize: 12, margin: 0, color: "var(--green)" }}>{trade.tpPrice}</p>
                     </div>
-                    {trade.resultR != null && (
+                    {trade.profitCcy != null && (
                       <div style={{ textAlign: "right" }}>
                         <p style={{ fontSize: 9, color: "var(--text-3)", margin: "0 0 1px", letterSpacing: "0.06em" }}>RESULT</p>
-                        <p className="font-mono" style={{ fontSize: 13, fontWeight: 700, margin: 0, color: resultColor }}>
-                          {trade.resultR > 0 ? "+" : ""}{trade.resultR}R
+                        <p className="font-mono" style={{
+                          fontSize: 13, fontWeight: 700, margin: 0,
+                          color: (trade.profitCcy ?? 0) > 0 ? "var(--green)"
+                                 : (trade.profitCcy ?? 0) < 0 ? "var(--red)"
+                                 : "var(--text-3)",
+                        }}>
+                          {(trade.profitCcy ?? 0) >= 0 ? "+" : ""}${trade.profitCcy.toFixed(2)}
                         </p>
+                        {/* Show R only when initialSlPrice is set — otherwise the calc
+                            is from the modified SL and shouldn't be trusted. */}
+                        {trade.initialSlPrice != null && trade.resultR != null && (
+                          <p className="font-mono" style={{ fontSize: 10, color: "var(--text-3)", margin: "1px 0 0" }}>
+                            {trade.resultR > 0 ? "+" : ""}{trade.resultR}R
+                          </p>
+                        )}
                       </div>
                     )}
                     <button

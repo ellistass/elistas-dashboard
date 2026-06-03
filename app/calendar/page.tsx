@@ -185,17 +185,21 @@ export default function CalendarPage() {
           <StatTile label="Day win rate" value={data.summary.winRateOfDays != null ? `${Math.round(data.summary.winRateOfDays * 100)}%` : '—'} sub={`${data.summary.greenDays}/${data.summary.tradingDays}`} />
           <StatTile
             label="Best day"
-            value={data.summary.bestDay ? `+${data.summary.bestDay.netR.toFixed(1)}R` : '—'}
+            value={data.summary.bestDay
+              ? `${data.summary.bestDay.netDollars >= 0 ? '+' : ''}${fmtMoney(data.summary.bestDay.netDollars)}`
+              : '—'}
             sub={data.summary.bestDay
-              ? `${MONTH_NAMES[month-1].slice(0,3)} ${data.summary.bestDay.date.slice(8)} · ${data.summary.bestDay.netDollars >= 0 ? '+' : ''}${fmtMoney(data.summary.bestDay.netDollars)}`
+              ? `${MONTH_NAMES[month-1].slice(0,3)} ${data.summary.bestDay.date.slice(8)} · ${data.summary.bestDay.trades} ${data.summary.bestDay.trades === 1 ? 'trade' : 'trades'}`
               : ''}
             color="var(--green)"
           />
           <StatTile
             label="Worst day"
-            value={data.summary.worstDay ? `${data.summary.worstDay.netR.toFixed(1)}R` : '—'}
+            value={data.summary.worstDay
+              ? `${data.summary.worstDay.netDollars >= 0 ? '+' : ''}${fmtMoney(data.summary.worstDay.netDollars)}`
+              : '—'}
             sub={data.summary.worstDay
-              ? `${MONTH_NAMES[month-1].slice(0,3)} ${data.summary.worstDay.date.slice(8)} · ${data.summary.worstDay.netDollars >= 0 ? '+' : ''}${fmtMoney(data.summary.worstDay.netDollars)}`
+              ? `${MONTH_NAMES[month-1].slice(0,3)} ${data.summary.worstDay.date.slice(8)} · ${data.summary.worstDay.trades} ${data.summary.worstDay.trades === 1 ? 'trade' : 'trades'}`
               : ''}
             color="var(--red)"
           />
@@ -246,21 +250,23 @@ export default function CalendarPage() {
                 }}>{cell.dayNum}{isToday ? ' · today' : ''}</div>
                 {cell.day && (
                   <>
+                    {/* $ amount is the headline — what actually moved the account.
+                        Trade count + W/L is the activity context underneath. R is
+                        intentionally not shown here (was unreliable for imported /
+                        SL-modified trades); the day-detail card still surfaces it
+                        when you click in. */}
                     <div className="font-mono" style={{
-                      fontSize: 13, fontWeight: 500,
-                      color: isPositive ? 'var(--green)' : isNegative ? 'var(--red)' : 'var(--text-2)',
-                    }}>
-                      {cell.day.netR > 0 ? '+' : ''}{cell.day.netR.toFixed(1)}R
-                    </div>
-                    <div className="font-mono" style={{
-                      fontSize: 11, fontWeight: 500,
+                      fontSize: 13, fontWeight: 600,
                       color: isPositive ? 'var(--green)' : isNegative ? 'var(--red)' : 'var(--text-2)',
                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
                     }}>
                       {cell.day.netDollars > 0 ? '+' : ''}{fmtMoney(cell.day.netDollars)}
                     </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+                      {cell.day.trades} {cell.day.trades === 1 ? 'trade' : 'trades'}
+                    </div>
                     <div style={{ fontSize: 9, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
-                      {cell.day.trades}t · {cell.day.wins}w {cell.day.losses}l
+                      {cell.day.wins}W {cell.day.losses}L{cell.day.breakEven > 0 ? ` ${cell.day.breakEven}BE` : ''}
                     </div>
                   </>
                 )}
