@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
+import { StrategyScoreboard } from '@/app/_components/StrategyScoreboard'
 
 interface Account { id: string; name: string; broker: string; isActive: boolean }
 interface AnalyticsResponse {
@@ -294,25 +295,10 @@ export default function AnalyticsPage() {
         ) : <EmptyState text="The daily idea-outcome cron will populate this once it has a full day of price action." />}
       </div>
 
-      {/* Model A vs B — hero cards, $ as the headline. R only when reliable. */}
-      <div className="section-label">Model performance</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
-        <ModelCard
-          letter="A"
-          title="Wyckoff trap"
-          accent="var(--green)"
-          accentDim="var(--green-dim)"
-          accentBorder="var(--green-border)"
-          stats={data.byModel.A}
-        />
-        <ModelCard
-          letter="B"
-          title="Liquidity run"
-          accent="var(--amber)"
-          accentDim="var(--amber-dim)"
-          accentBorder="var(--amber-border)"
-          stats={data.byModel.B}
-        />
+      {/* Strategy scoreboard — extensible via app/_components/strategies.ts */}
+      <div className="section-label">Strategy scoreboard</div>
+      <div style={{ marginBottom: 10 }}>
+        <StrategyScoreboard byModel={data.byModel} />
       </div>
 
       <div className="card" style={{ marginBottom: 10 }}>
@@ -340,145 +326,15 @@ export default function AnalyticsPage() {
   )
 }
 
-// Model hero card. Letter is the visual anchor; $ is the headline metric (R
-// removed unless we have reliable data). Designed to read at a glance.
-function ModelCard({
-  letter, title, accent, accentDim, accentBorder, stats,
-}: {
-  letter: 'A' | 'B';
-  title: string;
-  accent: string;
-  accentDim: string;
-  accentBorder: string;
-  stats: AnalyticsResponse['byModel'][string];
-}) {
-  const winRate = stats.wins + stats.losses > 0
-    ? (stats.wins / (stats.wins + stats.losses)) * 100
-    : 0;
-  const avgPnL = stats.count > 0 ? stats.totalPnL / stats.count : 0;
-  const reliableAvgR = stats.reliableCount > 0 ? stats.reliableR / stats.reliableCount : 0;
-  const pnlColor = stats.totalPnL > 0 ? accent : stats.totalPnL < 0 ? 'var(--red)' : 'var(--text-2)';
-  const dollar = (n: number) =>
-    `${n >= 0 ? '+' : ''}${n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}`;
-
-  return (
-    <div className="card" style={{
-      padding: '14px 16px',
-      borderColor: accentBorder,
-      backgroundImage: `linear-gradient(135deg, ${accentDim} 0%, transparent 55%)`,
-      position: 'relative',
-      overflow: 'hidden',
-    }}>
-      {/* Letter watermark — sits behind the content as the model's visual ID */}
-      <div style={{
-        position: 'absolute', right: -8, top: -12,
-        fontSize: 96, fontWeight: 800, lineHeight: 1,
-        color: accent, opacity: 0.12, letterSpacing: -2,
-        pointerEvents: 'none',
-      }}>{letter}</div>
-
-      <div style={{ position: 'relative' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 2 }}>
-          <span style={{
-            fontSize: 11, fontWeight: 700, letterSpacing: '0.12em',
-            color: accent, padding: '2px 8px',
-            background: accentDim, borderRadius: 4,
-          }}>
-            MODEL {letter}
-          </span>
-          <span style={{ fontSize: 13, color: 'var(--text-1)' }}>{title}</span>
-        </div>
-
-        {stats.count === 0 ? (
-          <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '14px 0 0' }}>
-            No trades in this range.
-          </p>
-        ) : (
-          <>
-            {/* Headline: total $ */}
-            <div className="font-mono" style={{
-              fontSize: 26, fontWeight: 600, color: pnlColor,
-              margin: '8px 0 2px', lineHeight: 1.1,
-            }}>
-              {dollar(stats.totalPnL)}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12 }}>
-              {stats.count} {stats.count === 1 ? 'trade' : 'trades'} · avg {dollar(avgPnL)} / trade
-            </div>
-
-            {/* Stat row */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 8 }}>
-              <Stat label="Win rate" value={`${winRate.toFixed(1)}%`} />
-              <Stat label="Best" value={dollar(stats.bestPnL)} color={stats.bestPnL > 0 ? accent : undefined} />
-              <Stat label="Worst" value={dollar(stats.worstPnL)} color={stats.worstPnL < 0 ? 'var(--red)' : undefined} />
-            </div>
-
-            {/* W/L/BE bar */}
-            <WinLossBar wins={stats.wins} losses={stats.losses} be={stats.be} accent={accent} />
-
-            {/* Reliable R, only if any */}
-            {stats.reliableCount > 0 ? (
-              <p style={{ fontSize: 10, color: 'var(--text-3)', margin: '10px 0 0', lineHeight: 1.4 }}>
-                Reliable R: <span className="font-mono" style={{ color: 'var(--text-2)' }}>
-                  {stats.reliableR >= 0 ? '+' : ''}{stats.reliableR.toFixed(2)}R
-                </span>
-                {' '}avg <span className="font-mono" style={{ color: 'var(--text-2)' }}>
-                  {reliableAvgR >= 0 ? '+' : ''}{reliableAvgR.toFixed(2)}R
-                </span>
-                {' '}<span style={{ opacity: 0.7 }}>(across {stats.reliableCount} trade{stats.reliableCount === 1 ? '' : 's'} with verified initial SL)</span>
-              </p>
-            ) : (
-              <p style={{ fontSize: 10, color: 'var(--text-3)', margin: '10px 0 0', fontStyle: 'italic' }}>
-                R hidden — no trades have a verified initial SL yet.
-              </p>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div>
-      <p style={{ fontSize: 9, color: 'var(--text-3)', margin: 0, letterSpacing: '0.08em' }}>
-        {label.toUpperCase()}
-      </p>
-      <p className="font-mono" style={{ fontSize: 13, fontWeight: 600, margin: '1px 0 0', color: color ?? 'var(--text-1)' }}>
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function WinLossBar({ wins, losses, be, accent }: { wins: number; losses: number; be: number; accent: string }) {
-  const total = wins + losses + be;
-  if (total === 0) return null;
-  const pct = (n: number) => (n / total) * 100;
-  return (
-    <div>
-      <div style={{ display: 'flex', height: 8, borderRadius: 4, overflow: 'hidden', background: 'var(--bg-elevated)' }}>
-        {wins > 0   && <div style={{ width: `${pct(wins)}%`,   background: accent }} />}
-        {be > 0     && <div style={{ width: `${pct(be)}%`,     background: 'var(--text-3)', opacity: 0.4 }} />}
-        {losses > 0 && <div style={{ width: `${pct(losses)}%`, background: 'var(--red)' }} />}
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
-        <span><span style={{ color: accent }}>●</span> {wins}W</span>
-        {be > 0 && <span><span style={{ opacity: 0.5 }}>●</span> {be}BE</span>}
-        <span><span style={{ color: 'var(--red)' }}>●</span> {losses}L</span>
-      </div>
-    </div>
-  );
-}
-
 function PhaseTable({ byPhase }: { byPhase: NonNullable<AnalyticsResponse['byPhase']> }) {
   const order = ['Phase1', 'Phase2', 'Funded', 'Unphased']
+  const dollar = (n: number) =>
+    `${n >= 0 ? '+' : ''}${n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}`
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
       <thead>
         <tr style={{ borderBottom: '1px solid var(--border)' }}>
-          <Th>Phase</Th><Th right>Trades</Th><Th right>Win %</Th><Th right>Total R</Th><Th right>Total $</Th>
+          <Th>Phase</Th><Th right>Trades</Th><Th right>Win %</Th><Th right>Avg $</Th><Th right>Total $</Th>
         </tr>
       </thead>
       <tbody>
@@ -486,14 +342,15 @@ function PhaseTable({ byPhase }: { byPhase: NonNullable<AnalyticsResponse['byPha
           const b = byPhase[p]
           if (!b || b.count === 0) return null
           const winRate = b.wins + b.losses > 0 ? (b.wins / (b.wins + b.losses)) * 100 : 0
-          const color = b.totalR > 0 ? 'var(--green)' : b.totalR < 0 ? 'var(--red)' : 'var(--text-2)'
+          const avg = b.count > 0 ? b.totalPnL / b.count : 0
+          const color = b.totalPnL > 0 ? 'var(--green)' : b.totalPnL < 0 ? 'var(--red)' : 'var(--text-2)'
           return (
             <tr key={p} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
               <Td>{p}</Td>
               <Td right mono>{b.count}</Td>
               <Td right mono>{winRate.toFixed(1)}%</Td>
-              <Td right mono color={color}>{b.totalR >= 0 ? '+' : ''}{b.totalR.toFixed(2)}R</Td>
-              <Td right mono color={color}>${b.totalPnL.toFixed(2)}</Td>
+              <Td right mono color="var(--text-3)">{dollar(avg)}</Td>
+              <Td right mono color={color}>{dollar(b.totalPnL)}</Td>
             </tr>
           )
         })}
