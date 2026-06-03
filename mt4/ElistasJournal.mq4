@@ -33,6 +33,7 @@ input bool    SendScreenshots = true;                        // capture chart on
 input int     ScreenshotW   = 1280;
 input int     ScreenshotH   = 720;
 input int     CatchupHistoryDays = 0;                        // sweep history this far back on init; 0 = ALL history the broker exposes
+input bool    ForceFullResweep   = false;                    // set true once to wipe the per-account catchup memory and re-POST everything. Useful after a dashboard rebuild.
 input int     PollMillis    = 2000;                          // diff frequency
 input bool    VerboseLog    = false;
 
@@ -58,8 +59,50 @@ int OnInit()
    // Build the initial "known open tickets" snapshot from current open orders
    RebuildOpenSnapshot();
 
-   // Catch up on any history the dashboard might be missing
-   SweepHistoryCatchup();
+   // OnInit fires every time the user changes timeframe, swaps symbol, or
+   // tweaks an input. The catchup sweep is synchronous and hangs the chart
+   // every time. So we persist two markers per account in GlobalVariables:
+   //   • lastHistoryCount   — OrdersHistoryTotal() at the moment of last sweep
+   //   • lastHighestTicket  — the largest ticket number we've POSTed so far
+   //
+   // On re-init:
+   //   • If the history count hasn't changed → no new trades closed → skip.
+   //   • If it has changed → sweep, but skip rows whose ticket is ≤ the
+   //     remembered max. Picks up exactly where we left off, no re-POSTing.
+   //
+   // Ticket numbers are monotonic per broker, so this is robust even if the
+   // user changes the Account History tab's date range (rows reorder by
+   // position but ticket IDs stay stable).
+   string countKey  = "ElistasJournal_HistCount_" + IntegerToString(AccountNumber());
+   string ticketKey = "ElistasJournal_MaxTicket_" + IntegerToString(AccountNumber());
+
+   // Force-resweep mechanism: user flips the input, we wipe the memory once
+   // and proceed as a fresh install.
+   if(ForceFullResweep)
+   {
+      if(GlobalVariableCheck(countKey))  GlobalVariableDel(countKey);
+      if(GlobalVariableCheck(ticketKey)) GlobalVariableDel(ticketKey);
+      Print("[ElistasJournal] ForceFullResweep=true — catchup memory cleared. Set the input back to false after this run.");
+   }
+
+   int lastCount  = GlobalVariableCheck(countKey)  ? (int)GlobalVariableGet(countKey)  : 0;
+   int lastTicket = GlobalVariableCheck(ticketKey) ? (int)GlobalVariableGet(ticketKey) : 0;
+   int currCount  = OrdersHistoryTotal();
+
+   if(lastCount > 0 && currCount == lastCount)
+   {
+      Print("[ElistasJournal] Skipping catchup — history unchanged (", currCount,
+            " rows, max ticket ", lastTicket, "). Realtime polling is active.");
+   }
+   else
+   {
+      int newMaxTicket = SweepHistoryCatchupSince(lastTicket);
+      GlobalVariableSet(countKey,  (double)currCount);
+      // Only advance the ticket marker if we actually saw a higher one — protects
+      // against an aborted sweep accidentally regressing the watermark.
+      if(newMaxTicket > lastTicket)
+         GlobalVariableSet(ticketKey, (double)newMaxTicket);
+   }
 
    EventSetMillisecondTimer(PollMillis);
    return(INIT_SUCCEEDED);
@@ -221,16 +264,23 @@ bool IsTicketStillOpen(int ticket)
 //| Safe to run repeatedly: /api/trades/mt4 upserts by               |
 //| (accountId, ticket), so duplicate POSTs are no-ops.              |
 //+------------------------------------------------------------------+
-void SweepHistoryCatchup()
+// Incremental catchup: posts only history rows whose ticket is strictly greater
+// than `sinceTicket`. Returns the largest ticket seen (caller persists it as
+// the watermark for the next run). When called with sinceTicket=0 this acts
+// like a full sweep — which is what a fresh install or ForceFullResweep
+// produces.
+int SweepHistoryCatchupSince(int sinceTicket)
 {
    bool   sweepAll = (CatchupHistoryDays <= 0);
    datetime cutoff = sweepAll ? 0 : (TimeCurrent() - CatchupHistoryDays * 86400);
    int    total    = OrdersHistoryTotal();
    int    posted   = 0;
    int    skipped  = 0;
+   int    maxTicket = sinceTicket;
 
    Print("[ElistasJournal] Catchup sweep starting — ",
-         (sweepAll ? "ALL history" : StringConcatenate("last ", CatchupHistoryDays, "d")),
+         (sinceTicket > 0 ? StringConcatenate("incremental from ticket #", sinceTicket, "+") : "full"),
+         " · ", (sweepAll ? "ALL history" : StringConcatenate("last ", CatchupHistoryDays, "d")),
          " · ", total, " history rows");
 
    for(int i = 0; i < total; i++)
@@ -240,10 +290,16 @@ void SweepHistoryCatchup()
       if(type != OP_BUY && type != OP_SELL) { skipped++; continue; }
       if(!sweepAll && OrderCloseTime() < cutoff) { skipped++; continue; }
 
-      // Post both open and close events — API upserts by ticket so it's safe
-      PostOpenEvent(OrderTicket(), "catchup");
-      PostCloseEvent(OrderTicket(), "catchup");
+      int ticket = OrderTicket();
+      // The whole point of incremental: stop replaying tickets we already POSTed.
+      if(ticket <= sinceTicket) { skipped++; continue; }
+
+      // Post both open and close events — API upserts by (accountId, ticket)
+      // so even if this row sneaks through twice it's a no-op.
+      PostOpenEvent(ticket, "catchup");
+      PostCloseEvent(ticket, "catchup");
       posted++;
+      if(ticket > maxTicket) maxTicket = ticket;
 
       // Progress log every 50 trades so a multi-year backfill doesn't look hung.
       if(posted % 50 == 0)
@@ -251,9 +307,10 @@ void SweepHistoryCatchup()
 
       // Tiny throttle on big backfills — keeps Vercel from rate-limiting and
       // lets the terminal stay responsive. Skip when small.
-      if(sweepAll && posted > 50) Sleep(40);
+      if(posted > 50) Sleep(40);
    }
-   Print("[ElistasJournal] Catchup done — ", posted, " posted, ", skipped, " skipped (non-trades or pre-cutoff)");
+   Print("[ElistasJournal] Catchup done — ", posted, " posted, ", skipped, " skipped (pre-watermark, non-trades, or pre-cutoff). Max ticket now ", maxTicket);
+   return(maxTicket);
 }
 
 //+------------------------------------------------------------------+

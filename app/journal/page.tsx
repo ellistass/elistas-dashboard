@@ -503,6 +503,18 @@ export default function JournalPage() {
                       title="Select for bulk action"
                     />
                     <span className="font-mono" style={{ fontSize: 14, fontWeight: 700 }}>{trade.pair}</span>
+                    {trade.ticket != null && (
+                      <span
+                        className="font-mono"
+                        title="MT4 order number — match this against your terminal's Account History tab"
+                        style={{
+                          fontSize: 10, color: "var(--text-3)", background: "var(--bg-elevated)",
+                          padding: "2px 7px", borderRadius: 4, border: "1px solid var(--border)",
+                        }}
+                      >
+                        #{trade.ticket}
+                      </span>
+                    )}
                     <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, fontWeight: 600,
                       background: trade.direction === "Long" ? "var(--green-dim)" : "var(--red-dim)",
                       color: trade.direction === "Long" ? "var(--green)" : "var(--red)" }}>

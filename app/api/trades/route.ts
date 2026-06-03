@@ -134,8 +134,15 @@ export async function PATCH(req: NextRequest) {
 }
 
 // DELETE — accepts either `?id=<one>` query or `{ ids: string[] }` body for
-// batch deletes. Used by the journal's multi-select toolbar; the TradeModification
-// rows cascade thanks to the schema relation.
+// batch deletes. Used by the journal's multi-select toolbar and the account
+// page's per-row Delete button.
+//
+// IdeaOutcome.tradeId and NewsWarning.tradeId reference Trade.id but were
+// declared WITHOUT `@relation`, so Prisma doesn't auto-cascade. We have to
+// orphan / wipe them by hand before deleting the parent, otherwise the user
+// sees a generic "Failed to delete" with no clue what blocked it.
+//
+// Wrapped in a transaction so partial failures don't leave dangling pointers.
 export async function DELETE(req: NextRequest) {
   try {
     const url = new URL(req.url)
@@ -150,10 +157,32 @@ export async function DELETE(req: NextRequest) {
     if (ids.length === 0) {
       return NextResponse.json({ error: 'Provide id query or ids[] body' }, { status: 400 })
     }
-    const result = await db.trade.deleteMany({ where: { id: { in: ids } } })
+
+    const result = await db.$transaction(async (tx) => {
+      // Null out any IdeaOutcome rows that point at these trades so the idea
+      // history stays — we just lose the "taken trade" link, which is the
+      // right behavior when the trade itself was a phantom / cleanup.
+      await (tx as any).ideaOutcome.updateMany({
+        where: { tradeId: { in: ids } },
+        data: { tradeId: null },
+      })
+      // NewsWarnings are scoped to the trade — if the trade is gone, the
+      // warning row is meaningless, so cascade by hand.
+      await (tx as any).newsWarning.deleteMany({
+        where: { tradeId: { in: ids } },
+      })
+      // Now the actual trade rows — TradeModification + TradeAlignment cascade
+      // automatically thanks to their `@relation onDelete: Cascade` clauses.
+      return tx.trade.deleteMany({ where: { id: { in: ids } } })
+    })
+
     return NextResponse.json({ ok: true, deleted: result.count })
-  } catch (err) {
+  } catch (err: any) {
+    // Surface the actual Prisma error so future failures aren't a black box.
     console.error('Trade delete error:', err)
-    return NextResponse.json({ error: 'Failed to delete trade(s)' }, { status: 500 })
+    return NextResponse.json({
+      error: err?.message ?? 'Failed to delete trade(s)',
+      code: err?.code,
+    }, { status: 500 })
   }
 }

@@ -148,6 +148,50 @@ export default function AccountHistoryPage() {
     await refreshHistory();
   }
 
+  // ── Bulk maintenance ────────────────────────────────────────────────────
+  // Used when the dashboard's data has diverged from the broker and the user
+  // wants a clean slate to let the EA resync from scratch.
+  async function clearAllOpenTrades() {
+    if (!data) return;
+    const ids = data.openTrades.map((t) => t.id);
+    if (ids.length === 0) { alert("No open trades to clear."); return; }
+    if (!confirm(`Delete ALL ${ids.length} open trade rows for this account? This cannot be undone. Use this for phantoms — confirmed real open trades will get re-posted by the EA on its next sweep.`)) return;
+    const res = await fetch("/api/trades", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    const j = await res.json();
+    if (j.error) { alert(`Delete failed: ${j.error}`); return; }
+    await refreshHistory();
+  }
+
+  async function wipeEAData() {
+    if (!data) return;
+    const ids = [
+      ...data.openTrades.filter((t) => (t as any).source?.startsWith?.("mt4")).map((t) => t.id),
+      ...data.closedTrades.filter((t) => t.source?.startsWith?.("mt4")).map((t) => t.id),
+    ];
+    if (ids.length === 0) { alert("No EA-synced trades found for this account."); return; }
+    const ok = confirm(
+      `WIPE ALL ${ids.length} EA-synced trade rows for this account?\n\n` +
+      `This deletes every Trade whose source is 'mt4' or 'mt4-catchup'.\n` +
+      `Manual journal entries are NOT touched.\n\n` +
+      `After this, set ForceFullResweep=true in the EA and reload it on the chart so it re-posts everything from broker history.\n\n` +
+      `This cannot be undone.`
+    );
+    if (!ok) return;
+    const res = await fetch("/api/trades", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    const j = await res.json();
+    if (j.error) { alert(`Delete failed: ${j.error}`); return; }
+    alert(`Deleted ${j.deleted ?? ids.length} rows. Now flip ForceFullResweep=true in the EA inputs and reload the chart.`);
+    await refreshHistory();
+  }
+
   useEffect(() => {
     if (!params?.id) return;
     setLoading(true);
@@ -359,6 +403,34 @@ export default function AccountHistoryPage() {
         </div>
       </div>
 
+      {/* Maintenance — bulk cleanup for when the dashboard data has diverged
+          from the broker and the EA needs to resync from scratch. */}
+      <div className="card" style={{
+        padding: "12px 16px", marginBottom: 14,
+        border: "1px solid var(--red-border)", background: "rgba(239,68,68,0.04)",
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <p style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--red)", margin: 0 }}>
+            DANGER ZONE — bulk maintenance
+          </p>
+          <span style={{ fontSize: 10, color: "var(--text-3)" }}>
+            {data.openTrades.length} open · {data.closedTrades.length} closed
+          </span>
+        </div>
+        <p style={{ fontSize: 11, color: "var(--text-3)", margin: "0 0 8px", lineHeight: 1.5 }}>
+          Use these when the dashboard has phantom trades or you want the EA to resync from scratch.
+          After wiping, set <span className="font-mono" style={{ color: "var(--text-2)" }}>ForceFullResweep=true</span> in the EA inputs and reload the chart — the EA's per-account memory clears and it re-POSTs every history row.
+        </p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={clearAllOpenTrades} style={btn("danger")}>
+            Clear all open trades ({data.openTrades.length})
+          </button>
+          <button onClick={wipeEAData} style={btn("danger")}>
+            Wipe all EA-synced data
+          </button>
+        </div>
+      </div>
+
       {/* Equity curve */}
       {equityPoints.length > 1 && (
         <div className="card" style={{ padding: "14px 18px", marginBottom: 14 }}>
@@ -380,7 +452,7 @@ export default function AccountHistoryPage() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
-                <Th>Opened</Th><Th>Pair</Th><Th>Dir</Th>
+                <Th>Opened</Th><Th>Ticket</Th><Th>Pair</Th><Th>Dir</Th>
                 <Th right>Entry</Th><Th right>SL</Th><Th right>TP</Th>
                 <Th right>Actions</Th>
               </tr>
@@ -389,6 +461,7 @@ export default function AccountHistoryPage() {
               {openTrades.map((t) => (
                 <tr key={t.id} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
                   <Td>{fmtDate(t.openTimeUtc ?? t.date)}</Td>
+                  <Td mono>{t.ticket != null ? `#${t.ticket}` : "—"}</Td>
                   <Td><span className="font-mono">{t.pair}</span></Td>
                   <Td><span style={{ color: t.direction === "Long" ? "var(--green)" : "var(--red)" }}>{t.direction}</span></Td>
                   <Td right mono>{fmtNum(t.entryPrice, 5)}</Td>
@@ -431,7 +504,7 @@ export default function AccountHistoryPage() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
-                <Th>Closed</Th><Th>Pair</Th><Th>Dir</Th><Th>Outcome</Th>
+                <Th>Closed</Th><Th>Ticket</Th><Th>Pair</Th><Th>Dir</Th><Th>Outcome</Th>
                 <Th right>R</Th><Th right>P&L</Th><Th right>Balance</Th>
               </tr>
             </thead>
@@ -447,6 +520,7 @@ export default function AccountHistoryPage() {
                   title="Click to edit / fix R / attach screenshot"
                 >
                   <Td>{fmtDate(t.closeTimeUtc ?? t.date)}</Td>
+                  <Td mono>{t.ticket != null ? `#${t.ticket}` : "—"}</Td>
                   <Td><span className="font-mono">{t.pair}</span></Td>
                   <Td><span style={{ color: t.direction === "Long" ? "var(--green)" : "var(--red)" }}>{t.direction}</span></Td>
                   <Td><OutcomePill outcome={t.outcome} /></Td>
