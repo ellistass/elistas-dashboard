@@ -14,6 +14,7 @@ import {
 import { PositionSizeCalc } from "./_components/PositionSizeCalc";
 import { AccountTiles } from "./_components/AccountTiles";
 import { MultiIdeaHero } from "./_components/MultiIdeaHero";
+import { WatchedPanel } from "./_components/WatchedPanel";
 import { SourceChip, RiskLine } from "./_components/TradeChips";
 import { RoutineSetupCard } from "./_components/RoutineSetupCard";
 import { DiagnosticsPanel } from "./_components/DiagnosticsPanel";
@@ -569,6 +570,9 @@ export default function Dashboard() {
         accounts={calcAccounts.map((a: any) => ({ ...a, status: accountList.find((x: any) => x.id === a.id)?.status ?? '' })) as any}
         onChanged={fetchDashboard}
       />
+
+      {/* Watch list — algorithm-strength tracker for ideas you watched but didn't take */}
+      <WatchedPanel />
 
       {/* ── Status row — only shown when there's data worth showing.
            Without an analysis run, accounts + ready-to-score card carry everything. ── */}

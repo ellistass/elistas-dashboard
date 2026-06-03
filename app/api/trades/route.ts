@@ -132,3 +132,28 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Failed to update trade' }, { status: 500 })
   }
 }
+
+// DELETE — accepts either `?id=<one>` query or `{ ids: string[] }` body for
+// batch deletes. Used by the journal's multi-select toolbar; the TradeModification
+// rows cascade thanks to the schema relation.
+export async function DELETE(req: NextRequest) {
+  try {
+    const url = new URL(req.url)
+    const single = url.searchParams.get('id')
+    let ids: string[] = []
+    if (single) {
+      ids = [single]
+    } else {
+      const body = await req.json().catch(() => ({}))
+      if (Array.isArray(body?.ids)) ids = body.ids.filter((x: any) => typeof x === 'string')
+    }
+    if (ids.length === 0) {
+      return NextResponse.json({ error: 'Provide id query or ids[] body' }, { status: 400 })
+    }
+    const result = await db.trade.deleteMany({ where: { id: { in: ids } } })
+    return NextResponse.json({ ok: true, deleted: result.count })
+  } catch (err) {
+    console.error('Trade delete error:', err)
+    return NextResponse.json({ error: 'Failed to delete trade(s)' }, { status: 500 })
+  }
+}

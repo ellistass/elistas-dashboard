@@ -2,17 +2,22 @@
 // app/journal/page.tsx — Trade Journal (dark theme, free-form pair, account selector)
 
 import { useState, useEffect, useRef } from "react";
+import { EditTradeDrawer } from "@/app/_components/EditTradeDrawer";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Trade {
   id: string; date: string; pair: string; direction: string;
   model: string; grade: string; session: string;
-  entryPrice: number; slPrice: number; tpPrice: number;
+  entryPrice: number; slPrice: number; initialSlPrice: number | null; tpPrice: number;
   closePrice: number | null; resultR: number | null;
   outcome: string; reason: string; notes: string | null;
-  screenshotUrl: string | null; strongCcy: string; weakCcy: string;
+  preTradeNotes: string | null; postTradeNotes: string | null;
+  screenshotUrl: string | null; closeScreenshotUrl: string | null;
+  strongCcy: string; weakCcy: string;
   divScore: number | null; accountId: string | null;
+  ticket: number | null; profitCcy: number | null; closeTimeUtc: string | null;
+  riskPercent: number | null;
 }
 interface AccountOption { id: string; name: string; broker: string; status: string; }
 
@@ -89,6 +94,84 @@ export default function JournalPage() {
   const [form, setForm]           = useState({ ...emptyForm });
   const [closeInputs, setCloseInputs] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+  // Edit drawer + multi-select state. Selection survives across drawer open/close
+  // so you can pick a batch, edit one, save, and the rest stay checked.
+  const [editing, setEditing] = useState<Trade | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkErr, setBulkErr] = useState<string | null>(null);
+  const [bulkMode, setBulkMode] = useState<null | "edit" | "account">(null);
+  const [bulkForm, setBulkForm] = useState({ grade: "", model: "", tag: "" });
+  const [bulkAccountId, setBulkAccountId] = useState("");
+  const bulkFileRef = useRef<HTMLInputElement>(null);
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function clearSelection() { setSelectedIds(new Set()); }
+
+  // PATCH the same body across every selected trade. We don't have a real
+  // batch endpoint yet — Promise.all keeps the round-trips parallel.
+  async function patchAll(body: Record<string, any>) {
+    const ids = Array.from(selectedIds);
+    setBulkBusy(true); setBulkErr(null);
+    try {
+      await Promise.all(ids.map((id) =>
+        fetch("/api/trades", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, ...body }),
+        })
+      ));
+      await fetchTrades();
+    } catch (e: any) {
+      setBulkErr(e?.message ?? "bulk update failed");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkAttachScreenshot(file: File) {
+    setBulkBusy(true); setBulkErr(null);
+    try {
+      // Upload once to a synthetic key, then PATCH the URL onto every selected
+      // trade. /api/upload requires a tradeId for path uniqueness; we use the
+      // first selected id so the object lives somewhere predictable.
+      const firstId = Array.from(selectedIds)[0] ?? "bulk";
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("tradeId", firstId);
+      fd.append("phase", "entry");
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      const j = await res.json();
+      if (j.error || !j.url) { setBulkErr(j.error ?? "upload failed"); setBulkBusy(false); return; }
+      await patchAll({ screenshotUrl: j.url });
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkDelete() {
+    if (!confirm(`Delete ${selectedIds.size} trade${selectedIds.size > 1 ? "s" : ""}? This can't be undone.`)) return;
+    setBulkBusy(true); setBulkErr(null);
+    try {
+      const res = await fetch("/api/trades", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      const j = await res.json();
+      if (j.error) { setBulkErr(j.error); return; }
+      clearSelection();
+      await fetchTrades();
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   // Load alignment context from latest scores
   useEffect(() => {
@@ -399,13 +482,26 @@ export default function JournalPage() {
               ? trade.resultR > 0 ? "var(--green)" : trade.resultR < 0 ? "var(--red)" : "var(--text-3)"
               : "var(--text-3)";
 
+            const isSelected = selectedIds.has(trade.id);
             return (
               <div key={trade.id} className="card"
-                style={{ padding: "14px 18px", cursor: "pointer", transition: "border-color 0.1s" }}
+                style={{
+                  padding: "14px 18px", cursor: "pointer", transition: "border-color 0.1s",
+                  borderColor: isSelected ? "var(--blue-border)" : undefined,
+                  background: isSelected ? "var(--blue-dim)" : undefined,
+                }}
                 onClick={() => setExpanded(isExpanded ? null : trade.id)}>
                 {/* ── Trade row ── */}
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={() => toggleSelect(trade.id)}
+                      style={{ cursor: "pointer", width: 14, height: 14 }}
+                      title="Select for bulk action"
+                    />
                     <span className="font-mono" style={{ fontSize: 14, fontWeight: 700 }}>{trade.pair}</span>
                     <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, fontWeight: 600,
                       background: trade.direction === "Long" ? "var(--green-dim)" : "var(--red-dim)",
@@ -438,6 +534,17 @@ export default function JournalPage() {
                         </p>
                       </div>
                     )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setEditing(trade); }}
+                      style={{
+                        fontSize: 10, padding: "4px 10px", borderRadius: 6,
+                        background: "transparent", color: "var(--text-2)",
+                        border: "1px solid var(--border)", cursor: "pointer",
+                      }}
+                      title="Edit trade / fix R / attach screenshot"
+                    >
+                      Edit
+                    </button>
                     <span style={{ color: "var(--text-3)", fontSize: 14, transition: "transform 0.15s", transform: isExpanded ? "rotate(90deg)" : "none" }}>›</span>
                   </div>
                 </div>
@@ -511,6 +618,220 @@ export default function JournalPage() {
           })}
         </div>
       )}
+
+      {editing && (
+        <EditTradeDrawer
+          trade={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async () => { setEditing(null); await fetchTrades(); }}
+        />
+      )}
+
+      {/* Sticky bulk-action toolbar — only when ≥1 selected */}
+      {selectedIds.size > 0 && (
+        <div style={{
+          position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 60,
+          background: "var(--bg-card)", borderTop: "1px solid var(--border)",
+          padding: "10px 18px", display: "flex", alignItems: "center", gap: 10,
+          flexWrap: "wrap",
+        }}>
+          <span style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>
+            {selectedIds.size} selected
+          </span>
+          <button onClick={clearSelection} style={bulkBtn("ghost")}>Clear</button>
+
+          <span style={{ width: 1, height: 18, background: "var(--border)" }} />
+
+          <label style={{ ...bulkBtn("ghost"), cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? 0.6 : 1 }}>
+            Attach screenshot
+            <input
+              ref={bulkFileRef}
+              type="file" accept="image/*"
+              disabled={bulkBusy}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) bulkAttachScreenshot(f); }}
+              style={{ display: "none" }}
+            />
+          </label>
+
+          <button onClick={() => setBulkMode("edit")} disabled={bulkBusy} style={bulkBtn("ghost")}>
+            Edit fields
+          </button>
+          <button onClick={() => setBulkMode("account")} disabled={bulkBusy} style={bulkBtn("ghost")}>
+            Assign account
+          </button>
+
+          <button onClick={bulkDelete} disabled={bulkBusy} style={bulkBtn("danger")}>
+            Delete
+          </button>
+
+          {bulkErr && <span style={{ fontSize: 11, color: "var(--red)" }}>{bulkErr}</span>}
+          {bulkBusy && <span style={{ fontSize: 11, color: "var(--text-3)" }}>working…</span>}
+        </div>
+      )}
+
+      {/* Bulk edit popover — grade / model / add-tag (only sends fields you fill) */}
+      {bulkMode === "edit" && (
+        <div onClick={() => setBulkMode(null)} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 80,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            background: "var(--bg-card)", border: "1px solid var(--border)",
+            borderRadius: 10, padding: 18, width: "min(400px, 90vw)",
+          }}>
+            <p style={{ fontSize: 11, letterSpacing: "0.08em", color: "var(--text-3)", margin: "0 0 12px" }}>
+              EDIT {selectedIds.size} TRADE{selectedIds.size > 1 ? "S" : ""}
+            </p>
+            <p style={{ fontSize: 10, color: "var(--text-3)", margin: "0 0 12px" }}>
+              Leave blank to skip a field.
+            </p>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Grade</label>
+                <select
+                  value={bulkForm.grade}
+                  onChange={(e) => setBulkForm({ ...bulkForm, grade: e.target.value })}
+                  style={{ width: "100%", padding: "6px 10px", fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-1)" }}
+                >
+                  <option value="">— no change —</option>
+                  <option>A+</option><option>B</option><option>C</option><option>Skip</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Model</label>
+                <select
+                  value={bulkForm.model}
+                  onChange={(e) => setBulkForm({ ...bulkForm, model: e.target.value })}
+                  style={{ width: "100%", padding: "6px 10px", fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-1)" }}
+                >
+                  <option value="">— no change —</option>
+                  <option value="A">A — Wyckoff trap</option>
+                  <option value="B">B — Liquidity run</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Append tag</label>
+              <input
+                value={bulkForm.tag}
+                onChange={(e) => setBulkForm({ ...bulkForm, tag: e.target.value })}
+                placeholder="e.g. revenge, post-news, journal-cleanup"
+                style={{ width: "100%", padding: "6px 10px", fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-1)" }}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                disabled={bulkBusy}
+                onClick={async () => {
+                  const patch: Record<string, any> = {};
+                  if (bulkForm.grade) patch.grade = bulkForm.grade;
+                  if (bulkForm.model) patch.model = bulkForm.model;
+                  // Tag is appended per-row. For brevity here we just include it
+                  // in the same patch — the server's PATCH does {...updates}, so
+                  // sending `tags: [tag]` would REPLACE the array. We use a
+                  // dedicated tag-append loop instead.
+                  if (Object.keys(patch).length > 0) await patchAll(patch);
+                  if (bulkForm.tag.trim()) {
+                    setBulkBusy(true);
+                    try {
+                      // Per-row append: GET → push → PATCH. Acceptable for the
+                      // batch sizes we're dealing with (tens, not hundreds).
+                      const ids = Array.from(selectedIds);
+                      const current = trades.filter((t) => ids.includes(t.id));
+                      await Promise.all(current.map((t) =>
+                        fetch("/api/trades", {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ id: t.id, tags: Array.from(new Set([...((t as any).tags ?? []), bulkForm.tag.trim()])) }),
+                        })
+                      ));
+                      await fetchTrades();
+                    } finally { setBulkBusy(false); }
+                  }
+                  setBulkMode(null);
+                  setBulkForm({ grade: "", model: "", tag: "" });
+                }}
+                style={bulkBtn("primary")}
+              >
+                Apply to {selectedIds.size}
+              </button>
+              <button onClick={() => setBulkMode(null)} style={bulkBtn("ghost")}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk-assign account popover */}
+      {bulkMode === "account" && (
+        <div onClick={() => setBulkMode(null)} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 80,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            background: "var(--bg-card)", border: "1px solid var(--border)",
+            borderRadius: 10, padding: 18, width: "min(400px, 90vw)",
+          }}>
+            <p style={{ fontSize: 11, letterSpacing: "0.08em", color: "var(--text-3)", margin: "0 0 12px" }}>
+              ASSIGN {selectedIds.size} TRADE{selectedIds.size > 1 ? "S" : ""} TO ACCOUNT
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+              <button
+                onClick={() => setBulkAccountId("")}
+                style={{
+                  fontSize: 11, padding: "5px 10px", borderRadius: 6,
+                  border: `1px solid ${bulkAccountId === "" ? "var(--amber-border)" : "var(--border)"}`,
+                  background: bulkAccountId === "" ? "var(--amber-dim)" : "transparent",
+                  color: bulkAccountId === "" ? "var(--amber)" : "var(--text-2)",
+                  cursor: "pointer",
+                }}
+              >
+                Unlink (no account)
+              </button>
+              {accounts.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => setBulkAccountId(a.id)}
+                  style={{
+                    fontSize: 11, padding: "5px 10px", borderRadius: 6,
+                    border: `1px solid ${bulkAccountId === a.id ? "var(--blue-border)" : "var(--border)"}`,
+                    background: bulkAccountId === a.id ? "var(--blue-dim)" : "transparent",
+                    color: bulkAccountId === a.id ? "var(--blue)" : "var(--text-2)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {a.name} <span style={{ opacity: 0.6 }}>· {a.status}</span>
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                disabled={bulkBusy}
+                onClick={async () => {
+                  await patchAll({ accountId: bulkAccountId || null });
+                  setBulkMode(null);
+                  setBulkAccountId("");
+                }}
+                style={bulkBtn("primary")}
+              >
+                Apply
+              </button>
+              <button onClick={() => setBulkMode(null)} style={bulkBtn("ghost")}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function bulkBtn(variant: "primary" | "ghost" | "danger"): React.CSSProperties {
+  const base: React.CSSProperties = {
+    fontSize: 11, padding: "5px 12px", borderRadius: 6, cursor: "pointer",
+  };
+  if (variant === "primary") return { ...base, background: "var(--green)", color: "#001a14", border: "none", fontWeight: 500 };
+  if (variant === "danger")  return { ...base, background: "var(--red-dim)", color: "var(--red)", border: "1px solid var(--red-border)" };
+  return { ...base, background: "transparent", color: "var(--text-2)", border: "1px solid var(--border)" };
 }

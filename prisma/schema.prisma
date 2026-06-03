@@ -285,6 +285,18 @@ model IdeaOutcome {
   closePrice      Float?                                    // next-day close price for transparency
   notes           String?
 
+  // ── Watch tracking ────────────────────────────────────────────────────────
+  // Captured when the user clicks Watch (with the optional entry+SL dialog) so
+  // the dashboard can show live R-multiple progress on calls they didn't take.
+  // Lets us measure algorithm strength without risking real capital.
+  watchEntryPrice Float?                                    // the price they'd have entered at
+  watchSlPrice    Float?                                    // their last-swing-low SL anchor
+  watchStartedAt  DateTime?                                 // when watch was first armed
+  watchLastPrice  Float?                                    // most recent quoted price (cron-updated)
+  watchPeakR      Float?                                    // best R reached since watchStartedAt
+  watchTroughR    Float?                                    // worst R reached since watchStartedAt
+  watchLastSeenAt DateTime?                                 // last time the price was refreshed
+
   @@unique([alertDate, pair, direction, source])
   @@index([alertDate])
   @@index([outcome])

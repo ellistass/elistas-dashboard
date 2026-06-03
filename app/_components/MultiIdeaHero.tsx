@@ -141,11 +141,60 @@ function IdeaCard({
   onChanged?: () => void
   rank?: number
 }) {
-  const [open, setOpen] = useState<null | 'take' | 'skip'>(null)
-  const [accountId, setAccountId] = useState<string>(accounts[0]?.id ?? '')
+  const [open, setOpen] = useState<null | 'take' | 'skip' | 'watch'>(null)
+  const [watchEntry, setWatchEntry] = useState('')
+  const [watchSl, setWatchSl] = useState('')
+  // Multi-account selection. Default to the first active account so a single-click
+  // Take still works out of the box; the user can toggle in additional accounts
+  // when they want to mirror the idea across multiple props.
+  const [accountIds, setAccountIds] = useState<Set<string>>(
+    () => new Set(accounts[0]?.id ? [accounts[0].id] : []),
+  )
   const [riskPct, setRiskPct] = useState<string>('0.5')
   const [reason, setReason] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
+  const [screenshotUrl, setScreenshotUrl] = useState<string>('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadErr, setUploadErr] = useState<string | null>(null)
+
+  function toggleAccount(id: string) {
+    setAccountIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  function selectAllAccounts() {
+    setAccountIds(new Set(accounts.map((a) => a.id)))
+  }
+  function clearAccounts() {
+    setAccountIds(new Set())
+  }
+
+  async function pickScreenshot(file: File) {
+    setUploadErr(null)
+    setUploading(true)
+    try {
+      // The /api/upload endpoint requires a tradeId, but we don't have one yet
+      // (the trade row is created inside /api/ideas/take). Use a synthetic key
+      // tied to the alertDate+pair so the file lands in a predictable bucket;
+      // each created trade's screenshotUrl points to this same object.
+      const stamp = (alertDate ?? new Date().toISOString().slice(0, 10)).replace(/[^0-9-]/g, '')
+      const synthId = `idea-${stamp}-${idea.pair.replace('/', '')}-${idea.direction}`
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('tradeId', synthId)
+      fd.append('phase', 'entry')
+      const res = await fetch('/api/upload', { method: 'POST', body: fd })
+      const j = await res.json()
+      if (j.error) { setUploadErr(j.error); return }
+      setScreenshotUrl(j.url)
+    } catch (e: any) {
+      setUploadErr(e?.message ?? 'upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
 
   // Each idea may carry its own source (Claude vs user-discretionary). Fall back to prop.
   const effectiveSource = (idea.source ?? source) as 'claude' | 'user-discretionary'
@@ -163,11 +212,17 @@ function IdeaCard({
     return { bg: 'var(--bg-elevated)', fg: 'var(--text-2)' }
   }, [idea.grade])
 
-  const account = accounts.find((a) => a.id === accountId)
-  const riskDollars = account ? Math.round((parseFloat(riskPct || '0') / 100) * account.currentBalance) : 0
+  // Aggregate risk preview across every selected account — so when the user
+  // mirrors a setup across three props, they see the combined $ exposure
+  // before confirming, not just one account's share.
+  const selectedAccounts = accounts.filter((a) => accountIds.has(a.id))
+  const totalRiskDollars = selectedAccounts.reduce(
+    (sum, a) => sum + Math.round((parseFloat(riskPct || '0') / 100) * a.currentBalance),
+    0,
+  )
 
   async function doTake() {
-    if (!accountId) return
+    if (accountIds.size === 0) return
     setSubmitting(true)
     try {
       await fetch('/api/ideas/take', {
@@ -177,7 +232,11 @@ function IdeaCard({
           strong: idea.strong, weak: idea.weak, grade: idea.grade,
           divergence: idea.divergence,
           session: idea.session, reason: idea.reason,
-          accountId, riskPct: parseFloat(riskPct), source: effectiveSource, alertDate,
+          accountIds: Array.from(accountIds),
+          riskPct: parseFloat(riskPct),
+          source: effectiveSource,
+          alertDate,
+          screenshotUrl: screenshotUrl || undefined,
         }),
       })
       setOpen(null)
@@ -185,17 +244,28 @@ function IdeaCard({
     } finally { setSubmitting(false) }
   }
 
-  async function doWatch() {
+  // Watch can be one-click (no anchor) or armed with an entry + swing-low SL so
+  // we can track algorithm strength against the call you didn't take. The
+  // anchor is optional — if the user just wants to flag "I'm watching this"
+  // without inputting prices, that still works.
+  async function doWatch(withAnchor: boolean) {
     setSubmitting(true)
     try {
+      const entry = withAnchor ? parseFloat(watchEntry) : NaN
+      const sl    = withAnchor ? parseFloat(watchSl)    : NaN
       await fetch('/api/ideas/watch', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pair: idea.pair, direction: idea.direction,
           grade: idea.grade, strong: idea.strong, weak: idea.weak,
           divergence: idea.divergence, source: effectiveSource, alertDate,
+          ...(Number.isFinite(entry) && Number.isFinite(sl) && entry !== sl && {
+            watchEntryPrice: entry, watchSlPrice: sl,
+          }),
         }),
       })
+      setOpen(null)
+      setWatchEntry(''); setWatchSl('')
       onChanged?.()
     } finally { setSubmitting(false) }
   }
@@ -292,7 +362,7 @@ function IdeaCard({
           <button onClick={() => setOpen('take')} disabled={submitting} style={btnStyle(taken ? 'taken' : 'primary', isHero)}>
             {taken ? 'Taken' : 'Take'}
           </button>
-          <button onClick={doWatch} disabled={submitting || watched} style={btnStyle(watched ? 'watching' : 'ghost', isHero)}>
+          <button onClick={() => setOpen(open === 'watch' ? null : 'watch')} disabled={submitting} style={btnStyle(watched ? 'watching' : 'ghost', isHero)}>
             {watched ? 'Watching' : 'Watch'}
           </button>
           <button onClick={() => setOpen('skip')} disabled={submitting} style={btnStyle(invalidated ? 'skipped' : 'danger', isHero)}>
@@ -301,31 +371,145 @@ function IdeaCard({
         </div>
       )}
 
-      {/* Take flow — account picker + risk preview */}
+      {/* Take flow — multi-account picker + risk preview + screenshot */}
       {open === 'take' && (
         <div style={{ marginTop: 6, padding: 8, background: 'var(--bg-card-2)', borderRadius: 6, border: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            <select value={accountId} onChange={(e) => setAccountId(e.target.value)}
-                    style={{ flex: '1 1 140px', minWidth: 0, padding: '5px 8px', fontSize: 11 }}>
-              {accounts.length === 0 && <option value="">No accounts</option>}
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.name} · {a.status}</option>
-              ))}
-            </select>
-            <input value={riskPct} onChange={(e) => setRiskPct(e.target.value)} placeholder="risk%"
-                   style={{ width: 56, padding: '5px 8px', fontSize: 11, textAlign: 'center' }} />
-            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>%</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
+              Accounts to take this on ({accountIds.size}/{accounts.length})
+            </span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button type="button" onClick={selectAllAccounts}
+                      style={{ fontSize: 9, padding: '2px 6px', border: '1px solid var(--border)', borderRadius: 4, background: 'transparent', color: 'var(--text-3)', cursor: 'pointer' }}>
+                All
+              </button>
+              <button type="button" onClick={clearAccounts}
+                      style={{ fontSize: 9, padding: '2px 6px', border: '1px solid var(--border)', borderRadius: 4, background: 'transparent', color: 'var(--text-3)', cursor: 'pointer' }}>
+                None
+              </button>
+            </div>
           </div>
-          {account && (
-            <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
-              {riskPct}% on {account.name} = ${riskDollars.toLocaleString()} at risk
+
+          {accounts.length === 0 ? (
+            <div style={{ fontSize: 10, color: 'var(--text-3)', padding: '6px 0' }}>No accounts available.</div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+              {accounts.map((a) => {
+                const on = accountIds.has(a.id)
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => toggleAccount(a.id)}
+                    style={{
+                      fontSize: 10, padding: '3px 8px', borderRadius: 999,
+                      border: `1px solid ${on ? 'var(--green-border)' : 'var(--border)'}`,
+                      background: on ? 'var(--green-dim)' : 'transparent',
+                      color: on ? 'var(--green)' : 'var(--text-2)',
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {on ? '✓ ' : ''}{a.name} · {a.status}
+                  </button>
+                )
+              })}
             </div>
           )}
-          <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
-            <button onClick={doTake} disabled={submitting || !accountId} style={btnStyle('primary', false)}>
-              {submitting ? '…' : 'Confirm take →'}
+
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Risk</span>
+            <input value={riskPct} onChange={(e) => setRiskPct(e.target.value)} placeholder="risk%"
+                   style={{ width: 56, padding: '5px 8px', fontSize: 11, textAlign: 'center' }} />
+            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>% per account</span>
+          </div>
+
+          {selectedAccounts.length > 0 && (
+            <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
+              {riskPct}% on {selectedAccounts.length === 1
+                ? selectedAccounts[0].name
+                : `${selectedAccounts.length} accounts`} = ${totalRiskDollars.toLocaleString()} total at risk
+            </div>
+          )}
+
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <label style={{
+              fontSize: 10, padding: '4px 8px', borderRadius: 6, cursor: uploading ? 'wait' : 'pointer',
+              border: '1px solid var(--border)', color: 'var(--text-2)', background: 'transparent',
+              opacity: uploading ? 0.6 : 1,
+            }}>
+              {screenshotUrl ? 'Replace screenshot' : 'Attach screenshot'}
+              <input
+                type="file" accept="image/*"
+                disabled={uploading}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) pickScreenshot(f) }}
+                style={{ display: 'none' }}
+              />
+            </label>
+            {uploading && <span style={{ fontSize: 10, color: 'var(--text-3)' }}>uploading…</span>}
+            {screenshotUrl && !uploading && (
+              <a href={screenshotUrl} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: 'var(--blue)' }}>
+                preview
+              </a>
+            )}
+            {uploadErr && <span style={{ fontSize: 10, color: 'var(--red)' }}>{uploadErr}</span>}
+          </div>
+
+          <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+            <button onClick={doTake} disabled={submitting || accountIds.size === 0} style={btnStyle('primary', false)}>
+              {submitting ? '…' : `Confirm take${accountIds.size > 1 ? ` × ${accountIds.size}` : ''} →`}
             </button>
             <button onClick={() => setOpen(null)} disabled={submitting} style={btnStyle('ghost', false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Watch flow — optional entry + swing-low SL anchor for algorithm-strength tracking */}
+      {open === 'watch' && (
+        <div style={{ marginTop: 6, padding: 8, background: 'var(--bg-card-2)', borderRadius: 6, border: '1px solid var(--blue-border)' }}>
+          <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 6, lineHeight: 1.4 }}>
+            Optional: anchor this watch so we can show live R-multiple progress.
+            Leave blank for a plain watch.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 9, color: 'var(--text-3)', marginBottom: 2 }}>Entry price</label>
+              <input
+                value={watchEntry}
+                onChange={(e) => setWatchEntry(e.target.value)}
+                placeholder="1.23456"
+                style={{ width: '100%', padding: '5px 8px', fontSize: 11, fontFamily: 'monospace' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 9, color: 'var(--text-3)', marginBottom: 2 }}>Swing-low SL</label>
+              <input
+                value={watchSl}
+                onChange={(e) => setWatchSl(e.target.value)}
+                placeholder="1.22800"
+                style={{ width: '100%', padding: '5px 8px', fontSize: 11, fontFamily: 'monospace' }}
+              />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button
+              onClick={() => doWatch(true)}
+              disabled={submitting || !watchEntry || !watchSl}
+              style={btnStyle('primary', false)}
+              title="Arm watch with the anchor — algorithm-strength tracking enabled"
+            >
+              {submitting ? '…' : 'Arm with anchor'}
+            </button>
+            <button
+              onClick={() => doWatch(false)}
+              disabled={submitting}
+              style={btnStyle('ghost', false)}
+              title="Just flag as watching, no live tracking"
+            >
+              Just watch
+            </button>
+            <button onClick={() => setOpen(null)} disabled={submitting} style={btnStyle('ghost', false)}>
+              Cancel
+            </button>
           </div>
         </div>
       )}
