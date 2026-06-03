@@ -93,6 +93,7 @@ export async function GET(
         status: account.status,
         startingBalance: account.startingBalance,
         currentBalance: account.currentBalance,
+        eaSyncMode: (account as any).eaSyncMode ?? 'full',
       },
       stats: {
         totalTrades: trades.length,

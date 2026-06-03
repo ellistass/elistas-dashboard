@@ -89,14 +89,26 @@ int OnInit()
 
    int serverHighest = -1;
    int openServer[];  ArrayResize(openServer, 0);
-   bool serverOk = FetchServerState(serverHighest, openServer);
+   string syncMode = "full";  // default if server fetch fails
+   bool serverOk = FetchServerState(serverHighest, openServer, syncMode);
+
+   // === Mode gate ===
+   // The dashboard's per-account toggle decides what the EA actually does.
+   // We honor it here so the user can flip between full sync / realtime-only
+   // / off without recompiling — just reload the chart.
+   if(syncMode == "off")
+   {
+      Print("[ElistasJournal] syncMode=off — EA is paused for this account. No catchup, no polling. Change the toggle on the dashboard and reload the chart to re-enable.");
+      return(INIT_SUCCEEDED);    // No timer started — OnTimer never fires.
+   }
 
    int sinceTicket;
    if(serverOk)
    {
       sinceTicket = serverHighest;
       GlobalVariableSet(cacheKey, (double)serverHighest);
-      Print("[ElistasJournal] Server state: highestTicket=", serverHighest, ", openCount=", ArraySize(openServer));
+      Print("[ElistasJournal] Server state: syncMode=", syncMode,
+            ", highestTicket=", serverHighest, ", openCount=", ArraySize(openServer));
    }
    else if(GlobalVariableCheck(cacheKey))
    {
@@ -109,15 +121,24 @@ int OnInit()
       Print("[ElistasJournal] Server fetch failed AND no cache — sweeping everything.");
    }
 
-   // History catchup — incremental from the server's high-water mark.
-   int newMaxTicket = SweepHistoryCatchupSince(sinceTicket);
-   if(newMaxTicket > sinceTicket)
-      GlobalVariableSet(cacheKey, (double)newMaxTicket);
+   // History catchup — skipped in realtime-only mode because the user is
+   // authoritative on history via broker CSV import. Realtime events still
+   // flow through OnTimer below.
+   if(syncMode == "full")
+   {
+      int newMaxTicket = SweepHistoryCatchupSince(sinceTicket);
+      if(newMaxTicket > sinceTicket)
+         GlobalVariableSet(cacheKey, (double)newMaxTicket);
+   }
+   else
+   {
+      Print("[ElistasJournal] syncMode=realtime-only — skipping history catchup. Live opens / modifies / closes still post.");
+   }
 
    // Open-trade reconciliation: any ticket open in MT4 right now that the
-   // server doesn't have as Open gets a fresh open event POSTed. Catches the
-   // "trade fired while EA was off" case that catchup misses (those trades
-   // aren't in history yet).
+   // server doesn't have as Open gets a fresh open event POSTed. Useful in
+   // realtime-only too — it's how the server learns about positions opened
+   // before the EA was attached.
    if(serverOk) ReconcileOpensAgainstServer(openServer);
 
    EventSetMillisecondTimer(PollMillis);
@@ -135,7 +156,7 @@ int OnInit()
 //| malformed body) returns false and the caller falls back to the   |
 //| local cache.                                                     |
 //+------------------------------------------------------------------+
-bool FetchServerState(int &highestTicket, int &openTickets[])
+bool FetchServerState(int &highestTicket, int &openTickets[], string &syncMode)
 {
    string url     = ApiBase + "/api/trades/mt4/state";
    string headers = "Authorization: Bearer " + ApiKey + "\r\n";
@@ -155,6 +176,12 @@ bool FetchServerState(int &highestTicket, int &openTickets[])
 
    // highestTicket — find the key, then the colon, then read digits.
    highestTicket = ParseJsonInt(body, "highestTicket");
+
+   // syncMode — dashboard controls EA behavior remotely. Defaults to "full"
+   // if missing from the response (older server build) so the EA stays
+   // backwards-compatible.
+   syncMode = ParseJsonString(body, "syncMode");
+   if(StringLen(syncMode) == 0) syncMode = "full";
 
    // openTickets — extract whatever's between [ and ] after "openTickets":[
    ArrayResize(openTickets, 0);
@@ -181,6 +208,21 @@ bool FetchServerState(int &highestTicket, int &openTickets[])
    }
 
    return(true);
+}
+
+// Pull the quoted string that follows a JSON key. Returns "" if missing.
+string ParseJsonString(string body, string key)
+{
+   string needle = "\"" + key + "\"";
+   int idx = StringFind(body, needle);
+   if(idx < 0) return("");
+   int colon = StringFind(body, ":", idx + StringLen(needle));
+   if(colon < 0) return("");
+   int q1 = StringFind(body, "\"", colon + 1);
+   if(q1 < 0) return("");
+   int q2 = StringFind(body, "\"", q1 + 1);
+   if(q2 < 0) return("");
+   return(StringSubstr(body, q1 + 1, q2 - q1 - 1));
 }
 
 // Pull the integer that follows a JSON key from a flat response. Good enough

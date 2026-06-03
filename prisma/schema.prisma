@@ -33,6 +33,13 @@ model Account {
   apiKey                  String?   @unique               // bearer token the EA sends on every request
   lastSyncedAt            DateTime?                       // last time the EA POSTed anything for this account
   currentEquity           Float?                          // live equity from MT4 (balance + floating P&L); MT4 EA writes this on every trade event
+  // Controls what the EA does when it's attached to a chart on this account.
+  // The EA reads this from /api/trades/mt4/state on OnInit and respects it:
+  //   • "full"          — history catchup + realtime opens/modifies/closes (default)
+  //   • "realtime-only" — skip catchup; realtime events still flow. Use once
+  //                       you're authoritative on history via broker CSV.
+  //   • "off"           — EA detaches itself: no catchup, no polling.
+  eaSyncMode              String    @default("full")
   trades                  Trade[]
 }
 

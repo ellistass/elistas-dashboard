@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
     accountId: account.id,
     accountName: account.name,
     mt4AccountNumber: account.mt4AccountNumber,
+    syncMode: (account as any).eaSyncMode ?? 'full',  // EA reads this and gates catchup/polling
     highestTicket,
     openTickets,
   })

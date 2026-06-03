@@ -430,6 +430,32 @@ export default function AccountHistoryPage() {
             ElistasJournal EA. Rotating immediately invalidates the previous key —
             the EA stops posting until you update its input parameter.
           </p>
+
+          {/* Sync-mode toggle — controls what the EA does for this account.
+              EA reads /api/trades/mt4/state on OnInit, so any change requires
+              a chart reload (right-click chart → Expert Advisors → Properties
+              → OK) to take effect. */}
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border-subtle)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--text-3)" }}>
+                EA SYNC MODE
+              </span>
+              <span style={{ fontSize: 10, color: "var(--text-3)" }}>
+                requires chart reload after change
+              </span>
+            </div>
+            <SyncModeToggle
+              value={(account as any).eaSyncMode ?? "full"}
+              onChange={async (next) => {
+                await fetch(`/api/accounts/${account.id}/sync-mode`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ syncMode: next }),
+                });
+                await refreshHistory();
+              }}
+            />
+          </div>
         </div>
       )}
 
@@ -720,6 +746,48 @@ function Td({ children, right, mono, color }: { children: React.ReactNode; right
     color: color ?? "var(--text-2)",
   }}>{children}</td>;
 }
+// Three-segment toggle for the EA sync mode. Persists via PATCH; reflects
+// whatever the server returned via /history.
+function SyncModeToggle({
+  value, onChange,
+}: { value: string; onChange: (next: string) => void | Promise<void> }) {
+  const options: { val: string; label: string; hint: string }[] = [
+    { val: "full",          label: "Full",          hint: "History catchup + realtime opens/modifies/closes" },
+    { val: "realtime-only", label: "Realtime only", hint: "No catchup. Live opens/modifies/closes still post. Pair with broker CSV import." },
+    { val: "off",           label: "Off",           hint: "EA stays attached but does nothing. Account is paused." },
+  ];
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {options.map((o) => {
+        const on = value === o.val;
+        return (
+          <button
+            key={o.val}
+            onClick={() => !on && onChange(o.val)}
+            title={o.hint}
+            style={{
+              fontSize: 11, padding: "5px 12px", borderRadius: 6,
+              border: `1px solid ${on
+                ? (o.val === "off" ? "var(--red-border)" : "var(--green-border)")
+                : "var(--border)"}`,
+              background: on
+                ? (o.val === "off" ? "var(--red-dim)" : "var(--green-dim)")
+                : "transparent",
+              color: on
+                ? (o.val === "off" ? "var(--red)" : "var(--green)")
+                : "var(--text-2)",
+              cursor: on ? "default" : "pointer",
+              fontWeight: on ? 600 : 400,
+            }}
+          >
+            {on ? "● " : ""}{o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function openRowBtn(variant: "ghost" | "danger"): React.CSSProperties {
   const base: React.CSSProperties = {
     fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
