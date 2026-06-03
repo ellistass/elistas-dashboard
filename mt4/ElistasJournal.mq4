@@ -59,53 +59,180 @@ int OnInit()
    // Build the initial "known open tickets" snapshot from current open orders
    RebuildOpenSnapshot();
 
-   // OnInit fires every time the user changes timeframe, swaps symbol, or
-   // tweaks an input. The catchup sweep is synchronous and hangs the chart
-   // every time. So we persist two markers per account in GlobalVariables:
-   //   • lastHistoryCount   — OrdersHistoryTotal() at the moment of last sweep
-   //   • lastHighestTicket  — the largest ticket number we've POSTed so far
+   // === Source-of-truth watermark ===
+   // The server is authoritative about "what trades I already have". On every
+   // OnInit we ask /api/trades/mt4/state for:
+   //   • highestTicket  — max(ticket) the DB has for this account
+   //   • openTickets[]  — tickets the DB still has as outcome=Open
    //
-   // On re-init:
-   //   • If the history count hasn't changed → no new trades closed → skip.
-   //   • If it has changed → sweep, but skip rows whose ticket is ≤ the
-   //     remembered max. Picks up exactly where we left off, no re-POSTing.
+   // We use highestTicket as the sinceTicket watermark for SweepHistoryCatchup
+   // — anything > that needs posting; anything ≤ is already in the DB.
    //
-   // Ticket numbers are monotonic per broker, so this is robust even if the
-   // user changes the Account History tab's date range (rows reorder by
-   // position but ticket IDs stay stable).
-   string countKey  = "ElistasJournal_HistCount_" + IntegerToString(AccountNumber());
-   string ticketKey = "ElistasJournal_MaxTicket_" + IntegerToString(AccountNumber());
+   // Why this beats a local GlobalVariable: when the user wipes data on the
+   // dashboard (Danger zone → "Wipe all EA-synced data"), the server's
+   // highestTicket drops to 0, so the next EA init re-posts everything
+   // automatically. No more stale local marker blocking resync. No more
+   // ForceFullResweep dance.
+   //
+   // We fall back to a GlobalVariable cache only if the fetch fails — keeps
+   // the EA usable offline.
+   string cacheKey = "ElistasJournal_LastSeenTicket_" + IntegerToString(AccountNumber());
 
-   // Force-resweep mechanism: user flips the input, we wipe the memory once
-   // and proceed as a fresh install.
    if(ForceFullResweep)
    {
-      if(GlobalVariableCheck(countKey))  GlobalVariableDel(countKey);
-      if(GlobalVariableCheck(ticketKey)) GlobalVariableDel(ticketKey);
-      Print("[ElistasJournal] ForceFullResweep=true — catchup memory cleared. Set the input back to false after this run.");
+      // Manual escape hatch — overrides the fetch and forces sinceTicket=0.
+      // Set this true ONLY if the server is up but you want to deliberately
+      // re-post everything (e.g. debugging).
+      if(GlobalVariableCheck(cacheKey)) GlobalVariableDel(cacheKey);
+      Print("[ElistasJournal] ForceFullResweep=true — local cache cleared and fetching fresh server state.");
    }
 
-   int lastCount  = GlobalVariableCheck(countKey)  ? (int)GlobalVariableGet(countKey)  : 0;
-   int lastTicket = GlobalVariableCheck(ticketKey) ? (int)GlobalVariableGet(ticketKey) : 0;
-   int currCount  = OrdersHistoryTotal();
+   int serverHighest = -1;
+   int openServer[];  ArrayResize(openServer, 0);
+   bool serverOk = FetchServerState(serverHighest, openServer);
 
-   if(lastCount > 0 && currCount == lastCount)
+   int sinceTicket;
+   if(serverOk)
    {
-      Print("[ElistasJournal] Skipping catchup — history unchanged (", currCount,
-            " rows, max ticket ", lastTicket, "). Realtime polling is active.");
+      sinceTicket = serverHighest;
+      GlobalVariableSet(cacheKey, (double)serverHighest);
+      Print("[ElistasJournal] Server state: highestTicket=", serverHighest, ", openCount=", ArraySize(openServer));
+   }
+   else if(GlobalVariableCheck(cacheKey))
+   {
+      sinceTicket = (int)GlobalVariableGet(cacheKey);
+      Print("[ElistasJournal] Server fetch failed — using cached watermark ticket #", sinceTicket);
    }
    else
    {
-      int newMaxTicket = SweepHistoryCatchupSince(lastTicket);
-      GlobalVariableSet(countKey,  (double)currCount);
-      // Only advance the ticket marker if we actually saw a higher one — protects
-      // against an aborted sweep accidentally regressing the watermark.
-      if(newMaxTicket > lastTicket)
-         GlobalVariableSet(ticketKey, (double)newMaxTicket);
+      sinceTicket = 0;
+      Print("[ElistasJournal] Server fetch failed AND no cache — sweeping everything.");
    }
+
+   // History catchup — incremental from the server's high-water mark.
+   int newMaxTicket = SweepHistoryCatchupSince(sinceTicket);
+   if(newMaxTicket > sinceTicket)
+      GlobalVariableSet(cacheKey, (double)newMaxTicket);
+
+   // Open-trade reconciliation: any ticket open in MT4 right now that the
+   // server doesn't have as Open gets a fresh open event POSTed. Catches the
+   // "trade fired while EA was off" case that catchup misses (those trades
+   // aren't in history yet).
+   if(serverOk) ReconcileOpensAgainstServer(openServer);
 
    EventSetMillisecondTimer(PollMillis);
    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Fetch authoritative state from the dashboard                      |
+//|                                                                  |
+//| GETs /api/trades/mt4/state and parses two fields from the JSON:  |
+//|   • highestTicket — used as sinceTicket for the catchup sweep    |
+//|   • openTickets   — list of tickets the server thinks are open   |
+//|                                                                  |
+//| Returns true on success. On any failure (network down, 401,      |
+//| malformed body) returns false and the caller falls back to the   |
+//| local cache.                                                     |
+//+------------------------------------------------------------------+
+bool FetchServerState(int &highestTicket, int &openTickets[])
+{
+   string url     = ApiBase + "/api/trades/mt4/state";
+   string headers = "Authorization: Bearer " + ApiKey + "\r\n";
+   uchar  emptyBody[];
+   char   result[];
+   string resultHeaders;
+
+   ResetLastError();
+   int code = WebRequest("GET", url, headers, 5000, emptyBody, result, resultHeaders);
+   if(code != 200)
+   {
+      Print("[ElistasJournal] /state fetch failed — code=", code, " err=", GetLastError());
+      return(false);
+   }
+
+   string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+
+   // highestTicket — find the key, then the colon, then read digits.
+   highestTicket = ParseJsonInt(body, "highestTicket");
+
+   // openTickets — extract whatever's between [ and ] after "openTickets":[
+   ArrayResize(openTickets, 0);
+   int arrStart = StringFind(body, "\"openTickets\"");
+   if(arrStart >= 0)
+   {
+      int lb = StringFind(body, "[", arrStart);
+      int rb = (lb >= 0) ? StringFind(body, "]", lb) : -1;
+      if(lb >= 0 && rb > lb)
+      {
+         string inside = StringSubstr(body, lb + 1, rb - lb - 1);
+         // Split on commas. Each element is a bare integer (no quotes).
+         string parts[];
+         int n = StringSplit(inside, ',', parts);
+         for(int i = 0; i < n; i++)
+         {
+            string trimmed = parts[i];
+            StringTrimLeft(trimmed); StringTrimRight(trimmed);
+            if(StringLen(trimmed) == 0) continue;
+            int tkt = (int)StringToInteger(trimmed);
+            if(tkt > 0) AppendInt(openTickets, tkt);
+         }
+      }
+   }
+
+   return(true);
+}
+
+// Pull the integer that follows a JSON key from a flat response. Good enough
+// for the shape /api/trades/mt4/state emits — no nested objects to worry about.
+int ParseJsonInt(string body, string key)
+{
+   string needle = "\"" + key + "\"";
+   int idx = StringFind(body, needle);
+   if(idx < 0) return(0);
+   int colon = StringFind(body, ":", idx + StringLen(needle));
+   if(colon < 0) return(0);
+   int len = StringLen(body);
+   string num = "";
+   bool started = false;
+   for(int i = colon + 1; i < len; i++)
+   {
+      ushort c = StringGetCharacter(body, i);
+      if(!started && (c == ' ' || c == '\t')) continue;
+      if((c >= '0' && c <= '9') || (c == '-' && !started))
+      {
+         num = num + ShortToString(c);
+         started = true;
+      }
+      else if(started)
+      {
+         break;
+      }
+   }
+   if(StringLen(num) == 0) return(0);
+   return((int)StringToInteger(num));
+}
+
+//+------------------------------------------------------------------+
+//| For each open ticket in MT4 that the server doesn't know is open,|
+//| POST a fresh open event. Covers "trade fired while EA was off".  |
+//+------------------------------------------------------------------+
+void ReconcileOpensAgainstServer(const int &openTicketsOnServer[])
+{
+   int posted = 0;
+   int total = OrdersTotal();
+   for(int i = 0; i < total; i++)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      int type = OrderType();
+      if(type != OP_BUY && type != OP_SELL) continue;
+      int ticket = OrderTicket();
+      if(ContainsInt(openTicketsOnServer, ticket)) continue;
+
+      PostOpenEvent(ticket, "reconcile");
+      posted++;
+   }
+   if(posted > 0) Print("[ElistasJournal] Reconcile — posted ", posted, " open events the server was missing.");
 }
 
 void OnDeinit(const int reason)
