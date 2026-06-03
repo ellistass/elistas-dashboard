@@ -45,6 +45,7 @@ export async function GET() {
         forexPerfPairCount:     forexPerfPairs.length,
         forexSurprisePairCount: forexSurprisePairs.length,
         futuresContractCount:   futuresPairs.length,
+        sectorCount:            ((barchart as any).sectors ?? []).length,
         calendarEventCount:     calEvents.length,
         centralBankRateCount:   centralBankRates.length,
       },
@@ -64,6 +65,13 @@ export async function GET() {
       futures: futuresPairs.map((r) => ({
         symbol:        r.name || r.symbol,
         percentChange: r.percentChange,
+      })),
+      // S&P 500 sectors via barchart-sync's homepage scrape. Already on the
+      // snapshot — just hadn't been surfaced through the API.
+      sectors: ((barchart as any).sectors ?? []).map((s: any) => ({
+        sector:        s.sector,
+        symbol:        s.symbol ?? null,
+        percentChange: s.percentChange,
       })),
       economicCalendar: calEvents,
       centralBankRates,
