@@ -33,6 +33,14 @@ interface AnalyticsResponse {
   heatmap: Array<{ session: string; watHour: number; totalR: number; tradeCount: number }>
   byGrade: Record<string, { wins: number; count: number; totalR: number }>
   byModel: Record<string, { wins: number; count: number; totalR: number }>
+  byPhase?: Record<string, { wins: number; losses: number; be: number; count: number; totalR: number; totalPnL: number }>
+  byModelByPhase?: Record<string, { A: { wins: number; count: number; totalR: number }; B: { wins: number; count: number; totalR: number } }>
+  strategyFilter?: {
+    includePreStrategy: boolean
+    preStrategyOnly: boolean
+    tradesAfterFilter: number
+    tradesBeforeFilter: number
+  }
   equityCurve: Array<{ date: string; real: number; disciplined: number }>
   ideas: {
     aplusSurfaced: number
@@ -60,12 +68,18 @@ const RULE_LABELS: Record<string, string> = {
   'risk-over-1pct': 'Risk above 1%',
 }
 
+type StrategyView = 'strategy' | 'all' | 'pre-strategy'
+
 export default function AnalyticsPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [accountId, setAccountId] = useState<string | 'all'>('all')
   const [days, setDays] = useState(30)
   const [data, setData] = useState<AnalyticsResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  // Strategy view defaults to 'strategy' — pre-strategy trades excluded.
+  // User can switch to 'all' for full account history, or 'pre-strategy'
+  // for an audit of the noise they imported but don't normally count.
+  const [strategyView, setStrategyView] = useState<StrategyView>('strategy')
 
   useEffect(() => {
     fetch('/api/accounts').then(r => r.json()).then(d => setAccounts(d.accounts ?? d ?? []))
@@ -75,8 +89,10 @@ export default function AnalyticsPage() {
     setLoading(true)
     const params = new URLSearchParams({ days: String(days) })
     if (accountId !== 'all') params.set('accountId', accountId)
+    if (strategyView === 'all')          params.set('includePreStrategy', 'true')
+    if (strategyView === 'pre-strategy') params.set('preStrategyOnly', 'true')
     fetch(`/api/analytics?${params}`).then(r => r.json()).then(d => { setData(d); setLoading(false) })
-  }, [accountId, days])
+  }, [accountId, days, strategyView])
 
   const heatmapGrid = useMemo(() => buildHeatmapGrid(data?.heatmap ?? []), [data])
 
@@ -93,12 +109,24 @@ export default function AnalyticsPage() {
               RFDM performance — last {days} days · {data.kpi.tradesClosed} closed trades
             </p>
           </div>
-          <select value={days} onChange={e => setDays(parseInt(e.target.value))} style={{ padding: '6px 10px' }}>
-            <option value={7}>Last 7 days</option>
-            <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
-            <option value={365}>Last year</option>
-          </select>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <select
+              value={strategyView}
+              onChange={e => setStrategyView(e.target.value as StrategyView)}
+              style={{ padding: '6px 10px' }}
+              title="Filter which trades count toward stats"
+            >
+              <option value="strategy">Strategy trades only</option>
+              <option value="all">All-time (incl. pre-strategy)</option>
+              <option value="pre-strategy">Pre-strategy only</option>
+            </select>
+            <select value={days} onChange={e => setDays(parseInt(e.target.value))} style={{ padding: '6px 10px' }}>
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+              <option value={365}>Last year</option>
+            </select>
+          </div>
         </div>
 
         {/* Account tab strip */}
@@ -262,7 +290,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Model A vs B / Rules followed vs broken */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
         <div className="card">
           <div className="section-label" style={{ marginTop: 0 }}>Model A vs B</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -278,8 +306,97 @@ export default function AnalyticsPage() {
           </div>
         </div>
       </div>
+
+      {/* By phase + Model × Phase cross-tab — only when present */}
+      {data.byPhase && data.byModelByPhase && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div className="card">
+            <div className="section-label" style={{ marginTop: 0 }}>By account phase</div>
+            <PhaseTable byPhase={data.byPhase} />
+          </div>
+          <div className="card">
+            <div className="section-label" style={{ marginTop: 0 }}>Model × Phase</div>
+            <ModelPhaseMatrix byModelByPhase={data.byModelByPhase} />
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+function PhaseTable({ byPhase }: { byPhase: NonNullable<AnalyticsResponse['byPhase']> }) {
+  const order = ['Phase1', 'Phase2', 'Funded', 'Unphased']
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <thead>
+        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+          <Th>Phase</Th><Th right>Trades</Th><Th right>Win %</Th><Th right>Total R</Th><Th right>Total $</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {order.map((p) => {
+          const b = byPhase[p]
+          if (!b || b.count === 0) return null
+          const winRate = b.wins + b.losses > 0 ? (b.wins / (b.wins + b.losses)) * 100 : 0
+          const color = b.totalR > 0 ? 'var(--green)' : b.totalR < 0 ? 'var(--red)' : 'var(--text-2)'
+          return (
+            <tr key={p} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              <Td>{p}</Td>
+              <Td right mono>{b.count}</Td>
+              <Td right mono>{winRate.toFixed(1)}%</Td>
+              <Td right mono color={color}>{b.totalR >= 0 ? '+' : ''}{b.totalR.toFixed(2)}R</Td>
+              <Td right mono color={color}>${b.totalPnL.toFixed(2)}</Td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}
+
+function ModelPhaseMatrix({ byModelByPhase }: { byModelByPhase: NonNullable<AnalyticsResponse['byModelByPhase']> }) {
+  const order = ['Phase1', 'Phase2', 'Funded'] as const
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <thead>
+        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+          <Th>Phase</Th>
+          <Th right>A — n / win %</Th>
+          <Th right>A — R</Th>
+          <Th right>B — n / win %</Th>
+          <Th right>B — R</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {order.map((p) => {
+          const row = byModelByPhase[p]
+          if (!row) return null
+          const cell = (c: { wins: number; count: number; totalR: number }) => {
+            const wr = c.count > 0 ? (c.wins / c.count) * 100 : 0
+            const rColor = c.totalR > 0 ? 'var(--green)' : c.totalR < 0 ? 'var(--red)' : 'var(--text-3)'
+            return { wr, rColor }
+          }
+          const a = cell(row.A); const b = cell(row.B)
+          return (
+            <tr key={p} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              <Td>{p}</Td>
+              <Td right mono>{row.A.count} · {a.wr.toFixed(0)}%</Td>
+              <Td right mono color={a.rColor}>{row.A.totalR >= 0 ? '+' : ''}{row.A.totalR.toFixed(2)}R</Td>
+              <Td right mono>{row.B.count} · {b.wr.toFixed(0)}%</Td>
+              <Td right mono color={b.rColor}>{row.B.totalR >= 0 ? '+' : ''}{row.B.totalR.toFixed(2)}R</Td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}
+
+function Th({ children, right }: { children: any; right?: boolean }) {
+  return <th style={{ padding: '6px 10px', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--text-3)', textAlign: right ? 'right' : 'left' }}>{children}</th>
+}
+function Td({ children, right, mono, color }: { children: any; right?: boolean; mono?: boolean; color?: string }) {
+  return <td style={{ padding: '8px 10px', textAlign: right ? 'right' : 'left', fontFamily: mono ? 'var(--font-mono, monospace)' : undefined, color: color ?? 'var(--text-2)' }}>{children}</td>
 }
 
 // ─── Subcomponents ──────────────────────────────────────────────────────────────

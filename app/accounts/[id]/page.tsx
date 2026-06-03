@@ -120,6 +120,41 @@ export default function AccountHistoryPage() {
   // Closed-trade table is shown newest-first. Pager works on that reversed
   // ordering so "page 0" is the most recent N trades.
   const [closedPage, setClosedPage] = useState(0);
+  // Broker statement import dialog state.
+  const [importOpen, setImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importStartDate, setImportStartDate] = useState("");
+  const [importPreMode, setImportPreMode] = useState<"skip" | "tag" | "import">("skip");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
+
+  async function runImport() {
+    if (!importFile) return;
+    setImportBusy(true);
+    setImportResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", importFile);
+      if (importStartDate) fd.append("strategyStartDate", importStartDate);
+      fd.append("preStrategyMode", importPreMode);
+      const res = await fetch(`/api/accounts/${params?.id}/import-statement`, {
+        method: "POST",
+        body: fd,
+      });
+      const j = await res.json();
+      if (j.error) {
+        setImportResult(`Failed: ${j.error}`);
+        return;
+      }
+      const s = j.summary;
+      setImportResult(
+        `Done (${s.format ?? 'unknown'} format) · ${s.created} created, ${s.updated} updated, ${s.preStrategySkipped} pre-strategy skipped, ${s.skipped} other skipped, ${s.errorCount} errors.`
+      );
+      await refreshHistory();
+    } finally {
+      setImportBusy(false);
+    }
+  }
 
   async function refreshHistory() {
     if (!params?.id) return;
@@ -434,8 +469,105 @@ export default function AccountHistoryPage() {
           <button onClick={wipeEAData} style={btn("danger")}>
             Wipe all EA-synced data
           </button>
+          <button onClick={() => { setImportOpen(true); setImportResult(null); }} style={btn("ghost")}>
+            Import broker CSV…
+          </button>
         </div>
       </div>
+
+      {importOpen && (
+        <div
+          onClick={() => !importBusy && setImportOpen(false)}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 110,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(520px, 95vw)", background: "var(--bg-card)",
+              border: "1px solid var(--border)", borderRadius: 10, padding: 18,
+            }}
+          >
+            <p style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--text-3)", margin: "0 0 12px" }}>
+              IMPORT BROKER STATEMENT
+            </p>
+            <p style={{ fontSize: 11, color: "var(--text-2)", margin: "0 0 12px", lineHeight: 1.5 }}>
+              Upload the FundedNext CSV export. Trades upsert by ticket — re-importing
+              is safe and won't duplicate. Existing journal context (reason, notes,
+              grade, screenshots) is preserved on update.
+            </p>
+
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ display: "block", fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>CSV file</label>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                disabled={importBusy}
+                onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+                style={{ fontSize: 11, color: "var(--text-2)" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ display: "block", fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>
+                Strategy started on
+              </label>
+              <input
+                type="date"
+                value={importStartDate}
+                onChange={(e) => setImportStartDate(e.target.value)}
+                disabled={importBusy}
+                style={{ width: "100%", padding: "6px 10px", fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-1)" }}
+              />
+              <p style={{ fontSize: 10, color: "var(--text-3)", margin: "3px 0 0", lineHeight: 1.4 }}>
+                Trades opened BEFORE this date are treated as pre-strategy.
+                Leave blank to count everything as strategy.
+              </p>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>
+                Pre-strategy trades
+              </label>
+              <select
+                value={importPreMode}
+                onChange={(e) => setImportPreMode(e.target.value as any)}
+                disabled={importBusy}
+                style={{ width: "100%", padding: "6px 10px", fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-1)" }}
+              >
+                <option value="skip">Skip — don't import pre-strategy trades (recommended)</option>
+                <option value="tag">Import & tag as 'pre-strategy' (filter out of stats later)</option>
+                <option value="import">Import normally (full history, counts toward stats)</option>
+              </select>
+            </div>
+
+            {importResult && (
+              <p style={{ fontSize: 11, color: importResult.startsWith("Failed") ? "var(--red)" : "var(--green)", marginBottom: 10, lineHeight: 1.4 }}>
+                {importResult}
+              </p>
+            )}
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={runImport}
+                disabled={importBusy || !importFile}
+                style={btn("primary")}
+              >
+                {importBusy ? "Importing…" : "Import"}
+              </button>
+              <button
+                onClick={() => setImportOpen(false)}
+                disabled={importBusy}
+                style={btn("ghost")}
+              >
+                {importResult && !importResult.startsWith("Failed") ? "Close" : "Cancel"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Equity curve */}
       {equityPoints.length > 1 && (

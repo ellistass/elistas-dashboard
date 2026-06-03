@@ -20,17 +20,54 @@ import {
 
 export const dynamic = 'force-dynamic'
 
+// "Funded" rolls up the multiple post-challenge Account.status values.
+const PHASE_STATUS_MAP: Record<string, string[]> = {
+  Phase1: ['Phase1'],
+  Phase2: ['Phase2'],
+  Funded: ['Funded', 'Live', 'Passed'],
+}
+
+function phaseForStatus(status: string | null | undefined): string | null {
+  if (!status) return null
+  for (const [phase, list] of Object.entries(PHASE_STATUS_MAP)) {
+    if (list.includes(status)) return phase
+  }
+  return null
+}
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const accountId = url.searchParams.get('accountId')
   const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get('days') || '30', 10)))
+  // Strategy filter — default excludes any trade tagged 'pre-strategy', which
+  // is what the broker importer applies to rows opened before the user's
+  // declared strategy start date. The dashboard sets the view explicitly:
+  //   • includePreStrategy=false (default) → strategy-only stats
+  //   • includePreStrategy=true            → full account history
+  //   • preStrategyOnly=true               → just pre-strategy rows (for audit)
+  const includePreStrategy = url.searchParams.get('includePreStrategy') === 'true'
+  const preStrategyOnly    = url.searchParams.get('preStrategyOnly') === 'true'
 
   const since = new Date(Date.now() - days * 24 * 3600 * 1000)
   const where: any = { date: { gte: since } }
   if (accountId) where.accountId = accountId
 
-  const trades = await db.trade.findMany({ where, orderBy: { date: 'asc' } })
-  const tradesT: TradeLike[] = trades as any
+  // Pull account.status alongside each trade so we can roll up by phase.
+  const trades = await db.trade.findMany({
+    where,
+    orderBy: { date: 'asc' },
+    include: { account: { select: { status: true } } },
+  })
+  // Apply the strategy/pre-strategy filter in-memory — Postgres' Json array
+  // containment is awkward to express via Prisma's typed builder and the row
+  // counts here are small enough that this is fine.
+  const tradesFiltered = trades.filter((t: any) => {
+    const isPre = Array.isArray(t.tags) && t.tags.includes('pre-strategy')
+    if (preStrategyOnly) return isPre
+    if (includePreStrategy) return true
+    return !isPre
+  })
+  const tradesT: TradeLike[] = tradesFiltered as any
 
   // Detectors
   const violations = new Map<string, string[]>()
@@ -93,6 +130,43 @@ export async function GET(req: NextRequest) {
     byModel[t.model].totalR += t.resultR ?? 0
   }
 
+  // ── Phase breakdown ────────────────────────────────────────────────────
+  // Buckets every closed trade by the account phase it was taken on.
+  // "Funded" merges Funded/Live/Passed.
+  const phaseEmpty = () => ({ wins: 0, losses: 0, be: 0, count: 0, totalR: 0, totalPnL: 0 })
+  const byPhase: Record<string, ReturnType<typeof phaseEmpty>> = {
+    Phase1: phaseEmpty(), Phase2: phaseEmpty(), Funded: phaseEmpty(), Unphased: phaseEmpty(),
+  }
+  // Model × Phase cross-tab — the "model A on phase 1 win rate" view.
+  const byModelByPhase: Record<string, Record<'A' | 'B', { wins: number; count: number; totalR: number }>> = {
+    Phase1: { A: { wins: 0, count: 0, totalR: 0 }, B: { wins: 0, count: 0, totalR: 0 } },
+    Phase2: { A: { wins: 0, count: 0, totalR: 0 }, B: { wins: 0, count: 0, totalR: 0 } },
+    Funded: { A: { wins: 0, count: 0, totalR: 0 }, B: { wins: 0, count: 0, totalR: 0 } },
+  }
+
+  // The closed list was derived BEFORE applying the include, so re-map onto
+  // it. tradesFiltered keeps the account join attached — closed is a subset
+  // by id.
+  const closedIds = new Set(closed.map((c) => c.id))
+  for (const t of tradesFiltered as any[]) {
+    if (!closedIds.has(t.id)) continue
+    const phase = phaseForStatus(t.account?.status) ?? 'Unphased'
+    const bucket = byPhase[phase]
+    bucket.count++
+    bucket.totalR += t.resultR ?? 0
+    bucket.totalPnL += t.profitCcy ?? 0
+    if (t.outcome === 'Win')      bucket.wins++
+    else if (t.outcome === 'Loss') bucket.losses++
+    else if (t.outcome === 'BE')   bucket.be++
+
+    if (phase !== 'Unphased' && (t.model === 'A' || t.model === 'B')) {
+      const cell = byModelByPhase[phase][t.model as 'A' | 'B']
+      cell.count++
+      cell.totalR += t.resultR ?? 0
+      if (t.outcome === 'Win') cell.wins++
+    }
+  }
+
   // Missed-idea summary — pulls from IdeaOutcome populated by the daily cron
   const ideaOutcomes = await (db as any).ideaOutcome.findMany({
     where: { alertDate: { gte: since }, outcome: { not: 'Pending' } },
@@ -133,6 +207,15 @@ export async function GET(req: NextRequest) {
     heatmap,
     byGrade,
     byModel,
+    byPhase,
+    byModelByPhase,
+    strategyFilter: {
+      includePreStrategy,
+      preStrategyOnly,
+      // Useful for the UI: how many rows the filter dropped vs. kept.
+      tradesAfterFilter: tradesFiltered.length,
+      tradesBeforeFilter: trades.length,
+    },
     equityCurve,
     ideas: {
       aplusSurfaced: ideasAplus.length,
