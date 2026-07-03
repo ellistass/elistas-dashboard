@@ -10,8 +10,9 @@
 //     direction: 'Long' | 'Short',
 //     grade?, strong?, weak?, divergence?, session?, reason?,
 //     accountId?:  string,                      // legacy single-account form
-//     accountIds?: string[],                    // multi-account form — preferred
-//     riskPct?: number,                         // default 1.0
+//     accountIds?: string[],                    // multi-account form
+//     perAccount?: [{ accountId, riskAmount?, ticket? }]  // preferred — per-account $ risk + optional MT4 order number
+//     riskPct?: number,                         // default 1.0 (fallback when riskAmount absent)
 //     source?: 'claude' | 'user-discretionary', // default 'claude'
 //     screenshotUrl?: string,                   // optional setup screenshot — attached to every created trade
 //   }
@@ -30,18 +31,26 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const {
     pair, direction, strong, weak, grade, divergence,
-    session, reason, accountId, accountIds, riskPct,
+    session, reason, accountId, accountIds, perAccount, riskPct,
     alertDate, screenshotUrl,
   } = body ?? {}
   const source = body.source ?? 'claude'
 
-  // Normalise to an array. Legacy callers send accountId; new callers send accountIds.
-  // Dedup so a UI bug can't create two trades for the same account in one click.
+  // Normalise to an array. Preferred shape is perAccount ([{accountId, riskAmount?,
+  // ticket?}]); legacy callers send accountIds or accountId. Dedup so a UI bug
+  // can't create two trades for the same account in one click.
+  interface PerAccountInput { accountId: string; riskAmount?: number; ticket?: number }
+  const perAccountList: PerAccountInput[] = Array.isArray(perAccount)
+    ? perAccount.filter((p: any) => p && typeof p.accountId === 'string' && p.accountId.length > 0)
+    : []
   const targets: string[] = Array.from(new Set(
-    Array.isArray(accountIds) && accountIds.length > 0
-      ? accountIds.filter((x: any) => typeof x === 'string' && x.length > 0)
-      : (typeof accountId === 'string' && accountId.length > 0 ? [accountId] : [])
+    perAccountList.length > 0
+      ? perAccountList.map((p) => p.accountId)
+      : Array.isArray(accountIds) && accountIds.length > 0
+        ? accountIds.filter((x: any) => typeof x === 'string' && x.length > 0)
+        : (typeof accountId === 'string' && accountId.length > 0 ? [accountId] : [])
   ))
+  const perAccountById = new Map(perAccountList.map((p) => [p.accountId, p]))
 
   if (!pair || !direction || targets.length === 0) {
     return NextResponse.json({ error: 'pair + direction + at least one accountId required' }, { status: 400 })
@@ -65,6 +74,16 @@ export async function POST(req: NextRequest) {
   const created: Array<{ tradeId: string; accountId: string; accountName: string; riskDollars: number }> = []
   for (const id of targets) {
     const account = accounts.find((a) => a.id === id)!
+    const pa = perAccountById.get(id)
+    // Per-account $ risk is the source of truth when provided; riskPercent is
+    // derived from it against the account's live balance so R/discipline math
+    // keeps working. Falls back to the shared riskPct.
+    const balance = account.currentBalance > 0 ? account.currentBalance : account.startingBalance
+    const riskAmount = typeof pa?.riskAmount === 'number' && pa.riskAmount > 0 ? pa.riskAmount : null
+    const effRiskPercent = riskAmount !== null && balance > 0
+      ? Math.round((riskAmount / balance) * 10000) / 100
+      : riskPercent
+    const ticket = typeof pa?.ticket === 'number' && pa.ticket > 0 ? Math.floor(pa.ticket) : null
     const trade = await (db.trade.create as any)({
       data: {
         date: new Date(),
@@ -76,7 +95,12 @@ export async function POST(req: NextRequest) {
         entryPrice: 0,
         slPrice: 0,
         tpPrice: 0,
-        riskPercent,
+        riskPercent: effRiskPercent,
+        ...(riskAmount !== null && { riskAmount }),
+        // MT4 order number typed in at take time — this is what lets the EA's
+        // open event land on THIS row (upsert by accountId+ticket) instead of
+        // creating a duplicate that leaves the placeholder in limbo.
+        ...(ticket !== null && { ticket }),
         strongCcy: strong ?? '',
         weakCcy: weak ?? '',
         divScore: divergence ?? null,
@@ -92,7 +116,7 @@ export async function POST(req: NextRequest) {
       tradeId: trade.id,
       accountId: id,
       accountName: account.name,
-      riskDollars: Math.round((riskPercent / 100) * account.currentBalance),
+      riskDollars: riskAmount !== null ? Math.round(riskAmount) : Math.round((riskPercent / 100) * balance),
     })
   }
 

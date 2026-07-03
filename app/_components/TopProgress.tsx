@@ -75,7 +75,7 @@ export function TopProgress() {
         zIndex: 9999,
         pointerEvents: 'none',
         background: 'var(--green)',
-        boxShadow: '0 0 12px rgba(0, 212, 138, 0.55)',
+        boxShadow: '0 0 12px rgba(35, 224, 160, 0.55)',
         transformOrigin: 'left',
         opacity:
           phase === 'loading' ? 1 :

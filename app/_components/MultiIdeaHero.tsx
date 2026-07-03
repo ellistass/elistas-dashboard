@@ -5,6 +5,7 @@
 // preview. Skip opens an optional-reason form. Watch is a one-click commit.
 
 import { useMemo, useState } from 'react'
+import { ImagePlus } from 'lucide-react'
 
 interface Idea {
   pair: string
@@ -144,13 +145,15 @@ function IdeaCard({
   const [open, setOpen] = useState<null | 'take' | 'skip' | 'watch'>(null)
   const [watchEntry, setWatchEntry] = useState('')
   const [watchSl, setWatchSl] = useState('')
-  // Multi-account selection. Default to the first active account so a single-click
-  // Take still works out of the box; the user can toggle in additional accounts
-  // when they want to mirror the idea across multiple props.
-  const [accountIds, setAccountIds] = useState<Set<string>>(
-    () => new Set(accounts[0]?.id ? [accounts[0].id] : []),
+  // Per-account take rows. Default to the first active account ticked with a 1%
+  // dollar risk so a single-click Take still works out of the box; the user can
+  // tick in additional accounts and size each one independently.
+  const [rows, setRows] = useState<Record<string, { on: boolean; riskAmount: string; ticket: string }>>(
+    () => Object.fromEntries(accounts.map((a, i) => [
+      a.id,
+      { on: i === 0, riskAmount: i === 0 ? String(defaultRisk(a.currentBalance, 1)) : '', ticket: '' },
+    ])),
   )
-  const [riskPct, setRiskPct] = useState<string>('0.5')
   const [reason, setReason] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
   const [screenshotUrl, setScreenshotUrl] = useState<string>('')
@@ -158,17 +161,41 @@ function IdeaCard({
   const [uploadErr, setUploadErr] = useState<string | null>(null)
 
   function toggleAccount(id: string) {
-    setAccountIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return next
+    const acct = accounts.find((a) => a.id === id)
+    setRows((prev) => {
+      const cur = prev[id] ?? { on: false, riskAmount: '', ticket: '' }
+      const turningOn = !cur.on
+      return {
+        ...prev,
+        [id]: {
+          ...cur,
+          on: turningOn,
+          // When ticking on with no $ yet, seed 1% of live balance.
+          riskAmount: turningOn && !cur.riskAmount && acct
+            ? String(defaultRisk(acct.currentBalance, 1))
+            : cur.riskAmount,
+        },
+      }
     })
   }
   function selectAllAccounts() {
-    setAccountIds(new Set(accounts.map((a) => a.id)))
+    setRows((prev) => Object.fromEntries(accounts.map((a) => {
+      const cur = prev[a.id] ?? { on: false, riskAmount: '', ticket: '' }
+      return [a.id, { ...cur, on: true, riskAmount: cur.riskAmount || String(defaultRisk(a.currentBalance, 1)) }]
+    })))
   }
   function clearAccounts() {
-    setAccountIds(new Set())
+    setRows((prev) => Object.fromEntries(Object.entries(prev).map(([id, r]) => [id, { ...r, on: false }])))
+  }
+  function setRow(id: string, patch: Partial<{ riskAmount: string; ticket: string }>) {
+    setRows((prev) => ({ ...prev, [id]: { ...(prev[id] ?? { on: false, riskAmount: '', ticket: '' }), ...patch } }))
+  }
+  // Quick-set: recompute every TICKED account's $ from its own live balance.
+  function applyPctAll(pct: number) {
+    setRows((prev) => Object.fromEntries(accounts.map((a) => {
+      const cur = prev[a.id] ?? { on: false, riskAmount: '', ticket: '' }
+      return [a.id, cur.on ? { ...cur, riskAmount: String(defaultRisk(a.currentBalance, pct)) } : cur]
+    })))
   }
 
   async function pickScreenshot(file: File) {
@@ -212,17 +239,19 @@ function IdeaCard({
     return { bg: 'var(--bg-elevated)', fg: 'var(--text-2)' }
   }, [idea.grade])
 
-  // Aggregate risk preview across every selected account — so when the user
+  // Aggregate risk preview across every ticked account — so when the user
   // mirrors a setup across three props, they see the combined $ exposure
   // before confirming, not just one account's share.
-  const selectedAccounts = accounts.filter((a) => accountIds.has(a.id))
-  const totalRiskDollars = selectedAccounts.reduce(
-    (sum, a) => sum + Math.round((parseFloat(riskPct || '0') / 100) * a.currentBalance),
+  const tickedAccounts = accounts.filter((a) => rows[a.id]?.on)
+  const totalRiskDollars = tickedAccounts.reduce(
+    (sum, a) => sum + (parseFloat(rows[a.id]?.riskAmount || '0') || 0),
     0,
   )
+  const takeReady = tickedAccounts.length > 0
+    && tickedAccounts.every((a) => (parseFloat(rows[a.id]?.riskAmount || '0') || 0) > 0)
 
   async function doTake() {
-    if (accountIds.size === 0) return
+    if (!takeReady) return
     setSubmitting(true)
     try {
       await fetch('/api/ideas/take', {
@@ -232,8 +261,15 @@ function IdeaCard({
           strong: idea.strong, weak: idea.weak, grade: idea.grade,
           divergence: idea.divergence,
           session: idea.session, reason: idea.reason,
-          accountIds: Array.from(accountIds),
-          riskPct: parseFloat(riskPct),
+          perAccount: tickedAccounts.map((a) => {
+            const r = rows[a.id]
+            const ticket = parseInt(r.ticket, 10)
+            return {
+              accountId: a.id,
+              riskAmount: parseFloat(r.riskAmount),
+              ...(Number.isFinite(ticket) && ticket > 0 && { ticket }),
+            }
+          }),
           source: effectiveSource,
           alertDate,
           screenshotUrl: screenshotUrl || undefined,
@@ -293,11 +329,11 @@ function IdeaCard({
       taken        ? 'var(--green-border)' :
       watched      ? 'var(--blue-border)'  :
       invalidated  ? 'var(--red-border)'   :
-      isHero ? 'rgba(0,212,138,0.25)' : 'var(--border)'
+      isHero ? 'rgba(35,224,160,0.25)' : 'var(--border)'
     }`,
     borderRadius: 10,
     padding: isHero ? '14px 16px' : '11px 13px',
-    backgroundImage: isHero ? 'radial-gradient(ellipse at top right, rgba(0,212,138,0.05), transparent 60%)' : undefined,
+    backgroundImage: isHero ? 'radial-gradient(ellipse at top right, rgba(35,224,160,0.05), transparent 60%)' : undefined,
     minWidth: 0,
   }
 
@@ -374,11 +410,18 @@ function IdeaCard({
       {/* Take flow — multi-account picker + risk preview + screenshot */}
       {open === 'take' && (
         <div style={{ marginTop: 6, padding: 8, background: 'var(--bg-card-2)', borderRadius: 6, border: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, flexWrap: 'wrap', gap: 4 }}>
             <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
-              Accounts to take this on ({accountIds.size}/{accounts.length})
+              Accounts to take this on ({tickedAccounts.length}/{accounts.length})
             </span>
             <div style={{ display: 'flex', gap: 4 }}>
+              {[0.5, 1, 2].map((pct) => (
+                <button key={pct} type="button" onClick={() => applyPctAll(pct)}
+                        title={`Set every ticked account's $ risk to ${pct}% of its live balance`}
+                        style={{ fontSize: 9, padding: '2px 6px', border: '1px solid var(--border)', borderRadius: 4, background: 'transparent', color: 'var(--accent)', cursor: 'pointer' }}>
+                  {pct}% all
+                </button>
+              ))}
               <button type="button" onClick={selectAllAccounts}
                       style={{ fontSize: 9, padding: '2px 6px', border: '1px solid var(--border)', borderRadius: 4, background: 'transparent', color: 'var(--text-3)', cursor: 'pointer' }}>
                 All
@@ -393,41 +436,70 @@ function IdeaCard({
           {accounts.length === 0 ? (
             <div style={{ fontSize: 10, color: 'var(--text-3)', padding: '6px 0' }}>No accounts available.</div>
           ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
               {accounts.map((a) => {
-                const on = accountIds.has(a.id)
+                const r = rows[a.id] ?? { on: false, riskAmount: '', ticket: '' }
+                const amt = parseFloat(r.riskAmount || '0') || 0
+                const pctOfBal = a.currentBalance > 0 ? (amt / a.currentBalance) * 100 : 0
                 return (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => toggleAccount(a.id)}
-                    style={{
-                      fontSize: 10, padding: '3px 8px', borderRadius: 999,
-                      border: `1px solid ${on ? 'var(--green-border)' : 'var(--border)'}`,
-                      background: on ? 'var(--green-dim)' : 'transparent',
-                      color: on ? 'var(--green)' : 'var(--text-2)',
-                      cursor: 'pointer', whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {on ? '✓ ' : ''}{a.name} · {a.status}
-                  </button>
+                  <div key={a.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px',
+                    borderRadius: 6, border: `1px solid ${r.on ? 'rgba(58,212,236,0.35)' : 'var(--border)'}`,
+                    background: r.on ? 'rgba(58,212,236,0.06)' : 'transparent',
+                  }}>
+                    <input
+                      type="checkbox" checked={r.on} onChange={() => toggleAccount(a.id)}
+                      style={{ cursor: 'pointer', accentColor: 'var(--accent)', width: 12, height: 12, flexShrink: 0 }}
+                    />
+                    <span
+                      onClick={() => toggleAccount(a.id)}
+                      style={{ fontSize: 10, color: r.on ? 'var(--text-1)' : 'var(--text-2)', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 60, flex: '1 1 auto' }}
+                      title={`${a.name} · ${a.status}`}
+                    >
+                      {a.name}
+                    </span>
+                    <span style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'DM Mono, monospace', whiteSpace: 'nowrap' }}>
+                      ${Math.round(a.currentBalance).toLocaleString()}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                      <span style={{ fontSize: 10, color: r.on ? 'var(--text-2)' : 'var(--text-3)' }}>$</span>
+                      <input
+                        value={r.riskAmount}
+                        onChange={(e) => setRow(a.id, { riskAmount: e.target.value })}
+                        disabled={!r.on}
+                        placeholder="risk"
+                        inputMode="decimal"
+                        style={{ width: 62, padding: '4px 6px', fontSize: 11, textAlign: 'right', fontFamily: 'DM Mono, monospace', opacity: r.on ? 1 : 0.45 }}
+                      />
+                      {r.on && amt > 0 && a.currentBalance > 0 && (
+                        <span style={{
+                          fontSize: 9, fontFamily: 'DM Mono, monospace', whiteSpace: 'nowrap', minWidth: 34,
+                          color: pctOfBal > 2 ? 'var(--amber)' : 'var(--text-3)',
+                        }}>
+                          {pctOfBal.toFixed(2)}%
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      value={r.ticket}
+                      onChange={(e) => setRow(a.id, { ticket: e.target.value.replace(/[^0-9]/g, '') })}
+                      disabled={!r.on}
+                      placeholder="MT4 order # (optional)"
+                      inputMode="numeric"
+                      title="MT4 order number — leave blank and the EA auto-matches within 12h"
+                      style={{ width: 118, padding: '4px 6px', fontSize: 10, fontFamily: 'DM Mono, monospace', opacity: r.on ? 1 : 0.45, flexShrink: 0 }}
+                    />
+                  </div>
                 )
               })}
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Risk</span>
-            <input value={riskPct} onChange={(e) => setRiskPct(e.target.value)} placeholder="risk%"
-                   style={{ width: 56, padding: '5px 8px', fontSize: 11, textAlign: 'center' }} />
-            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>% per account</span>
-          </div>
-
-          {selectedAccounts.length > 0 && (
+          {tickedAccounts.length > 0 && (
             <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
-              {riskPct}% on {selectedAccounts.length === 1
-                ? selectedAccounts[0].name
-                : `${selectedAccounts.length} accounts`} = ${totalRiskDollars.toLocaleString()} total at risk
+              {tickedAccounts.length === 1
+                ? tickedAccounts[0].name
+                : `${tickedAccounts.length} accounts`} · ${Math.round(totalRiskDollars).toLocaleString()} total at risk
             </div>
           )}
 
@@ -435,9 +507,10 @@ function IdeaCard({
             <label style={{
               fontSize: 10, padding: '4px 8px', borderRadius: 6, cursor: uploading ? 'wait' : 'pointer',
               border: '1px solid var(--border)', color: 'var(--text-2)', background: 'transparent',
-              opacity: uploading ? 0.6 : 1,
+              opacity: uploading ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 5,
             }}>
-              {screenshotUrl ? 'Replace screenshot' : 'Attach screenshot'}
+              <ImagePlus size={12} style={{ color: 'var(--accent)' }} />
+              {screenshotUrl ? 'Replace setup screenshot' : 'Setup screenshot'}
               <input
                 type="file" accept="image/*"
                 disabled={uploading}
@@ -455,8 +528,9 @@ function IdeaCard({
           </div>
 
           <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
-            <button onClick={doTake} disabled={submitting || accountIds.size === 0} style={btnStyle('primary', false)}>
-              {submitting ? '…' : `Confirm take${accountIds.size > 1 ? ` × ${accountIds.size}` : ''} →`}
+            <button onClick={doTake} disabled={submitting || !takeReady}
+                    style={{ ...btnStyle('primary', false), opacity: submitting || !takeReady ? 0.5 : 1 }}>
+              {submitting ? '…' : `Confirm take${tickedAccounts.length > 1 ? ` × ${tickedAccounts.length}` : ''} →`}
             </button>
             <button onClick={() => setOpen(null)} disabled={submitting} style={btnStyle('ghost', false)}>Cancel</button>
           </div>
@@ -548,6 +622,12 @@ function IdeaCard({
       )}
     </div>
   )
+}
+
+// Sensible default $ risk: pct% of the live balance, rounded to a whole dollar.
+function defaultRisk(balance: number, pct: number): number {
+  if (!Number.isFinite(balance) || balance <= 0) return 0
+  return Math.round(balance * (pct / 100))
 }
 
 type BtnVariant = 'primary' | 'ghost' | 'danger' | 'taken' | 'watching' | 'skipped'

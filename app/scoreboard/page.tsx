@@ -1,9 +1,13 @@
 'use client'
-// app/scoreboard/page.tsx — Algorithm Scoreboard
-// Rates Claude's calls AND your discretionary calls on the same scale.
-// Switch between Claude / You / Both via the source tabs.
+// app/scoreboard/page.tsx — Algorithm Scoreboard (v2 hifi redesign)
+// Grades Claude's ideas vs the trader's discretionary calls on one scale.
+// Data contract unchanged: GET /api/scoreboard?source&days.
 
 import { useEffect, useMemo, useState } from 'react'
+import {
+  Trophy, Layers, Sparkles, User, Award, Ruler, GitCompareArrows,
+  ShieldX, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
+} from 'lucide-react'
 
 interface Bucket { count: number; wins: number; losses: number; neutral: number; winRate: number | null }
 interface GroupBucket extends Bucket { key: string }
@@ -41,8 +45,35 @@ interface ScoreboardResponse {
   }
 }
 
+type Source = 'both' | 'claude' | 'user-discretionary'
+
+const MONO = "'DM Mono', monospace"
+
+const SOURCES: { id: Source; label: string; Icon: typeof Layers }[] = [
+  { id: 'both', label: 'Both', Icon: Layers },
+  { id: 'claude', label: 'Claude', Icon: Sparkles },
+  { id: 'user-discretionary', label: 'You', Icon: User },
+]
+const DAY_CHIPS = [
+  { days: 7, label: '7D' },
+  { days: 30, label: '30D' },
+  { days: 90, label: '90D' },
+  { days: 365, label: '1Y' },
+]
+
+const GRADE_META: Record<string, { color: string; bg: string; border: string }> = {
+  'A+': { color: 'var(--green)', bg: 'var(--green-dim)', border: 'var(--green-border)' },
+  'B': { color: 'var(--amber)', bg: 'var(--amber-dim)', border: 'var(--amber-border)' },
+  'C': { color: 'var(--text-label)', bg: 'var(--bg-elevated)', border: 'var(--border-strong)' },
+}
+
+function pct(v: number | null | undefined): string {
+  if (v == null) return '—'
+  return `${Math.round(v * 100)}%`
+}
+
 export default function ScoreboardPage() {
-  const [source, setSource] = useState<'claude' | 'user-discretionary' | 'both'>('both')
+  const [source, setSource] = useState<Source>('both')
   const [days, setDays] = useState(30)
   const [data, setData] = useState<ScoreboardResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -56,7 +87,6 @@ export default function ScoreboardPage() {
   }, [source, days])
 
   // Hook MUST be called on every render — keep it above the early return.
-  // useMemo runs even when data is null; we just guard inside.
   const overallWinRate = useMemo(() => {
     if (!data) return null
     const w = data.directional.Long.wins + data.directional.Short.wins
@@ -65,127 +95,241 @@ export default function ScoreboardPage() {
   }, [data])
 
   if (loading || !data) {
-    return <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>Loading scoreboard…</div>
+    return (
+      <div style={{ padding: '80px 0', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>
+        Loading scoreboard…
+      </div>
+    )
   }
+
+  const { totals, directional, grades, pipEdge, invalidationAccuracy: inv, dimensions } = data
+  const totW = directional.Long.wins + directional.Short.wins
+  const totL = directional.Long.losses + directional.Short.losses
+
+  // 3-tier edge verdict — mirrors the prototype's `edgeVerdict` exactly.
+  const edgeVerdict = pipEdge.edgeRatio == null
+    ? 'not enough decisive calls to measure edge yet.'
+    : pipEdge.edgeRatio > 1.5
+      ? 'wins are markedly bigger than losses — the math favours you even at a coin-flip hit rate.'
+      : pipEdge.edgeRatio > 1.0
+        ? 'wins outpace losses, but the margin is tight. Protect the winners.'
+        : 'losses currently outweigh wins per trade — review the worst pairs below.'
 
   return (
     <div>
-      <div style={{ marginBottom: 18 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Algorithm scoreboard</h1>
-        <p style={{ fontSize: 13, color: 'var(--text-3)', margin: '2px 0 0' }}>
-          {data.totals.evaluated} ideas evaluated · {data.totals.pending} pending · last {days} days
-        </p>
-      </div>
+      <style>{`
+        .sb-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 14px; }
+        .sb-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+        .sb-dims { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .sb-inv-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+        @media (max-width: 900px) {
+          .sb-kpis { grid-template-columns: repeat(2, 1fr); }
+          .sb-cols, .sb-dims { grid-template-columns: 1fr; }
+          .sb-inv-tiles { grid-template-columns: repeat(2, 1fr); }
+        }
+      `}</style>
 
-      {/* Source + time controls */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 14 }}>
-        <div style={{ display: 'flex', gap: 4 }}>
-          {([
-            { v: 'both', label: 'Both' },
-            { v: 'claude', label: 'Claude' },
-            { v: 'user-discretionary', label: 'You' },
-          ] as const).map((o) => (
-            <button key={o.v} onClick={() => setSource(o.v)} style={{
-              fontSize: 12, padding: '5px 12px', borderRadius: 6,
-              background: source === o.v ? 'var(--bg-elevated)' : 'transparent',
-              color: source === o.v ? 'var(--text-1)' : 'var(--text-2)',
-              border: '1px solid var(--border)', cursor: 'pointer',
-            }}>{o.label}</button>
-          ))}
+      {/* ── Header ── */}
+      <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
+            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em' }}>Algorithm scoreboard</h1>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 12, color: 'var(--text-3)', paddingTop: 6 }}>
+              <Trophy size={13} strokeWidth={2} />calls graded
+            </span>
+          </div>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-label)', fontWeight: 300 }}>
+            {totals.evaluated} ideas evaluated · {totals.pending} pending · Claude vs your discretion on one scale.
+          </p>
         </div>
-        <select value={days} onChange={(e) => setDays(parseInt(e.target.value))} style={{ padding: '6px 10px' }}>
-          <option value={7}>Last 7 days</option>
-          <option value={30}>Last 30 days</option>
-          <option value={90}>Last 90 days</option>
-          <option value={365}>Last year</option>
-        </select>
-      </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+          <div className="seg">
+            {SOURCES.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                className={source === id ? 'on' : undefined}
+                onClick={() => setSource(id)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: "'Sora', sans-serif", fontSize: 12, padding: '7px 13px' }}
+              >
+                <Icon size={13} strokeWidth={2} />{label}
+              </button>
+            ))}
+          </div>
+          <div className="seg">
+            {DAY_CHIPS.map((d) => (
+              <button
+                key={d.days}
+                className={days === d.days ? 'on' : undefined}
+                onClick={() => setDays(d.days)}
+                style={{ fontSize: 12, padding: '7px 11px' }}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
 
-      {data.totals.evaluated === 0 ? (
-        <div className="card" style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-3)' }}>
-          <p style={{ margin: 0, fontSize: 14 }}>No evaluated ideas yet for this filter.</p>
-          <p style={{ margin: '8px 0 0', fontSize: 12 }}>The daily cron evaluates each idea after market close — keep running analysis and logging setups.</p>
+      {totals.evaluated === 0 ? (
+        <div className="card" style={{ padding: '48px 20px', textAlign: 'center', color: 'var(--text-3)' }}>
+          <p style={{ margin: 0, fontSize: 14, color: 'var(--text-2)' }}>No evaluated ideas yet for this filter.</p>
+          <p style={{ margin: '8px 0 0', fontSize: 12 }}>
+            The daily cron evaluates each idea after market close — keep running analysis and logging setups.
+          </p>
         </div>
       ) : (
         <>
-          {/* ── Headline KPI strip ── */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 16 }}>
-            <KpiTile label="Overall hit rate" value={pct(overallWinRate)} sub={`${data.directional.Long.wins + data.directional.Short.wins} wins of ${data.directional.Long.wins + data.directional.Short.wins + data.directional.Long.losses + data.directional.Short.losses}`} />
-            <KpiTile label="Long accuracy" value={pct(data.directional.Long.winRate)} sub={`${data.directional.Long.count} calls`} />
-            <KpiTile label="Short accuracy" value={pct(data.directional.Short.winRate)} sub={`${data.directional.Short.count} calls`} />
-            <KpiTile label="Edge ratio" value={data.pipEdge.edgeRatio ? `${data.pipEdge.edgeRatio.toFixed(2)}×` : '—'} sub="right vs wrong" />
-            <KpiTile label="Taken / Skipped" value={`${data.totals.taken} / ${data.totals.invalidated}`} sub={`${data.totals.watched} watched`} />
+          {/* ── KPI strip ── */}
+          <div className="sb-kpis">
+            <KpiTile
+              label="Overall hit rate"
+              value={pct(overallWinRate)}
+              sub={`${totW} of ${totW + totL} decisive`}
+              color="var(--text-1)" bg="var(--bg-card-raised)" border="var(--border)"
+            />
+            <KpiTile
+              label="Long accuracy"
+              value={pct(directional.Long.winRate)}
+              sub={`${directional.Long.count} calls`}
+              color="var(--green)" bg="rgba(35,224,160,0.05)" border="rgba(35,224,160,0.22)"
+            />
+            <KpiTile
+              label="Short accuracy"
+              value={pct(directional.Short.winRate)}
+              sub={`${directional.Short.count} calls`}
+              color="var(--red)" bg="rgba(255,84,112,0.05)" border="rgba(255,84,112,0.22)"
+            />
+            <KpiTile
+              label="Edge ratio"
+              value={pipEdge.edgeRatio != null ? `${pipEdge.edgeRatio.toFixed(2)}×` : '—'}
+              sub="win size vs loss size"
+              color="var(--accent)" bg="rgba(58,212,236,0.05)" border="rgba(58,212,236,0.22)"
+            />
+            <KpiTile
+              label="Taken / Skipped"
+              value={`${totals.taken} / ${totals.invalidated}`}
+              sub={`${totals.watched} watched`}
+              color="var(--text-1)" bg="var(--bg-card-raised)" border="var(--border)"
+            />
           </div>
 
-          {/* ── Grade hit rate ── */}
-          <div className="card" style={{ padding: '14px 16px', marginBottom: 12 }}>
-            <p className="section-label" style={{ marginTop: 0 }}>Hit rate by grade</p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {['A+', 'B', 'C'].map((g) => {
-                const b = data.grades[g] ?? { count: 0, wins: 0, losses: 0, neutral: 0, winRate: null }
-                const color = g === 'A+' ? 'var(--green)' : g === 'B' ? 'var(--amber)' : 'var(--text-3)'
-                return (
-                  <div key={g} style={{ display: 'grid', gridTemplateColumns: '36px 1fr 72px', alignItems: 'center', gap: 10 }}>
-                    <span className={
-                      g === 'A+' ? 'badge-aplus' : g === 'B' ? 'badge-b' : 'badge-c'
-                    } style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, textAlign: 'center' }}>{g}</span>
-                    <div style={{ height: 8, background: 'var(--bg-card-2)', borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ width: `${(b.winRate ?? 0) * 100}%`, height: '100%', background: color }} />
+          {/* ── Grade + directional · Pip-move edge ── */}
+          <div className="sb-cols">
+            <section className="card" style={{ padding: '17px 18px' }}>
+              <CardKicker icon={<Award size={14} strokeWidth={2} />} label="Hit rate by grade" />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 13, marginTop: 14 }}>
+                {(['A+', 'B', 'C'] as const).map((g) => {
+                  const b = grades[g] ?? { count: 0, wins: 0, losses: 0, neutral: 0, winRate: null }
+                  const m = GRADE_META[g]
+                  const fill = Math.round((b.winRate ?? 0) * 100)
+                  return (
+                    <div key={g} style={{ display: 'grid', gridTemplateColumns: '40px 1fr 78px', alignItems: 'center', gap: 12 }}>
+                      <span style={{
+                        display: 'inline-flex', justifyContent: 'center', padding: '3px 0', borderRadius: 6,
+                        fontFamily: MONO, fontSize: 12, color: m.color, background: m.bg, border: `1px solid ${m.border}`,
+                      }}>{g}</span>
+                      <div style={{ height: 9, borderRadius: 5, background: 'var(--border-subtle)', overflow: 'hidden' }}>
+                        <div style={{ width: `${fill}%`, height: '100%', background: m.color, borderRadius: 5 }} />
+                      </div>
+                      <span style={{ textAlign: 'right', fontFamily: MONO, fontSize: 13 }}>
+                        <span style={{ color: 'var(--text-1)', fontWeight: 500 }}>{pct(b.winRate)}</span>
+                        <span style={{ color: 'var(--text-3)', marginLeft: 7 }}>{b.count}</span>
+                      </span>
                     </div>
-                    <span style={{ textAlign: 'right', fontSize: 11 }}>
-                      <span className="font-mono" style={{ color: 'var(--text-1)', fontWeight: 500 }}>{pct(b.winRate)}</span>
-                      <span style={{ color: 'var(--text-3)', marginLeft: 6 }}>{b.count}</span>
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+                  )
+                })}
+              </div>
+              <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border-faint)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <DirTile label="Long" color="var(--green)" icon={<ArrowUpRight size={13} strokeWidth={2} />} bucket={directional.Long} />
+                <DirTile label="Short" color="var(--red)" icon={<ArrowDownRight size={13} strokeWidth={2} />} bucket={directional.Short} />
+              </div>
+            </section>
 
-          {/* ── Pip-move edge ── */}
-          <div className="card" style={{ padding: '14px 16px', marginBottom: 12 }}>
-            <p className="section-label" style={{ marginTop: 0 }}>Pip-move edge</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-              <Stat label="Avg pips when right" value={data.pipEdge.avgPipsWhenRight != null ? `+${data.pipEdge.avgPipsWhenRight.toFixed(0)}` : '—'} color="var(--green)" sub={`${data.pipEdge.winCount} wins`} />
-              <Stat label="Avg pips when wrong" value={data.pipEdge.avgPipsWhenWrong != null ? `${data.pipEdge.avgPipsWhenWrong.toFixed(0)}` : '—'} color="var(--red)" sub={`${data.pipEdge.lossCount} losses`} />
-              <Stat label="Avg R when right" value={data.pipEdge.avgRWhenRight != null ? `+${data.pipEdge.avgRWhenRight.toFixed(2)}R` : '—'} color="var(--green)" />
-              <Stat label="Avg R when wrong" value={data.pipEdge.avgRWhenWrong != null ? `${data.pipEdge.avgRWhenWrong.toFixed(2)}R` : '—'} color="var(--red)" />
-            </div>
-            <p style={{ fontSize: 11, color: 'var(--text-3)', margin: '10px 0 0' }}>
-              Edge ratio {data.pipEdge.edgeRatio ? `${data.pipEdge.edgeRatio.toFixed(2)}×` : '—'} —
-              {data.pipEdge.edgeRatio && data.pipEdge.edgeRatio > 1.5 ? ' wins are bigger than losses, the math is in your favour even with a coin-flip hit rate.'
-               : data.pipEdge.edgeRatio && data.pipEdge.edgeRatio > 1.0 ? ' wins outpace losses, but tight margin.'
-               : ' losses currently outweigh wins per trade — review the worst pairs/grades below.'}
-            </p>
+            <section className="card" style={{ padding: '17px 18px' }}>
+              <CardKicker icon={<Ruler size={14} strokeWidth={2} />} label="Pip-move edge" />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 14 }}>
+                <InnerStat
+                  label="Avg pips when right"
+                  value={pipEdge.avgPipsWhenRight != null ? `+${pipEdge.avgPipsWhenRight.toFixed(0)}` : '—'}
+                  color="var(--green)" sub={`${pipEdge.winCount} wins`}
+                />
+                <InnerStat
+                  label="Avg pips when wrong"
+                  value={pipEdge.avgPipsWhenWrong != null ? pipEdge.avgPipsWhenWrong.toFixed(0) : '—'}
+                  color="var(--red)" sub={`${pipEdge.lossCount} losses`}
+                />
+                <InnerStat
+                  label="Avg R when right"
+                  value={pipEdge.avgRWhenRight != null ? `+${pipEdge.avgRWhenRight.toFixed(2)}R` : '—'}
+                  color="var(--green)"
+                />
+                <InnerStat
+                  label="Avg R when wrong"
+                  value={pipEdge.avgRWhenWrong != null ? `${pipEdge.avgRWhenWrong.toFixed(2)}R` : '—'}
+                  color="var(--red)"
+                />
+              </div>
+              <div style={{
+                marginTop: 14, padding: '12px 14px', borderRadius: 10,
+                background: 'rgba(58,212,236,0.06)', border: '1px solid rgba(58,212,236,0.22)',
+                display: 'flex', gap: 10, alignItems: 'flex-start',
+              }}>
+                <span style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 1, display: 'inline-flex' }}>
+                  <GitCompareArrows size={16} strokeWidth={2} />
+                </span>
+                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: 'var(--text-2)' }}>
+                  <span style={{ color: 'var(--accent)', fontFamily: MONO }}>
+                    {pipEdge.edgeRatio != null ? pipEdge.edgeRatio.toFixed(2) : '—'}×
+                  </span>{' '}
+                  edge — {edgeVerdict}
+                </p>
+              </div>
+            </section>
           </div>
 
           {/* ── Invalidation accuracy ── */}
-          <div className="card" style={{ padding: '14px 16px', marginBottom: 12 }}>
-            <p className="section-label" style={{ marginTop: 0 }}>Invalidation accuracy</p>
-            {data.invalidationAccuracy.total === 0 ? (
-              <p style={{ fontSize: 12, color: 'var(--text-3)' }}>No invalidated ideas yet — once you start skipping setups this section fills in.</p>
+          <section className="card" style={{ padding: '17px 18px', marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <CardKicker icon={<ShieldX size={14} strokeWidth={2} />} label="Invalidation accuracy" />
+              <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-3)' }}>skips that were right to skip</span>
+            </div>
+            {inv.total === 0 ? (
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-3)' }}>
+                No invalidated ideas yet — once you start skipping setups this section fills in.
+              </p>
             ) : (
               <>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 12 }}>
-                  <Stat label="Correct skips" value={`${data.invalidationAccuracy.correctSkips}`} sub={`${pct(data.invalidationAccuracy.correctPct)}`} color="var(--green)" />
-                  <Stat label="Missed (would've won)" value={`${data.invalidationAccuracy.missedSkips}`} color="var(--red)" />
-                  <Stat label="Neutral skips" value={`${data.invalidationAccuracy.neutralSkips}`} color="var(--text-3)" />
-                  <Stat label="R cost of misses" value={`${data.invalidationAccuracy.netRCostOfMissed > 0 ? '+' : ''}${data.invalidationAccuracy.netRCostOfMissed.toFixed(1)}R`} color={data.invalidationAccuracy.netRCostOfMissed > 0 ? 'var(--amber)' : 'var(--text-3)'} />
+                <div className="sb-inv-tiles">
+                  <InnerStat label="Correct skips" value={String(inv.correctSkips)} color="var(--green)" sub={`${pct(inv.correctPct)} of decisive`} />
+                  <InnerStat label="Missed (would win)" value={String(inv.missedSkips)} color="var(--red)" />
+                  <InnerStat label="Neutral skips" value={String(inv.neutralSkips)} color="var(--text-label)" />
+                  <InnerStat
+                    label="R cost of misses"
+                    value={`${inv.netRCostOfMissed > 0 ? '+' : ''}${inv.netRCostOfMissed.toFixed(1)}R`}
+                    color={inv.netRCostOfMissed > 0 ? 'var(--amber)' : 'var(--text-3)'}
+                    sub="left on table"
+                  />
                 </div>
-                {Object.keys(data.invalidationAccuracy.byReason).length > 0 && (
+                {Object.keys(inv.byReason).length > 0 && (
                   <>
-                    <p style={{ fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)', margin: '8px 0 6px' }}>By reason</p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {Object.entries(data.invalidationAccuracy.byReason)
+                    <p style={{ margin: '0 0 8px', fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)' }}>By reason</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                      {Object.entries(inv.byReason)
                         .sort((a, b) => b[1].count - a[1].count)
                         .map(([reason, r]) => {
-                          const pctCorrect = r.count > 0 ? r.correct / r.count : 0
-                          const isAccurate = pctCorrect >= 0.6
+                          const correct = r.count > 0 ? r.correct / r.count : 0
                           return (
-                            <div key={reason} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                              <span style={{ color: 'var(--text-2)' }}>"{reason}"</span>
-                              <span style={{ color: 'var(--text-3)' }}>
-                                {r.count} skipped · <span style={{ color: isAccurate ? 'var(--green)' : 'var(--red)' }}>{Math.round(pctCorrect * 100)}% correct</span>
+                            <div key={reason} style={{
+                              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                              fontSize: 12, padding: '9px 12px', background: 'var(--bg-inset)',
+                              border: '1px solid var(--bg-elevated)', borderRadius: 8, gap: 12,
+                            }}>
+                              <span style={{ color: 'var(--text-body)' }}>{reason}</span>
+                              <span style={{ fontFamily: MONO, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+                                {r.count} skipped ·{' '}
+                                <span style={{ color: correct >= 0.6 ? 'var(--green)' : 'var(--red)' }}>
+                                  {Math.round(correct * 100)}% correct
+                                </span>
                               </span>
                             </div>
                           )
@@ -195,14 +339,14 @@ export default function ScoreboardPage() {
                 )}
               </>
             )}
-          </div>
+          </section>
 
           {/* ── Best & worst dimensions ── */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
-            <DimensionCard title="Best pairs"   data={data.dimensions.byPair}    color="var(--green)" />
-            <DimensionCard title="Worst pairs"  data={data.dimensions.worstPair} color="var(--red)" />
-            <DimensionCard title="Best strong-currency calls" data={data.dimensions.byStrong} color="var(--green)" />
-            <DimensionCard title="Worst strong-currency calls" data={data.dimensions.worstStrong} color="var(--red)" />
+          <div className="sb-dims">
+            <DimensionCard title="Best pairs" good rows={dimensions.byPair} />
+            <DimensionCard title="Worst pairs" good={false} rows={dimensions.worstPair} />
+            <DimensionCard title="Best strong-currency calls" good rows={dimensions.byStrong} />
+            <DimensionCard title="Worst strong-currency calls" good={false} rows={dimensions.worstStrong} />
           </div>
         </>
       )}
@@ -210,47 +354,78 @@ export default function ScoreboardPage() {
   )
 }
 
-function KpiTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+/* ── Subcomponents ─────────────────────────────────────────────────────── */
+
+function CardKicker({ icon, label }: { icon: React.ReactNode; label: string }) {
   return (
-    <div className="dash-stat">
-      <p className="lbl">{label}</p>
-      <p className="val">{value}</p>
-      {sub && <p className="sub">{sub}</p>}
+    <span className="kicker" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      {icon}{label}
+    </span>
+  )
+}
+
+function KpiTile({ label, value, sub, color, bg, border }: {
+  label: string; value: string; sub: string; color: string; bg: string; border: string
+}) {
+  return (
+    <div style={{ border: `1px solid ${border}`, borderRadius: 12, background: bg, padding: '14px 15px', minWidth: 0 }}>
+      <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: '0.13em', textTransform: 'uppercase', color: 'var(--text-3)' }}>{label}</div>
+      <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 500, marginTop: 7, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
+      <div style={{ fontSize: 11, color: 'var(--text-label)', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub}</div>
     </div>
   )
 }
 
-function Stat({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+function DirTile({ label, color, icon, bucket }: { label: string; color: string; icon: React.ReactNode; bucket: Bucket }) {
   return (
-    <div>
-      <p style={{ fontSize: 10, color: 'var(--text-3)', margin: 0, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</p>
-      <p className="font-mono" style={{ fontSize: 18, fontWeight: 500, margin: '2px 0 0', color: color ?? 'var(--text-1)' }}>{value}</p>
-      {sub && <p style={{ fontSize: 10, color: 'var(--text-3)', margin: '2px 0 0' }}>{sub}</p>}
+    <div style={{ background: 'var(--bg-inset)', border: '1px solid var(--bg-elevated)', borderRadius: 10, padding: '12px 14px' }}>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color }}>
+        {icon}{label}
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 22, fontWeight: 500, color: 'var(--text-1)', marginTop: 5 }}>{pct(bucket.winRate)}</div>
+      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>{bucket.count} calls</div>
     </div>
   )
 }
 
-function DimensionCard({ title, data, color }: { title: string; data: GroupBucket[]; color: string }) {
-  if (!data.length) return null
+function InnerStat({ label, value, color, sub }: { label: string; value: string; color: string; sub?: string }) {
   return (
-    <div className="card" style={{ padding: '14px 16px' }}>
-      <p className="section-label" style={{ marginTop: 0 }}>{title}</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-        {data.map((g) => (
-          <div key={g.key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-            <span className="font-mono" style={{ color: 'var(--text-1)' }}>{g.key}</span>
-            <span>
-              <span className="font-mono" style={{ color, fontWeight: 500 }}>{pct(g.winRate)}</span>
-              <span style={{ color: 'var(--text-3)', marginLeft: 6 }}>{g.wins}/{g.count}</span>
+    <div style={{ background: 'var(--bg-inset)', border: '1px solid var(--bg-elevated)', borderRadius: 10, padding: '12px 14px', minWidth: 0 }}>
+      <p style={{ margin: 0, fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-3)' }}>{label}</p>
+      <p style={{ margin: '5px 0 0', fontFamily: MONO, fontSize: 20, fontWeight: 500, color }}>{value}</p>
+      {sub && <p style={{ margin: '2px 0 0', fontSize: 10, color: 'var(--text-3)' }}>{sub}</p>}
+    </div>
+  )
+}
+
+function DimensionCard({ title, good, rows }: { title: string; good: boolean; rows: GroupBucket[] }) {
+  const color = good ? 'var(--green)' : 'var(--red)'
+  const Icon = good ? TrendingUp : TrendingDown
+  const rowBg = (rate: number | null) => {
+    const a = (0.05 + Math.abs((rate ?? 0.5) - 0.5) * 0.22).toFixed(2)
+    return good ? `rgba(35,224,160,${a})` : `rgba(255,84,112,${a})`
+  }
+  return (
+    <section className="card" style={{ padding: '17px 18px' }}>
+      <span className="kicker" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color }}>
+        <Icon size={14} strokeWidth={2} />{title}
+      </span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 12 }}>
+        {rows.length === 0 ? (
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-3)' }}>Not enough data yet.</p>
+        ) : rows.map((g) => (
+          <div key={g.key} style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '8px 10px', borderRadius: 7, background: rowBg(g.winRate),
+          }}>
+            <span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-1)' }}>{g.key}</span>
+            <span style={{ fontFamily: MONO, fontSize: 13 }}>
+              <span style={{ color, fontWeight: 500 }}>{pct(g.winRate)}</span>
+              <span style={{ color: 'var(--text-3)', marginLeft: 8 }}>{g.wins}/{g.count}</span>
             </span>
           </div>
         ))}
       </div>
-    </div>
+    </section>
   )
-}
-
-function pct(v: number | null): string {
-  if (v == null) return '—'
-  return `${Math.round(v * 100)}%`
 }

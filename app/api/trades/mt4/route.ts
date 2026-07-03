@@ -50,7 +50,20 @@ interface CloseEvent {
   commission: number
   swap: number
   profitCcy: number
+  // v2 EA sends live balance/equity on close too, so the account balance
+  // updates the moment a trade settles — no manual balance edits needed.
+  accountBalance?: number
+  accountEquity?: number
   source?: 'realtime' | 'catchup'
+}
+
+// v2 EA heartbeat — keeps Account.currentBalance/currentEquity live even when
+// no trades are opening or closing.
+interface BalanceEvent {
+  event: 'balance'
+  accountNumber: number
+  accountBalance: number
+  accountEquity: number
 }
 
 interface ModifyEvent {
@@ -66,7 +79,7 @@ interface ModifyEvent {
   oldTpPrice?: number
 }
 
-type Event = OpenEvent | CloseEvent | ModifyEvent
+type Event = OpenEvent | CloseEvent | ModifyEvent | BalanceEvent
 
 async function getAccountByBearer(req: NextRequest) {
   const auth = req.headers.get('authorization') || ''
@@ -94,15 +107,23 @@ export async function POST(req: NextRequest) {
     : [body as Event]
 
   const results: any[] = []
+  // Track the freshest balance/equity seen in this batch — persisted once at the end.
+  let latestBalance: number | null = null
+  let latestEquity: number | null = null
+
   for (const e of events) {
     try {
       // Sanity: account number on the event must match the bearer-resolved account
       if ('accountNumber' in e && account.mt4AccountNumber && e.accountNumber !== account.mt4AccountNumber) {
-        results.push({ ticket: e.ticket, ok: false, error: 'Account mismatch' })
+        results.push({ ticket: (e as any).ticket, ok: false, error: 'Account mismatch' })
         continue
       }
 
-      if (e.event === 'open') {
+      if (e.event === 'balance') {
+        if (Number.isFinite(e.accountBalance)) latestBalance = e.accountBalance
+        if (Number.isFinite(e.accountEquity)) latestEquity = e.accountEquity
+        results.push({ ok: true, action: 'balance' })
+      } else if (e.event === 'open') {
         const direction = directionFromOrderType(e.orderType)
         if (!direction) {
           results.push({ ticket: e.ticket, ok: false, error: `Pending order type ${e.orderType} not auto-logged` })
@@ -118,6 +139,78 @@ export async function POST(req: NextRequest) {
           accountBalance: e.accountBalance,
           symbol: e.symbol,
         })
+        if (Number.isFinite(e.accountBalance)) latestBalance = e.accountBalance
+        if (Number.isFinite(e.accountEquity)) latestEquity = e.accountEquity
+
+        // ── Placeholder auto-match ─────────────────────────────────────────
+        // "Take" on the dashboard creates a placeholder row (entryPrice 0, no
+        // ticket). If this open event has no row for its ticket yet, adopt the
+        // newest matching placeholder — same account, same pair, same
+        // direction, still ticketless, created in the last 12h — instead of
+        // creating a duplicate. This is what keeps trades out of limbo.
+        const alreadyByTicket = await (db.trade.findFirst as any)({
+          where: { accountId: account.id, ticket: e.ticket },
+          select: { id: true, entryPrice: true, riskAmount: true },
+        })
+
+        // Placeholder that already carries this ticket (typed in at take time):
+        // fill in the real broker values. entryPrice===0 marks "never filled".
+        if (alreadyByTicket && alreadyByTicket.entryPrice === 0) {
+          const filled = await (db.trade.update as any)({
+            where: { id: alreadyByTicket.id },
+            data: {
+              date: openDate,
+              openTimeUtc: openDate,
+              instrument: e.symbol,
+              session: sessionFromUtcHour(openDate.getUTCHours()),
+              entryPrice: e.entryPrice,
+              slPrice: e.slPrice,
+              initialSlPrice: e.slPrice,
+              tpPrice: e.tpPrice,
+              lotSize: e.lotSize,
+              ...(alreadyByTicket.riskAmount == null && risk != null && { riskPercent: risk }),
+            },
+          })
+          results.push({ ticket: e.ticket, ok: true, tradeId: filled.id, action: 'open', filledPlaceholder: true })
+          continue
+        }
+        if (!alreadyByTicket && e.source !== 'catchup') {
+          const placeholder = await (db.trade.findFirst as any)({
+            where: {
+              accountId: account.id,
+              ticket: null,
+              outcome: 'Open',
+              entryPrice: 0,
+              pair,
+              direction,
+              createdAt: { gte: new Date(Date.now() - 12 * 3600 * 1000) },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+          if (placeholder) {
+            const adopted = await (db.trade.update as any)({
+              where: { id: placeholder.id },
+              data: {
+                ticket: e.ticket,
+                source: placeholder.source, // keep idea provenance
+                date: openDate,
+                openTimeUtc: openDate,
+                instrument: e.symbol,
+                session: sessionFromUtcHour(openDate.getUTCHours()),
+                entryPrice: e.entryPrice,
+                slPrice: e.slPrice,
+                initialSlPrice: e.slPrice,
+                tpPrice: e.tpPrice,
+                lotSize: e.lotSize,
+                // riskAmount typed at take time is authoritative — only fill
+                // riskPercent from broker math when the user gave us nothing.
+                ...(placeholder.riskAmount == null && risk != null && { riskPercent: risk }),
+              },
+            })
+            results.push({ ticket: e.ticket, ok: true, tradeId: adopted.id, action: 'open', matchedPlaceholder: true })
+            continue
+          }
+        }
 
         const trade = await (db.trade.upsert as any)({
           where: { accountId_ticket: { accountId: account.id, ticket: e.ticket } },
@@ -155,6 +248,8 @@ export async function POST(req: NextRequest) {
         })
         results.push({ ticket: e.ticket, ok: true, tradeId: trade.id, action: 'open' })
       } else if (e.event === 'close') {
+        if (Number.isFinite(e.accountBalance as number)) latestBalance = e.accountBalance as number
+        if (Number.isFinite(e.accountEquity as number)) latestEquity = e.accountEquity as number
         const existing = await (db.trade.findFirst as any)({
           where: { accountId: account.id, ticket: e.ticket },
         })
@@ -258,9 +353,16 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Persist the freshest balance/equity from this batch. MT4 is the source of
+  // truth for balance on EA-synced accounts — this is what keeps
+  // Account.currentBalance live without manual edits.
   await db.account.update({
     where: { id: account.id },
-    data: { lastSyncedAt: new Date() },
+    data: {
+      lastSyncedAt: new Date(),
+      ...(latestBalance !== null && { currentBalance: latestBalance }),
+      ...(latestEquity !== null && { currentEquity: latestEquity }),
+    },
   })
 
   return NextResponse.json({ ok: true, results })

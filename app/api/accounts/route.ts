@@ -26,6 +26,23 @@ export async function GET() {
 
     const enriched = accounts.map((acc) => {
       const closed = acc.trades.filter((t) => t.outcome && t.outcome !== "Open");
+
+      // ── Balance source of truth ──────────────────────────────────────────
+      // 1. EA-synced accounts: currentBalance is written by /api/trades/mt4 on
+      //    every event + heartbeat — trust it as-is.
+      // 2. No EA, but trades carry broker P&L (profitCcy): derive balance from
+      //    startingBalance + closed P&L so it tracks the journal, not a stale
+      //    manual number.
+      // 3. Neither: keep the manually-entered currentBalance.
+      const closedPnLCcy = closed.reduce((s, t) => s + (t.profitCcy ?? 0), 0);
+      const hasBrokerPnL = closed.some((t) => t.profitCcy != null);
+      const eaSynced = acc.lastSyncedAt != null;
+      const liveBalance = eaSynced
+        ? acc.currentBalance
+        : hasBrokerPnL
+          ? Math.round((acc.startingBalance + closedPnLCcy) * 100) / 100
+          : acc.currentBalance;
+      acc = { ...acc, currentBalance: liveBalance };
       const open   = acc.trades.filter((t) => t.outcome === "Open");
       const totalR = closed.reduce((s, t) => s + (t.resultR ?? 0), 0);
       const wins   = closed.filter((t) => t.outcome === "Win").length;
@@ -68,6 +85,7 @@ export async function GET() {
         ...acc,
         trades: undefined, // strip raw trades from response
         stats: {
+          balanceSource: eaSynced ? "mt4" : hasBrokerPnL ? "trades" : "manual",
           totalTrades: acc.trades.length,
           openTrades: open.length,
           closedTrades: closed.length,

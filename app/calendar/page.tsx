@@ -55,7 +55,7 @@ type Phase = 'all' | 'phase1' | 'phase2' | 'funded'
 
 const PHASE_TABS: Array<{ v: Phase; label: string; color: string }> = [
   { v: 'all',    label: 'All',      color: 'var(--text-1)' },
-  { v: 'phase1', label: 'Phase 1',  color: '#6366f1' },
+  { v: 'phase1', label: 'Phase 1',  color: '#3ad4ec' },
   { v: 'phase2', label: 'Phase 2',  color: '#a78bfa' },
   { v: 'funded', label: 'Funded',   color: 'var(--green)' },
 ]
@@ -219,7 +219,7 @@ export default function CalendarPage() {
             const isPositive = cell.day && cell.day.netR > 0
             const isNegative = cell.day && cell.day.netR < 0
             const bg = !cell.day ? 'transparent'
-              : isPositive ? 'rgba(0,212,138,0.10)'
+              : isPositive ? 'rgba(35,224,160,0.10)'
               : isNegative ? 'rgba(255,77,106,0.10)'
               : 'var(--bg-card-2)'
             const border = !cell.day ? '1px solid var(--border)'

@@ -1,350 +1,212 @@
 //+------------------------------------------------------------------+
 //|                                              ElistasJournal.mq4 |
 //|                              Auto-log MT4 trades to the dashboard|
+//|                                                          v2.00  |
+//|  WHY v2                                                          |
+//|  ------                                                          |
+//|  v1 hung the terminal: OnInit swept the whole account history    |
+//|  with TWO blocking WebRequests per trade (thousands of calls on  |
+//|  first run), screenshots posted synchronously mid-detection, and |
+//|  every event was its own HTTP round-trip.                        |
 //|                                                                  |
-//|  HOW IT WORKS                                                    |
-//|  -------------                                                   |
-//|  • Attach to ANY chart on the terminal — it watches every trade  |
-//|    on the account, not just the chart's symbol.                  |
-//|  • OnTradeTransaction-style polling: each tick we diff the open  |
-//|    orders + a tail of history against the last snapshot to find  |
-//|    new opens, modifies, and closes. POSTs each event to the      |
-//|    dashboard.                                                    |
-//|  • On startup (OnInit) it sweeps history to catch any trades the |
-//|    terminal missed while it was offline — back-fills the journal.|
-//|  • At entry and close it grabs a screenshot of the chart and     |
-//|    POSTs it to /api/trades/mt4/screenshot.                       |
+//|  v2 never does bulk HTTP work inline:                            |
+//|  • ALL events (opens / closes / modifies / balance / catchup)    |
+//|    are appended to an in-memory QUEUE as JSON fragments.         |
+//|  • Each timer tick sends AT MOST ONE batched POST                |
+//|    ({"events":[...]}, up to BatchSize per request — the API      |
+//|    already accepts batches) and at most one screenshot upload.   |
+//|  • OnInit does exactly one HTTP call (the /state fetch). The     |
+//|    history catchup only ENQUEUES — a 2,000-trade backfill        |
+//|    drains in ~80 requests spread across ticks instead of 4,000   |
+//|    blocking calls up front.                                      |
+//|  • Failed posts re-queue with exponential-ish backoff, so a      |
+//|    Vercel hiccup can't stall the chart.                          |
+//|  • One pass over OrdersTotal() per tick detects opens+closes     |
+//|    together (v1 rescanned the open list per known ticket, O(n²)).|
 //|                                                                  |
-//|  SETUP                                                           |
+//|  NEW in v2                                                       |
+//|  ---------                                                       |
+//|  • Close events carry accountBalance/accountEquity → dashboard   |
+//|    balance updates the moment a trade settles.                   |
+//|  • Periodic "balance" heartbeat keeps equity live between trades.|
+//|                                                                  |
+//|  SETUP (unchanged)                                               |
 //|  -----                                                           |
-//|  • Tools → Options → Expert Advisors → "Allow WebRequest for    |
-//|    listed URL" → add: https://elistas-dashboard.vercel.app       |
-//|  • Drag this EA onto any chart, set the ApiKey input parameter.  |
-//|  • Allow live trading + DLL imports (no DLLs used, but standard).|
+//|  • Tools → Options → Expert Advisors → Allow WebRequest for:     |
+//|      https://elistas-dashboard.vercel.app                        |
+//|  • Drag onto any chart, set ApiKey. Watches the whole account.   |
 //+------------------------------------------------------------------+
 #property strict
 #property copyright "Elistas"
-#property version   "1.00"
+#property version   "2.00"
 
 //--- Inputs
-input string  ApiBase     = "https://elistas-dashboard.vercel.app";
-input string  ApiKey      = "REPLACE_WITH_ACCOUNT_API_KEY";  // per-account bearer token
-input bool    SendScreenshots = true;                        // capture chart on open/close
-input int     ScreenshotW   = 1280;
-input int     ScreenshotH   = 720;
-input int     CatchupHistoryDays = 0;                        // sweep history this far back on init; 0 = ALL history the broker exposes
-input bool    ForceFullResweep   = false;                    // set true once to wipe the per-account catchup memory and re-POST everything. Useful after a dashboard rebuild.
-input int     PollMillis    = 2000;                          // diff frequency
-input bool    VerboseLog    = false;
+input string  ApiBase            = "https://elistas-dashboard.vercel.app";
+input string  ApiKey             = "REPLACE_WITH_ACCOUNT_API_KEY";  // per-account bearer token
+input bool    SendScreenshots    = true;    // capture chart on open/close
+input int     ScreenshotW        = 1024;
+input int     ScreenshotH        = 576;
+input int     CatchupHistoryDays = 0;       // 0 = ALL history the broker exposes
+input bool    ForceFullResweep   = false;   // true once to re-enqueue everything
+input int     PollMillis         = 2000;    // tick frequency
+input int     BatchSize          = 25;      // max events per POST
+input int     BalanceHeartbeatSec = 300;    // push balance/equity every N seconds (0 = off)
+input bool    VerboseLog         = false;
 
-//--- Internal state — known open tickets, and the most recent history ticket we've processed
+//--- Open-position snapshot (parallel arrays)
 int      knownOpenTickets[];
-//--- Parallel arrays — for each entry in knownOpenTickets we remember the last
-//--- SL / TP we saw. Every poll DetectModifications diffs current vs these and
-//--- posts a modify event (with both old + new values) when they change.
 double   knownOpenSL[];
 double   knownOpenTP[];
-int      lastHistoryTicket = 0;
-datetime lastPollTime      = 0;
-string   accountBroker     = "";
+
+//--- Event queue — each entry is one complete event JSON object (no brackets)
+string   eventQueue[];
+
+//--- Screenshot queue (parallel arrays)
+int      shotTickets[];
+string   shotPhases[];
+
+//--- Backoff after failed posts: skip this many ticks before retrying
+int      backoffTicks   = 0;
+int      failStreak     = 0;
+
+datetime lastBalancePost = 0;
+double   lastPostedEquity = -1;
+string   accountBroker   = "";
 
 //+------------------------------------------------------------------+
-//| Init                                                             |
+//| Init — ONE http call (state fetch), everything else enqueued     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    accountBroker = AccountCompany();
-   Print("[ElistasJournal] Starting for MT4 account ", AccountNumber(), " (", accountBroker, ")");
+   Print("[ElistasJournal v2] Starting for MT4 account ", AccountNumber(), " (", accountBroker, ")");
 
-   // Build the initial "known open tickets" snapshot from current open orders
    RebuildOpenSnapshot();
 
-   // === Source-of-truth watermark ===
-   // The server is authoritative about "what trades I already have". On every
-   // OnInit we ask /api/trades/mt4/state for:
-   //   • highestTicket  — max(ticket) the DB has for this account
-   //   • openTickets[]  — tickets the DB still has as outcome=Open
-   //
-   // We use highestTicket as the sinceTicket watermark for SweepHistoryCatchup
-   // — anything > that needs posting; anything ≤ is already in the DB.
-   //
-   // Why this beats a local GlobalVariable: when the user wipes data on the
-   // dashboard (Danger zone → "Wipe all EA-synced data"), the server's
-   // highestTicket drops to 0, so the next EA init re-posts everything
-   // automatically. No more stale local marker blocking resync. No more
-   // ForceFullResweep dance.
-   //
-   // We fall back to a GlobalVariable cache only if the fetch fails — keeps
-   // the EA usable offline.
    string cacheKey = "ElistasJournal_LastSeenTicket_" + IntegerToString(AccountNumber());
-
-   if(ForceFullResweep)
+   if(ForceFullResweep && GlobalVariableCheck(cacheKey))
    {
-      // Manual escape hatch — overrides the fetch and forces sinceTicket=0.
-      // Set this true ONLY if the server is up but you want to deliberately
-      // re-post everything (e.g. debugging).
-      if(GlobalVariableCheck(cacheKey)) GlobalVariableDel(cacheKey);
-      Print("[ElistasJournal] ForceFullResweep=true — local cache cleared and fetching fresh server state.");
+      GlobalVariableDel(cacheKey);
+      Print("[ElistasJournal] ForceFullResweep=true — local watermark cleared.");
    }
 
+   // Server is authoritative for "what do you already have" — see /state route.
    int serverHighest = -1;
    int openServer[];  ArrayResize(openServer, 0);
-   string syncMode = "full";  // default if server fetch fails
+   string syncMode = "full";
    bool serverOk = FetchServerState(serverHighest, openServer, syncMode);
 
-   // === Mode gate ===
-   // The dashboard's per-account toggle decides what the EA actually does.
-   // We honor it here so the user can flip between full sync / realtime-only
-   // / off without recompiling — just reload the chart.
    if(syncMode == "off")
    {
-      Print("[ElistasJournal] syncMode=off — EA is paused for this account. No catchup, no polling. Change the toggle on the dashboard and reload the chart to re-enable.");
-      return(INIT_SUCCEEDED);    // No timer started — OnTimer never fires.
+      Print("[ElistasJournal] syncMode=off — EA paused for this account. Flip the dashboard toggle and reload the chart to re-enable.");
+      return(INIT_SUCCEEDED);   // no timer → fully dormant
    }
 
    int sinceTicket;
    if(serverOk)
    {
-      sinceTicket = serverHighest;
+      sinceTicket = ForceFullResweep ? 0 : serverHighest;
       GlobalVariableSet(cacheKey, (double)serverHighest);
       Print("[ElistasJournal] Server state: syncMode=", syncMode,
-            ", highestTicket=", serverHighest, ", openCount=", ArraySize(openServer));
+            " highestTicket=", serverHighest, " openCount=", ArraySize(openServer));
    }
    else if(GlobalVariableCheck(cacheKey))
    {
       sinceTicket = (int)GlobalVariableGet(cacheKey);
-      Print("[ElistasJournal] Server fetch failed — using cached watermark ticket #", sinceTicket);
+      Print("[ElistasJournal] Server fetch failed — cached watermark #", sinceTicket);
    }
    else
    {
       sinceTicket = 0;
-      Print("[ElistasJournal] Server fetch failed AND no cache — sweeping everything.");
+      Print("[ElistasJournal] Server fetch failed AND no cache — will enqueue everything.");
    }
 
-   // History catchup — skipped in realtime-only mode because the user is
-   // authoritative on history via broker CSV import. Realtime events still
-   // flow through OnTimer below.
+   // Catchup: ENQUEUE ONLY. No HTTP here — the timer drains the queue in
+   // batches. This is the fix for the v1 init hang.
    if(syncMode == "full")
    {
-      int newMaxTicket = SweepHistoryCatchupSince(sinceTicket);
-      if(newMaxTicket > sinceTicket)
-         GlobalVariableSet(cacheKey, (double)newMaxTicket);
+      int newMax = EnqueueHistoryCatchupSince(sinceTicket);
+      if(newMax > sinceTicket) GlobalVariableSet(cacheKey, (double)newMax);
    }
    else
-   {
-      Print("[ElistasJournal] syncMode=realtime-only — skipping history catchup. Live opens / modifies / closes still post.");
-   }
+      Print("[ElistasJournal] syncMode=realtime-only — history catchup skipped.");
 
-   // Open-trade reconciliation: any ticket open in MT4 right now that the
-   // server doesn't have as Open gets a fresh open event POSTed. Useful in
-   // realtime-only too — it's how the server learns about positions opened
-   // before the EA was attached.
+   // Positions open in MT4 that the server doesn't know about → enqueue opens.
    if(serverOk) ReconcileOpensAgainstServer(openServer);
+
+   // First balance heartbeat so the dashboard shows live equity immediately.
+   EnqueueBalanceEvent();
 
    EventSetMillisecondTimer(PollMillis);
    return(INIT_SUCCEEDED);
 }
 
-//+------------------------------------------------------------------+
-//| Fetch authoritative state from the dashboard                      |
-//|                                                                  |
-//| GETs /api/trades/mt4/state and parses two fields from the JSON:  |
-//|   • highestTicket — used as sinceTicket for the catchup sweep    |
-//|   • openTickets   — list of tickets the server thinks are open   |
-//|                                                                  |
-//| Returns true on success. On any failure (network down, 401,      |
-//| malformed body) returns false and the caller falls back to the   |
-//| local cache.                                                     |
-//+------------------------------------------------------------------+
-bool FetchServerState(int &highestTicket, int &openTickets[], string &syncMode)
-{
-   string url     = ApiBase + "/api/trades/mt4/state";
-   string headers = "Authorization: Bearer " + ApiKey + "\r\n";
-   uchar  emptyBody[];
-   char   result[];
-   string resultHeaders;
-
-   ResetLastError();
-   int code = WebRequest("GET", url, headers, 5000, emptyBody, result, resultHeaders);
-   if(code != 200)
-   {
-      Print("[ElistasJournal] /state fetch failed — code=", code, " err=", GetLastError());
-      return(false);
-   }
-
-   string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
-
-   // highestTicket — find the key, then the colon, then read digits.
-   highestTicket = ParseJsonInt(body, "highestTicket");
-
-   // syncMode — dashboard controls EA behavior remotely. Defaults to "full"
-   // if missing from the response (older server build) so the EA stays
-   // backwards-compatible.
-   syncMode = ParseJsonString(body, "syncMode");
-   if(StringLen(syncMode) == 0) syncMode = "full";
-
-   // openTickets — extract whatever's between [ and ] after "openTickets":[
-   ArrayResize(openTickets, 0);
-   int arrStart = StringFind(body, "\"openTickets\"");
-   if(arrStart >= 0)
-   {
-      int lb = StringFind(body, "[", arrStart);
-      int rb = (lb >= 0) ? StringFind(body, "]", lb) : -1;
-      if(lb >= 0 && rb > lb)
-      {
-         string inside = StringSubstr(body, lb + 1, rb - lb - 1);
-         // Split on commas. Each element is a bare integer (no quotes).
-         string parts[];
-         int n = StringSplit(inside, ',', parts);
-         for(int i = 0; i < n; i++)
-         {
-            string trimmed = parts[i];
-            StringTrimLeft(trimmed); StringTrimRight(trimmed);
-            if(StringLen(trimmed) == 0) continue;
-            int tkt = (int)StringToInteger(trimmed);
-            if(tkt > 0) AppendInt(openTickets, tkt);
-         }
-      }
-   }
-
-   return(true);
-}
-
-// Pull the quoted string that follows a JSON key. Returns "" if missing.
-string ParseJsonString(string body, string key)
-{
-   string needle = "\"" + key + "\"";
-   int idx = StringFind(body, needle);
-   if(idx < 0) return("");
-   int colon = StringFind(body, ":", idx + StringLen(needle));
-   if(colon < 0) return("");
-   int q1 = StringFind(body, "\"", colon + 1);
-   if(q1 < 0) return("");
-   int q2 = StringFind(body, "\"", q1 + 1);
-   if(q2 < 0) return("");
-   return(StringSubstr(body, q1 + 1, q2 - q1 - 1));
-}
-
-// Pull the integer that follows a JSON key from a flat response. Good enough
-// for the shape /api/trades/mt4/state emits — no nested objects to worry about.
-int ParseJsonInt(string body, string key)
-{
-   string needle = "\"" + key + "\"";
-   int idx = StringFind(body, needle);
-   if(idx < 0) return(0);
-   int colon = StringFind(body, ":", idx + StringLen(needle));
-   if(colon < 0) return(0);
-   int len = StringLen(body);
-   string num = "";
-   bool started = false;
-   for(int i = colon + 1; i < len; i++)
-   {
-      ushort c = StringGetCharacter(body, i);
-      if(!started && (c == ' ' || c == '\t')) continue;
-      if((c >= '0' && c <= '9') || (c == '-' && !started))
-      {
-         num = num + ShortToString(c);
-         started = true;
-      }
-      else if(started)
-      {
-         break;
-      }
-   }
-   if(StringLen(num) == 0) return(0);
-   return((int)StringToInteger(num));
-}
+void OnDeinit(const int reason) { EventKillTimer(); }
 
 //+------------------------------------------------------------------+
-//| For each open ticket in MT4 that the server doesn't know is open,|
-//| POST a fresh open event. Covers "trade fired while EA was off".  |
-//+------------------------------------------------------------------+
-void ReconcileOpensAgainstServer(const int &openTicketsOnServer[])
-{
-   int posted = 0;
-   int total = OrdersTotal();
-   for(int i = 0; i < total; i++)
-   {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      int type = OrderType();
-      if(type != OP_BUY && type != OP_SELL) continue;
-      int ticket = OrderTicket();
-      if(ContainsInt(openTicketsOnServer, ticket)) continue;
-
-      PostOpenEvent(ticket, "reconcile");
-      posted++;
-   }
-   if(posted > 0) Print("[ElistasJournal] Reconcile — posted ", posted, " open events the server was missing.");
-}
-
-void OnDeinit(const int reason)
-{
-   EventKillTimer();
-}
-
-//+------------------------------------------------------------------+
-//| Main poll loop — every PollMillis we diff open orders + history  |
+//| Timer tick: detect (cheap, no HTTP) → flush (bounded HTTP)       |
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-   DetectNewOpens();
+   DetectOpensAndCloses();   // single pass over OrdersTotal()
    DetectModifications();
-   DetectClosed();
-   lastPollTime = TimeCurrent();
+   MaybeEnqueueBalance();
+
+   // Bounded network work per tick: one event batch + one screenshot, max.
+   if(backoffTicks > 0) { backoffTicks--; return; }
+   FlushEventQueue();
+   FlushOneScreenshot();
 }
 
 //+------------------------------------------------------------------+
-//| Build the snapshot of currently-open tickets                     |
+//| Detection — one pass builds current opens, diffs both directions |
 //+------------------------------------------------------------------+
-void RebuildOpenSnapshot()
+void DetectOpensAndCloses()
 {
-   ArrayResize(knownOpenTickets, 0);
-   ArrayResize(knownOpenSL, 0);
-   ArrayResize(knownOpenTP, 0);
+   // Snapshot current open market orders
+   int curTickets[]; double curSL[]; double curTP[];
+   ArrayResize(curTickets, 0); ArrayResize(curSL, 0); ArrayResize(curTP, 0);
    int total = OrdersTotal();
    for(int i = 0; i < total; i++)
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
       int type = OrderType();
       if(type != OP_BUY && type != OP_SELL) continue;
-      AppendInt(knownOpenTickets, OrderTicket());
-      AppendDouble(knownOpenSL, OrderStopLoss());
-      AppendDouble(knownOpenTP, OrderTakeProfit());
+      AppendInt(curTickets, OrderTicket());
+      AppendDouble(curSL, OrderStopLoss());
+      AppendDouble(curTP, OrderTakeProfit());
    }
-}
 
-//+------------------------------------------------------------------+
-//| Detect newly-opened orders (in open list but not in snapshot)    |
-//+------------------------------------------------------------------+
-void DetectNewOpens()
-{
-   int total = OrdersTotal();
-   for(int i = 0; i < total; i++)
+   // New opens: in current, not in known
+   for(int c = 0; c < ArraySize(curTickets); c++)
    {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      int type = OrderType();
-      if(type != OP_BUY && type != OP_SELL) continue;
-      int ticket = OrderTicket();
-      if(ContainsInt(knownOpenTickets, ticket)) continue;
+      int t = curTickets[c];
+      if(ContainsInt(knownOpenTickets, t)) continue;
+      EnqueueOpenEvent(t, "realtime");
+      AppendInt(knownOpenTickets, t);
+      AppendDouble(knownOpenSL, curSL[c]);
+      AppendDouble(knownOpenTP, curTP[c]);
+      if(SendScreenshots) EnqueueScreenshot(t, "entry");
+   }
 
-      // New ticket — post an open event
-      PostOpenEvent(ticket, "realtime");
-      AppendInt(knownOpenTickets, ticket);
-      AppendDouble(knownOpenSL, OrderStopLoss());
-      AppendDouble(knownOpenTP, OrderTakeProfit());
-
-      if(SendScreenshots) PostScreenshot(ticket, "entry");
+   // Closes: in known, not in current
+   for(int k = ArraySize(knownOpenTickets) - 1; k >= 0; k--)
+   {
+      int t = knownOpenTickets[k];
+      if(ContainsInt(curTickets, t)) continue;
+      if(OrderSelect(t, SELECT_BY_TICKET, MODE_HISTORY))
+      {
+         EnqueueCloseEvent(t, "realtime");
+         if(SendScreenshots) EnqueueScreenshot(t, "close");
+      }
+      RemoveAt(knownOpenTickets, k);
+      RemoveAtDouble(knownOpenSL, k);
+      RemoveAtDouble(knownOpenTP, k);
    }
 }
 
 //+------------------------------------------------------------------+
-//| Detect SL / TP modifications on currently-open orders            |
-//|                                                                  |
-//| For each known open ticket we compare the live SL / TP against   |
-//| the values we remembered last poll. If they differ we POST a     |
-//| modify event with BOTH old and new prices — the server logs the  |
-//| change to TradeModification and backfills initialSlPrice on the  |
-//| Trade row if it's still null.                                    |
+//| SL/TP modify detection — unchanged logic, enqueue instead of post|
 //+------------------------------------------------------------------+
 void DetectModifications()
 {
@@ -359,26 +221,22 @@ void DetectModifications()
       double oldSL = knownOpenSL[i];
       double oldTP = knownOpenTP[i];
 
-      // Tolerance covers float jitter — MT4 sometimes returns values that
-      // diverge by 0.5 of a point even when nothing was actually changed.
       double tol = SymbolPipTolerance(OrderSymbol());
       bool slChanged = MathAbs(curSL - oldSL) > tol;
       bool tpChanged = MathAbs(curTP - oldTP) > tol;
 
       if(slChanged || tpChanged)
       {
-         PostModifyEvent(ticket,
-                         slChanged ? oldSL : -1.0, slChanged ? curSL : -1.0,
-                         tpChanged ? oldTP : -1.0, tpChanged ? curTP : -1.0,
-                         slChanged, tpChanged);
+         EnqueueModifyEvent(ticket,
+                            slChanged ? oldSL : -1.0, slChanged ? curSL : -1.0,
+                            tpChanged ? oldTP : -1.0, tpChanged ? curTP : -1.0,
+                            slChanged, tpChanged);
          if(slChanged) knownOpenSL[i] = curSL;
          if(tpChanged) knownOpenTP[i] = curTP;
       }
    }
 }
 
-// Half a pip — enough to absorb broker-side rounding without missing a real
-// SL move. JPY / metals use their own pip scale.
 double SymbolPipTolerance(string symbol)
 {
    double pip = StringFind(symbol, "JPY") >= 0 ? 0.01
@@ -389,121 +247,102 @@ double SymbolPipTolerance(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Detect closed orders (in snapshot but no longer open)            |
+//| Balance heartbeat — keeps dashboard equity live between trades   |
 //+------------------------------------------------------------------+
-void DetectClosed()
+void MaybeEnqueueBalance()
 {
-   int len = ArraySize(knownOpenTickets);
-   for(int i = len - 1; i >= 0; i--)
+   if(BalanceHeartbeatSec <= 0) return;
+   if(TimeCurrent() - lastBalancePost < BalanceHeartbeatSec) return;
+   // Skip if equity hasn't moved a cent — no point posting noise.
+   if(MathAbs(AccountEquity() - lastPostedEquity) < 0.01 && lastPostedEquity >= 0)
    {
-      int ticket = knownOpenTickets[i];
-      if(IsTicketStillOpen(ticket)) continue;
-
-      // Ticket is no longer open — find it in history and post the close event
-      if(OrderSelect(ticket, SELECT_BY_TICKET, MODE_HISTORY))
-      {
-         PostCloseEvent(ticket, "realtime");
-         if(SendScreenshots) PostScreenshot(ticket, "close");
-      }
-      RemoveAt(knownOpenTickets, i);
-      RemoveAtDouble(knownOpenSL, i);
-      RemoveAtDouble(knownOpenTP, i);
+      lastBalancePost = TimeCurrent();   // still reset the clock
+      return;
    }
+   EnqueueBalanceEvent();
 }
 
-bool IsTicketStillOpen(int ticket)
+void EnqueueBalanceEvent()
 {
+   string ev = StringConcatenate(
+      "{\"event\":\"balance\",",
+      "\"accountNumber\":", IntegerToString(AccountNumber()), ",",
+      "\"accountBalance\":", DoubleToString(AccountBalance(), 2), ",",
+      "\"accountEquity\":", DoubleToString(AccountEquity(), 2),
+      "}");
+   Enqueue(ev);
+   lastBalancePost   = TimeCurrent();
+   lastPostedEquity  = AccountEquity();
+}
+
+//+------------------------------------------------------------------+
+//| History catchup — ENQUEUE ONLY, zero HTTP                        |
+//+------------------------------------------------------------------+
+int EnqueueHistoryCatchupSince(int sinceTicket)
+{
+   bool     sweepAll = (CatchupHistoryDays <= 0);
+   datetime cutoff   = sweepAll ? 0 : (TimeCurrent() - CatchupHistoryDays * 86400);
+   int      total    = OrdersHistoryTotal();
+   int      queued   = 0;
+   int      maxTicket = sinceTicket;
+
+   for(int i = 0; i < total; i++)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) continue;
+      int type = OrderType();
+      if(type != OP_BUY && type != OP_SELL) continue;
+      if(!sweepAll && OrderCloseTime() < cutoff) continue;
+      int ticket = OrderTicket();
+      if(ticket <= sinceTicket) continue;
+
+      EnqueueOpenEvent(ticket, "catchup");
+      EnqueueCloseEvent(ticket, "catchup");
+      queued++;
+      if(ticket > maxTicket) maxTicket = ticket;
+   }
+   if(queued > 0)
+      Print("[ElistasJournal] Catchup: ", queued, " trades queued (",
+            queued * 2, " events) — draining ~", BatchSize, "/request in the background.");
+   return(maxTicket);
+}
+
+void ReconcileOpensAgainstServer(const int &openTicketsOnServer[])
+{
+   int queued = 0;
    int total = OrdersTotal();
    for(int i = 0; i < total; i++)
    {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-      if(OrderTicket() == ticket) return(true);
-   }
-   return(false);
-}
-
-//+------------------------------------------------------------------+
-//| Sweep history on init — catch trades made while terminal was off |
-//|                                                                  |
-//| CatchupHistoryDays semantics:                                    |
-//|   0       → sweep ALL history the broker exposes (default — full |
-//|              first-run backfill so balance reconciles end-to-end)|
-//|   N > 0   → sweep only trades closed within the last N days      |
-//|                                                                  |
-//| Safe to run repeatedly: /api/trades/mt4 upserts by               |
-//| (accountId, ticket), so duplicate POSTs are no-ops.              |
-//+------------------------------------------------------------------+
-// Incremental catchup: posts only history rows whose ticket is strictly greater
-// than `sinceTicket`. Returns the largest ticket seen (caller persists it as
-// the watermark for the next run). When called with sinceTicket=0 this acts
-// like a full sweep — which is what a fresh install or ForceFullResweep
-// produces.
-int SweepHistoryCatchupSince(int sinceTicket)
-{
-   bool   sweepAll = (CatchupHistoryDays <= 0);
-   datetime cutoff = sweepAll ? 0 : (TimeCurrent() - CatchupHistoryDays * 86400);
-   int    total    = OrdersHistoryTotal();
-   int    posted   = 0;
-   int    skipped  = 0;
-   int    maxTicket = sinceTicket;
-
-   Print("[ElistasJournal] Catchup sweep starting — ",
-         (sinceTicket > 0 ? StringConcatenate("incremental from ticket #", sinceTicket, "+") : "full"),
-         " · ", (sweepAll ? "ALL history" : StringConcatenate("last ", CatchupHistoryDays, "d")),
-         " · ", total, " history rows");
-
-   for(int i = 0; i < total; i++)
-   {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) { skipped++; continue; }
       int type = OrderType();
-      if(type != OP_BUY && type != OP_SELL) { skipped++; continue; }
-      if(!sweepAll && OrderCloseTime() < cutoff) { skipped++; continue; }
-
+      if(type != OP_BUY && type != OP_SELL) continue;
       int ticket = OrderTicket();
-      // The whole point of incremental: stop replaying tickets we already POSTed.
-      if(ticket <= sinceTicket) { skipped++; continue; }
-
-      // Post both open and close events — API upserts by (accountId, ticket)
-      // so even if this row sneaks through twice it's a no-op.
-      PostOpenEvent(ticket, "catchup");
-      PostCloseEvent(ticket, "catchup");
-      posted++;
-      if(ticket > maxTicket) maxTicket = ticket;
-
-      // Progress log every 50 trades so a multi-year backfill doesn't look hung.
-      if(posted % 50 == 0)
-         Print("[ElistasJournal] Catchup progress: ", posted, " posted, ", (i + 1), "/", total, " scanned");
-
-      // Tiny throttle on big backfills — keeps Vercel from rate-limiting and
-      // lets the terminal stay responsive. Skip when small.
-      if(posted > 50) Sleep(40);
+      if(ContainsInt(openTicketsOnServer, ticket)) continue;
+      EnqueueOpenEvent(ticket, "reconcile");
+      queued++;
    }
-   Print("[ElistasJournal] Catchup done — ", posted, " posted, ", skipped, " skipped (pre-watermark, non-trades, or pre-cutoff). Max ticket now ", maxTicket);
-   return(maxTicket);
+   if(queued > 0) Print("[ElistasJournal] Reconcile — queued ", queued, " open events the server was missing.");
 }
 
 //+------------------------------------------------------------------+
-//| Post an "open" event for the currently-selected order            |
+//| Event builders — JSON fragments pushed onto the queue            |
 //+------------------------------------------------------------------+
-void PostOpenEvent(int ticket, string source)
+void EnqueueOpenEvent(int ticket, string source)
 {
    if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
       if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_HISTORY))
          return;
 
    string symbol = OrderSymbol();
-   double pipVal = MarketInfo(symbol, MODE_TICKVALUE);  // value of one tick on 1 lot in account ccy
+   double pipVal = MarketInfo(symbol, MODE_TICKVALUE);
    double tickSz = MarketInfo(symbol, MODE_TICKSIZE);
-   // pipValuePerLot = value of one pip on 1 lot. tickValue is value per tick — multiply by pip/tick ratio.
-   double pip = StringFind(symbol, "JPY") >= 0 ? 0.01 : 0.0001;
+   double pip    = StringFind(symbol, "JPY") >= 0 ? 0.01 : 0.0001;
    double pipValuePerLot = (tickSz > 0) ? pipVal * (pip / tickSz) : pipVal;
 
-   string body = StringConcatenate(
-      "{",
-      "\"event\":\"open\",",
+   string ev = StringConcatenate(
+      "{\"event\":\"open\",",
       "\"ticket\":", IntegerToString(ticket), ",",
       "\"accountNumber\":", IntegerToString(AccountNumber()), ",",
-      "\"symbol\":\"", symbol, "\",",
+      "\"symbol\":\"", JsonEscape(symbol), "\",",
       "\"orderType\":", IntegerToString(OrderType()), ",",
       "\"lotSize\":", DoubleToString(OrderLots(), 2), ",",
       "\"entryPrice\":", DoubleToString(OrderOpenPrice(), 5), ",",
@@ -513,24 +352,19 @@ void PostOpenEvent(int ticket, string source)
       "\"accountBalance\":", DoubleToString(AccountBalance(), 2), ",",
       "\"accountEquity\":", DoubleToString(AccountEquity(), 2), ",",
       "\"pipValuePerLot\":", DoubleToString(pipValuePerLot, 4), ",",
-      "\"broker\":\"", accountBroker, "\",",
-      "\"comment\":\"", OrderComment(), "\",",
+      "\"broker\":\"", JsonEscape(accountBroker), "\",",
+      "\"comment\":\"", JsonEscape(OrderComment()), "\",",
       "\"source\":\"", source, "\"",
-      "}"
-   );
-   PostJson("/api/trades/mt4", body);
+      "}");
+   Enqueue(ev);
 }
 
-//+------------------------------------------------------------------+
-//| Post a "close" event for the currently-selected order            |
-//+------------------------------------------------------------------+
-void PostCloseEvent(int ticket, string source)
+void EnqueueCloseEvent(int ticket, string source)
 {
    if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_HISTORY)) return;
 
-   string body = StringConcatenate(
-      "{",
-      "\"event\":\"close\",",
+   string ev = StringConcatenate(
+      "{\"event\":\"close\",",
       "\"ticket\":", IntegerToString(ticket), ",",
       "\"accountNumber\":", IntegerToString(AccountNumber()), ",",
       "\"closePrice\":", DoubleToString(OrderClosePrice(), 5), ",",
@@ -538,54 +372,107 @@ void PostCloseEvent(int ticket, string source)
       "\"commission\":", DoubleToString(OrderCommission(), 2), ",",
       "\"swap\":", DoubleToString(OrderSwap(), 2), ",",
       "\"profitCcy\":", DoubleToString(OrderProfit(), 2), ",",
+      "\"accountBalance\":", DoubleToString(AccountBalance(), 2), ",",
+      "\"accountEquity\":", DoubleToString(AccountEquity(), 2), ",",
       "\"source\":\"", source, "\"",
-      "}"
-   );
-   PostJson("/api/trades/mt4", body);
+      "}");
+   Enqueue(ev);
 }
 
-//+------------------------------------------------------------------+
-//| Post a "modify" event with old + new SL/TP                       |
-//|                                                                  |
-//| Only the fields that actually changed are sent. `includeSL` /    |
-//| `includeTP` flags say which side moved — the others are omitted  |
-//| from the JSON entirely so the server can write a clean audit row |
-//| and (when initialSlPrice is null) backfill from oldSL.           |
-//+------------------------------------------------------------------+
-void PostModifyEvent(int ticket,
-                     double oldSL, double newSL,
-                     double oldTP, double newTP,
-                     bool includeSL, bool includeTP)
+void EnqueueModifyEvent(int ticket,
+                        double oldSL, double newSL,
+                        double oldTP, double newTP,
+                        bool includeSL, bool includeTP)
 {
    string parts = "";
    if(includeSL)
-   {
-      parts = parts
-            + "\"slPrice\":"    + DoubleToString(newSL, 5) + ","
-            + "\"oldSlPrice\":" + DoubleToString(oldSL, 5) + ",";
-   }
+      parts = parts + "\"slPrice\":" + DoubleToString(newSL, 5) + ","
+                    + "\"oldSlPrice\":" + DoubleToString(oldSL, 5) + ",";
    if(includeTP)
-   {
-      parts = parts
-            + "\"tpPrice\":"    + DoubleToString(newTP, 5) + ","
-            + "\"oldTpPrice\":" + DoubleToString(oldTP, 5) + ",";
-   }
+      parts = parts + "\"tpPrice\":" + DoubleToString(newTP, 5) + ","
+                    + "\"oldTpPrice\":" + DoubleToString(oldTP, 5) + ",";
 
-   string body = StringConcatenate(
-      "{",
-      "\"event\":\"modify\",",
+   string ev = StringConcatenate(
+      "{\"event\":\"modify\",",
       "\"ticket\":", IntegerToString(ticket), ",",
       "\"accountNumber\":", IntegerToString(AccountNumber()), ",",
       parts,
       "\"source\":\"realtime\"",
-      "}"
-   );
-   PostJson("/api/trades/mt4", body);
+      "}");
+   Enqueue(ev);
 }
 
 //+------------------------------------------------------------------+
-//| Take a screenshot of the current chart and POST it               |
+//| Queue plumbing                                                   |
 //+------------------------------------------------------------------+
+void Enqueue(string ev)
+{
+   int n = ArraySize(eventQueue);
+   ArrayResize(eventQueue, n + 1);
+   eventQueue[n] = ev;
+}
+
+// Send at most ONE batched POST per tick. On failure the batch goes back to
+// the FRONT of the queue (order preserved — opens must land before closes)
+// and we back off: 2, 4, 8 … up to 30 ticks.
+void FlushEventQueue()
+{
+   int n = ArraySize(eventQueue);
+   if(n == 0) { failStreak = 0; return; }
+
+   int count = MathMin(n, BatchSize);
+   string body = "{\"events\":[";
+   for(int i = 0; i < count; i++)
+   {
+      if(i > 0) body = body + ",";
+      body = body + eventQueue[i];
+   }
+   body = body + "]}";
+
+   int code = PostJson("/api/trades/mt4", body);
+   if(code == 200)
+   {
+      // Drop the sent events off the front
+      for(int j = 0; j < n - count; j++) eventQueue[j] = eventQueue[j + count];
+      ArrayResize(eventQueue, n - count);
+      failStreak = 0;
+      if(VerboseLog || n - count > 0)
+         Print("[ElistasJournal] Flushed ", count, " events, ", (n - count), " still queued.");
+   }
+   else
+   {
+      failStreak++;
+      backoffTicks = (int)MathMin(30, MathPow(2, failStreak));
+      Print("[ElistasJournal] Batch POST failed (code=", code, ") — retrying in ", backoffTicks, " ticks. Queue=", n);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Screenshot queue — capture is cheap, upload is heavy: one/tick,  |
+//| and only when the event queue is fully drained (data first).     |
+//+------------------------------------------------------------------+
+void EnqueueScreenshot(int ticket, string phase)
+{
+   int n = ArraySize(shotTickets);
+   ArrayResize(shotTickets, n + 1);
+   ArrayResize(shotPhases, n + 1);
+   shotTickets[n] = ticket;
+   shotPhases[n]  = phase;
+}
+
+void FlushOneScreenshot()
+{
+   if(ArraySize(shotTickets) == 0) return;
+   if(ArraySize(eventQueue) > 0) return;   // trade data takes priority
+
+   int    ticket = shotTickets[0];
+   string phase  = shotPhases[0];
+   RemoveAt(shotTickets, 0);
+   RemoveAtString(shotPhases, 0);
+
+   PostScreenshot(ticket, phase);   // one blocking upload max per tick
+}
+
 void PostScreenshot(int ticket, string phase)
 {
    string filename = StringConcatenate("elistas_", ticket, "_", phase, ".png");
@@ -595,7 +482,6 @@ void PostScreenshot(int ticket, string phase)
       return;
    }
 
-   // Build multipart/form-data body
    string boundary = "----ElistasMT4Boundary";
    int fh = FileOpen(filename, FILE_BIN|FILE_READ);
    if(fh == INVALID_HANDLE)
@@ -608,6 +494,7 @@ void PostScreenshot(int ticket, string phase)
    ArrayResize(fileBytes, fileSize);
    FileReadArray(fh, fileBytes, 0, fileSize);
    FileClose(fh);
+   FileDelete(filename);   // don't let screenshots pile up on disk
 
    string header = "--" + boundary + "\r\n"
                  + "Content-Disposition: form-data; name=\"ticket\"\r\n\r\n"
@@ -640,9 +527,9 @@ void PostScreenshot(int ticket, string phase)
 }
 
 //+------------------------------------------------------------------+
-//| POST a JSON body to the dashboard                                |
+//| HTTP + server-state helpers                                      |
 //+------------------------------------------------------------------+
-void PostJson(string path, string jsonBody)
+int PostJson(string path, string jsonBody)
 {
    string url     = ApiBase + path;
    string headers = "Authorization: Bearer " + ApiKey + "\r\n"
@@ -653,19 +540,133 @@ void PostJson(string path, string jsonBody)
    ResetLastError();
    int code = WebRequest("POST", url, headers, 5000, bodyB, result, resultHeaders);
    if(code == -1)
-   {
       Print("[ElistasJournal] WebRequest error ", GetLastError(),
             " — add '", ApiBase, "' to Allowed URLs in Options.");
-   }
    else if(VerboseLog)
+      Print("[ElistasJournal] ", path, " status=", code);
+   return(code);
+}
+
+bool FetchServerState(int &highestTicket, int &openTickets[], string &syncMode)
+{
+   string url     = ApiBase + "/api/trades/mt4/state";
+   string headers = "Authorization: Bearer " + ApiKey + "\r\n";
+   uchar  emptyBody[];
+   char   result[];
+   string resultHeaders;
+
+   ResetLastError();
+   int code = WebRequest("GET", url, headers, 5000, emptyBody, result, resultHeaders);
+   if(code != 200)
    {
-      Print("[ElistasJournal] ", path, " status=", code, " body=", jsonBody);
+      Print("[ElistasJournal] /state fetch failed — code=", code, " err=", GetLastError());
+      return(false);
    }
+
+   string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   highestTicket = ParseJsonInt(body, "highestTicket");
+   syncMode = ParseJsonString(body, "syncMode");
+   if(StringLen(syncMode) == 0) syncMode = "full";
+
+   ArrayResize(openTickets, 0);
+   int arrStart = StringFind(body, "\"openTickets\"");
+   if(arrStart >= 0)
+   {
+      int lb = StringFind(body, "[", arrStart);
+      int rb = (lb >= 0) ? StringFind(body, "]", lb) : -1;
+      if(lb >= 0 && rb > lb)
+      {
+         string inside = StringSubstr(body, lb + 1, rb - lb - 1);
+         string parts[];
+         int n = StringSplit(inside, ',', parts);
+         for(int i = 0; i < n; i++)
+         {
+            string trimmed = parts[i];
+            StringTrimLeft(trimmed); StringTrimRight(trimmed);
+            if(StringLen(trimmed) == 0) continue;
+            int tkt = (int)StringToInteger(trimmed);
+            if(tkt > 0) AppendInt(openTickets, tkt);
+         }
+      }
+   }
+   return(true);
+}
+
+string ParseJsonString(string body, string key)
+{
+   string needle = "\"" + key + "\"";
+   int idx = StringFind(body, needle);
+   if(idx < 0) return("");
+   int colon = StringFind(body, ":", idx + StringLen(needle));
+   if(colon < 0) return("");
+   int q1 = StringFind(body, "\"", colon + 1);
+   if(q1 < 0) return("");
+   int q2 = StringFind(body, "\"", q1 + 1);
+   if(q2 < 0) return("");
+   return(StringSubstr(body, q1 + 1, q2 - q1 - 1));
+}
+
+int ParseJsonInt(string body, string key)
+{
+   string needle = "\"" + key + "\"";
+   int idx = StringFind(body, needle);
+   if(idx < 0) return(0);
+   int colon = StringFind(body, ":", idx + StringLen(needle));
+   if(colon < 0) return(0);
+   int len = StringLen(body);
+   string num = "";
+   bool started = false;
+   for(int i = colon + 1; i < len; i++)
+   {
+      ushort c = StringGetCharacter(body, i);
+      if(!started && (c == ' ' || c == '\t')) continue;
+      if((c >= '0' && c <= '9') || (c == '-' && !started))
+      {
+         num = num + ShortToString(c);
+         started = true;
+      }
+      else if(started)
+         break;
+   }
+   if(StringLen(num) == 0) return(0);
+   return((int)StringToInteger(num));
 }
 
 //+------------------------------------------------------------------+
-//| Helpers                                                          |
+//| Misc helpers                                                     |
 //+------------------------------------------------------------------+
+void RebuildOpenSnapshot()
+{
+   ArrayResize(knownOpenTickets, 0);
+   ArrayResize(knownOpenSL, 0);
+   ArrayResize(knownOpenTP, 0);
+   int total = OrdersTotal();
+   for(int i = 0; i < total; i++)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      int type = OrderType();
+      if(type != OP_BUY && type != OP_SELL) continue;
+      AppendInt(knownOpenTickets, OrderTicket());
+      AppendDouble(knownOpenSL, OrderStopLoss());
+      AppendDouble(knownOpenTP, OrderTakeProfit());
+   }
+}
+
+// Escape quotes/backslashes/control chars so broker comments can't break the JSON.
+string JsonEscape(string s)
+{
+   string out = "";
+   int len = StringLen(s);
+   for(int i = 0; i < len; i++)
+   {
+      ushort c = StringGetCharacter(s, i);
+      if(c == '"' || c == '\\') out = out + "\\" + ShortToString(c);
+      else if(c < 32) out = out + " ";
+      else out = out + ShortToString(c);
+   }
+   return(out);
+}
+
 string TimeToIsoUtc(datetime t)
 {
    datetime utc = t - (TimeLocal() - TimeGMT());  // approximate: server time → UTC
@@ -700,6 +701,13 @@ void AppendDouble(double &arr[], double v)
 }
 
 void RemoveAtDouble(double &arr[], int idx)
+{
+   int n = ArraySize(arr);
+   for(int i = idx; i < n - 1; i++) arr[i] = arr[i + 1];
+   ArrayResize(arr, n - 1);
+}
+
+void RemoveAtString(string &arr[], int idx)
 {
    int n = ArraySize(arr);
    for(int i = idx; i < n - 1; i++) arr[i] = arr[i + 1];

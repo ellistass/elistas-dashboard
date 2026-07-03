@@ -24,6 +24,7 @@ export interface EditableTrade {
   slPrice: number;
   initialSlPrice?: number | null;
   riskPercent?: number | null;
+  riskAmount?: number | null;
   tpPrice: number;
   closePrice?: number | null;
   outcome?: string | null;
@@ -73,6 +74,8 @@ export function EditTradeDrawer({ trade, currency = "USD", startingBalance, onCl
     tpPrice: String(trade.tpPrice ?? ""),
     closePrice: trade.closePrice != null ? String(trade.closePrice) : "",
     resultR: trade.resultR != null ? String(trade.resultR) : "",
+    riskAmount: trade.riskAmount != null ? String(trade.riskAmount) : "",
+    ticket: trade.ticket != null ? String(trade.ticket) : "",
     outcome: trade.outcome ?? "Open",
     model: trade.model ?? "",
     grade: trade.grade ?? "",
@@ -168,12 +171,18 @@ export function EditTradeDrawer({ trade, currency = "USD", startingBalance, onCl
     setErr(null);
     try {
       const patch: any = { id: trade.id };
-      const numKeys = ["initialSlPrice", "slPrice", "tpPrice", "closePrice", "resultR"] as const;
+      const numKeys = ["initialSlPrice", "slPrice", "tpPrice", "closePrice", "resultR", "riskAmount"] as const;
       for (const k of numKeys) {
         const v = (form as any)[k];
         if (v === "" || v == null) continue;
         const n = parseFloat(v);
         if (Number.isFinite(n)) patch[k] = n;
+      }
+      // ticket is an MT4 order number — always an integer. Setting it manually
+      // on a limbo trade is the rescue path that links the row to its broker fill.
+      if (form.ticket !== "") {
+        const t = parseInt(form.ticket, 10);
+        if (Number.isFinite(t) && t > 0) patch.ticket = t;
       }
       const strKeys = ["outcome", "model", "grade", "reason", "notes", "preTradeNotes", "postTradeNotes"] as const;
       for (const k of strKeys) {
@@ -254,6 +263,22 @@ export function EditTradeDrawer({ trade, currency = "USD", startingBalance, onCl
             </DrawerField>
             <DrawerField label="Close Price">
               <DrawerInput mono value={form.closePrice} onChange={(v) => setForm({ ...form, closePrice: v })} />
+            </DrawerField>
+            <DrawerField label="Risk $" hint="Dollars actually risked in the account's currency. Preferred over risk % for R math.">
+              <DrawerInput
+                mono
+                value={form.riskAmount}
+                onChange={(v) => setForm({ ...form, riskAmount: v })}
+                placeholder="e.g. 250"
+              />
+            </DrawerField>
+            <DrawerField label="Order # (ticket)" hint="Set this to the MT4 order number to link this trade to its broker fill.">
+              <DrawerInput
+                mono
+                value={form.ticket}
+                onChange={(v) => setForm({ ...form, ticket: v.replace(/[^0-9]/g, "") })}
+                placeholder="MT4 order #"
+              />
             </DrawerField>
             <DrawerField label="Result R">
               <DrawerInput mono value={form.resultR} onChange={(v) => setForm({ ...form, resultR: v })} />

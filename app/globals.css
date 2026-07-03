@@ -3,27 +3,46 @@
 @tailwind utilities;
 
 :root {
-  --bg-base:        #09090f;
-  --bg-card:        #0f0f18;
-  --bg-card-2:      #13131e;
-  --bg-elevated:    #1a1a28;
-  --border:         #1e1e2e;
-  --border-subtle:  #161622;
-  --text-1:         #eeeef8;
-  --text-2:         #9999bb;
-  --text-3:         #55556a;
-  --green:          #00d48a;
-  --green-dim:      rgba(0, 212, 138, 0.08);
-  --green-border:   rgba(0, 212, 138, 0.2);
-  --red:            #ff4d6a;
-  --red-dim:        rgba(255, 77, 106, 0.08);
-  --red-border:     rgba(255, 77, 106, 0.2);
-  --amber:          #f59e0b;
-  --amber-dim:      rgba(245, 158, 11, 0.08);
-  --amber-border:   rgba(245, 158, 11, 0.2);
-  --blue:           #6366f1;
-  --blue-dim:       rgba(99, 102, 241, 0.1);
-  --blue-border:    rgba(99, 102, 241, 0.25);
+  /* ── v2 design tokens (redesign handoff, July 2026) ── */
+  --bg-base:        #0a0b0f;
+  --bg-sidebar:     #0b0d13;
+  --bg-card:        #0f1119;
+  --bg-card-raised: #10121a;
+  --bg-card-2:      #161925;   /* inputs / inner tiles */
+  --bg-inset:       #12141d;   /* nested / inset tiles */
+  --bg-elevated:    #1e2130;
+  --bg-drawer:      #0d0f16;
+  --border:         #262a3a;
+  --border-subtle:  #1a1d29;
+  --border-faint:   #161925;
+  --border-strong:  #333850;
+  --text-1:         #edf0f7;
+  --text-body:      #c8cde0;
+  --text-2:         #9aa2bd;
+  --text-label:     #8b93b0;
+  --text-3:         #565d78;
+  --accent:         #3ad4ec;
+  --accent-on:      #04222a;
+  --accent-dim:     rgba(58, 212, 236, 0.1);
+  --accent-border:  rgba(58, 212, 236, 0.28);
+  --accent-glow:    0 0 22px rgba(58, 212, 236, 0.26);
+  --green:          #23e0a0;
+  --green-dim:      rgba(35, 224, 160, 0.1);
+  --green-border:   rgba(35, 224, 160, 0.28);
+  --red:            #ff5470;
+  --red-dim:        rgba(255, 84, 112, 0.1);
+  --red-border:     rgba(255, 84, 112, 0.28);
+  --amber:          #f6b73c;
+  --amber-dim:      rgba(246, 183, 60, 0.1);
+  --amber-border:   rgba(246, 183, 60, 0.28);
+  --purple:         #a78bfa;
+  --purple-accent:  #8b7cff;
+  --purple-dim:     rgba(167, 139, 250, 0.1);
+  --purple-border:  rgba(167, 139, 250, 0.28);
+  /* legacy alias — old code used --blue for Phase 2 / Sonnet accents */
+  --blue:           #a78bfa;
+  --blue-dim:       rgba(167, 139, 250, 0.1);
+  --blue-border:    rgba(167, 139, 250, 0.28);
 }
 
 * { box-sizing: border-box; }
@@ -83,7 +102,7 @@ body {
   position: absolute;
   bottom: -1px; left: 0; right: 0;
   height: 2px;
-  background: var(--green);
+  background: var(--accent);
   border-radius: 2px;
 }
 
@@ -99,8 +118,73 @@ input, textarea, select {
   transition: border-color 0.15s;
 }
 input::placeholder, textarea::placeholder { color: var(--text-3); }
-input:focus, textarea:focus, select:focus { border-color: var(--blue); }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(58, 212, 236, 0.13);
+}
 textarea { resize: vertical; }
+
+/* ── v2 segmented control ── */
+.seg {
+  display: inline-flex;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 3px;
+  gap: 2px;
+}
+.seg button {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  padding: 5px 11px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.seg button:hover { color: var(--text-1); }
+.seg button.on {
+  background: var(--accent);
+  color: var(--accent-on);
+  font-weight: 500;
+}
+
+/* ── v2 right-side drawer ── */
+@keyframes scrim-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes drawer-in { from { transform: translateX(40px); opacity: 0 } to { transform: translateX(0); opacity: 1 } }
+.drawer-scrim {
+  position: fixed; inset: 0; z-index: 120;
+  background: rgba(4, 5, 9, 0.66);
+  backdrop-filter: blur(3px);
+  animation: scrim-in 0.2s ease;
+}
+.drawer-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 121;
+  width: 480px; max-width: 94vw;
+  background: var(--bg-drawer);
+  border-left: 1px solid var(--border);
+  box-shadow: -30px 0 60px rgba(0, 0, 0, 0.5);
+  animation: drawer-in 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.drawer-panel.wide { width: 560px; }
+
+/* ── v2 card section label (DM Mono kicker) ── */
+.kicker {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--text-3);
+}
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -125,8 +209,8 @@ textarea { resize: vertical; }
 }
 .login-input::placeholder { color: var(--text-3); }
 .login-input:focus {
-  border-color: var(--green);
-  box-shadow: 0 0 0 3px rgba(0, 212, 138, 0.12);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(58, 212, 236, 0.13);
 }
 /* Kill Chrome's autofill paint so inputs stay dark when the browser fills them */
 .login-input:-webkit-autofill,
@@ -268,9 +352,9 @@ textarea { resize: vertical; }
 /* Main content area — sits to the right of the sidebar on desktop,
    full-width on mobile (sidebar becomes a slide-in drawer). */
 .app-main {
-  margin-left: 200px;
-  padding: 28px 24px 60px;
-  max-width: 1280px;
+  margin-left: 210px;
+  padding: 22px 26px 70px;
+  max-width: 1360px;
 }
 @media (max-width: 900px) {
   .app-main { margin-left: 0; padding: 16px 16px 60px; }

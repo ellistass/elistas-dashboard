@@ -2,6 +2,7 @@
 // app/journal/page.tsx — Trade Journal (dark theme, free-form pair, account selector)
 
 import { useState, useEffect, useRef } from "react";
+import { ImagePlus } from "lucide-react";
 import { EditTradeDrawer } from "@/app/_components/EditTradeDrawer";
 import { Pager } from "@/app/_components/Pager";
 
@@ -20,9 +21,9 @@ interface Trade {
   strongCcy: string; weakCcy: string;
   divScore: number | null; accountId: string | null;
   ticket: number | null; profitCcy: number | null; closeTimeUtc: string | null;
-  riskPercent: number | null;
+  riskPercent: number | null; riskAmount: number | null;
 }
-interface AccountOption { id: string; name: string; broker: string; status: string; }
+interface AccountOption { id: string; name: string; broker: string; status: string; currentBalance: number; }
 
 // Suggested pairs — used for datalist (not a hard constraint)
 const SUGGESTED_PAIRS = [
@@ -54,6 +55,8 @@ const emptyForm = {
   divScore: "",
   screenshotUrl: "",
   accountId: "",
+  riskAmount: "",
+  ticket: "",
 };
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -97,6 +100,7 @@ export default function JournalPage() {
   const [form, setForm]           = useState({ ...emptyForm });
   const [closeInputs, setCloseInputs] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+  const [shotName, setShotName] = useState("");
   // Edit drawer + multi-select state. Selection survives across drawer open/close
   // so you can pick a batch, edit one, save, and the rest stay checked. Selection
   // also persists across pages — flip pages, the selection set keeps growing.
@@ -194,6 +198,7 @@ export default function JournalPage() {
     fetch("/api/accounts").then(r => r.json()).then(j => {
       setAccounts((j.accounts || []).filter((a: any) => a.isActive).map((a: any) => ({
         id: a.id, name: a.name, broker: a.broker, status: a.status,
+        currentBalance: typeof a.currentBalance === "number" ? a.currentBalance : 0,
       })));
     }).catch(() => {});
   }, []);
@@ -222,10 +227,17 @@ export default function JournalPage() {
     if (!form.pair.trim()) return;
     setLoading(true);
     try {
-      const payload = {
+      const payload: Record<string, any> = {
         ...form,
         accountId: form.accountId || null,
       };
+      // riskAmount ($) and ticket (MT4 order #) only go up when actually filled.
+      delete payload.riskAmount;
+      delete payload.ticket;
+      const riskAmt = parseFloat(form.riskAmount);
+      if (Number.isFinite(riskAmt) && riskAmt > 0) payload.riskAmount = riskAmt;
+      const ticketNum = parseInt(form.ticket, 10);
+      if (Number.isFinite(ticketNum) && ticketNum > 0) payload.ticket = ticketNum;
       const res = await fetch("/api/trades", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -246,6 +258,7 @@ export default function JournalPage() {
 
       setShowForm(false);
       setForm({ ...emptyForm });
+      setShotName("");
       fetchTrades();
     } catch (err) { console.error(err); }
     setLoading(false);
@@ -292,7 +305,7 @@ export default function JournalPage() {
             {trades.filter(t => t.outcome === "Open").length} open · {trades.filter(t => t.outcome !== "Open").length} closed · {trades.length} total
           </p>
         </div>
-        <button onClick={() => { setForm({ ...emptyForm }); setShowForm(true); }}
+        <button onClick={() => { setForm({ ...emptyForm }); setShotName(""); setShowForm(true); }}
           style={{ padding: "8px 18px", borderRadius: 10, border: "none", background: "var(--green)", color: "#000", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
           + Log Trade
         </button>
@@ -402,6 +415,34 @@ export default function JournalPage() {
                 {field("Close Price", <input type="number" step="0.00001" style={inp({ fontFamily: "DM Mono, monospace" })} value={form.closePrice} onChange={e => setForm(f => ({ ...f, closePrice: e.target.value }))} placeholder="if closed" />)}
               </div>
 
+              {/* Row 3b — risk sizing + broker link */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 14px", marginBottom: 14 }}>
+                {field("Risk $", (() => {
+                  const acct = accounts.find(a => a.id === form.accountId);
+                  const amt = parseFloat(form.riskAmount);
+                  const pct = acct && acct.currentBalance > 0 && Number.isFinite(amt) && amt > 0
+                    ? (amt / acct.currentBalance) * 100 : null;
+                  return (
+                    <div>
+                      <input type="number" step="1" min="0" style={inp({ fontFamily: "DM Mono, monospace" })}
+                        placeholder="e.g. 250" value={form.riskAmount}
+                        onChange={e => setForm(f => ({ ...f, riskAmount: e.target.value }))} />
+                      {pct != null && (
+                        <p style={{ fontSize: 10, margin: "4px 0 0", fontFamily: "DM Mono, monospace",
+                          color: pct > 2 ? "var(--amber)" : "var(--text-3)" }}>
+                          {pct.toFixed(2)}% of {acct!.name} (${Math.round(acct!.currentBalance).toLocaleString()})
+                        </p>
+                      )}
+                    </div>
+                  );
+                })())}
+                {field("Order #", (
+                  <input type="number" step="1" min="0" style={inp({ fontFamily: "DM Mono, monospace" })}
+                    placeholder="MT4 order # (optional)" value={form.ticket}
+                    onChange={e => setForm(f => ({ ...f, ticket: e.target.value }))} />
+                ))}
+              </div>
+
               {/* Row 4 — RFDM context */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px 14px", marginBottom: 14 }}>
                 {field("Strong Currency", (
@@ -442,14 +483,23 @@ export default function JournalPage() {
                   placeholder="Pre/post-trade observations, what went right or wrong…" />
               </div>
 
-              {/* Screenshot */}
-              <div style={{ marginBottom: 20 }}>
-                <label style={{ display: "block", fontSize: 11, color: "var(--text-3)", marginBottom: 5, fontWeight: 500 }}>Chart Screenshot</label>
-                <div onClick={() => fileRef.current?.click()}
-                  style={{ border: "2px dashed var(--border)", borderRadius: 10, padding: "20px 16px", textAlign: "center", cursor: "pointer" }}>
-                  <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} />
-                  <p style={{ fontSize: 12, color: "var(--text-3)", margin: 0 }}>{uploading ? "Uploading…" : "Click or drag screenshot here"}</p>
-                </div>
+              {/* Screenshot — attached at creation via fileRef, uploaded right after the POST */}
+              <div style={{ marginBottom: 14 }}>
+                <input
+                  ref={fileRef} type="file" accept="image/*" style={{ display: "none" }}
+                  onChange={e => setShotName(e.target.files?.[0]?.name ?? "")}
+                />
+                <button type="button" onClick={() => fileRef.current?.click()}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 8,
+                    padding: "9px 14px", borderRadius: 10, cursor: "pointer",
+                    border: `1px dashed ${shotName ? "var(--accent)" : "var(--border)"}`,
+                    background: "var(--bg-card-2)", color: shotName ? "var(--text-1)" : "var(--text-2)",
+                    fontSize: 12, fontFamily: "inherit",
+                  }}>
+                  <ImagePlus size={14} style={{ color: "var(--accent)", flexShrink: 0 }} />
+                  {uploading ? "Uploading…" : shotName || "Attach chart screenshot"}
+                </button>
               </div>
 
               <div style={{ display: "flex", gap: 10 }}>
@@ -599,6 +649,17 @@ export default function JournalPage() {
                           <div>
                             <p style={{ fontSize: 10, color: "var(--text-3)", margin: "0 0 3px", letterSpacing: "0.06em" }}>DIV</p>
                             <p className="font-mono" style={{ fontSize: 14, fontWeight: 700, color: "var(--blue)", margin: 0 }}>{trade.divScore}</p>
+                          </div>
+                        )}
+                        {/* Prefer the concrete $ risked; fall back to planned % */}
+                        {(trade.riskAmount != null || trade.riskPercent != null) && (
+                          <div>
+                            <p style={{ fontSize: 10, color: "var(--text-3)", margin: "0 0 3px", letterSpacing: "0.06em" }}>RISK</p>
+                            <p className="font-mono" style={{ fontSize: 14, fontWeight: 700, color: "var(--text-2)", margin: 0 }}>
+                              {trade.riskAmount != null
+                                ? `$${Math.round(trade.riskAmount).toLocaleString()}`
+                                : `${trade.riskPercent}%`}
+                            </p>
                           </div>
                         )}
                       </div>

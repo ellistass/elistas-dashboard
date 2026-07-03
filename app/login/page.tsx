@@ -157,7 +157,7 @@ function LoginPageContent() {
       <div style={{
         position: 'absolute', top: '20%', left: '50%', transform: 'translateX(-50%)',
         width: 600, height: 600,
-        background: 'radial-gradient(circle, rgba(0,212,138,0.10) 0%, transparent 60%)',
+        background: 'radial-gradient(circle, rgba(35,224,160,0.10) 0%, transparent 60%)',
         pointerEvents: 'none',
       }} />
       <div style={{
@@ -191,7 +191,7 @@ function LoginPageContent() {
           <span className="pulse-dot" style={{
             width: 7, height: 7, borderRadius: '50%',
             background: 'var(--green)', display: 'inline-block',
-            boxShadow: '0 0 10px rgba(0,212,138,0.6)',
+            boxShadow: '0 0 10px rgba(35,224,160,0.6)',
           }} />
           <span style={{
             fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 500,

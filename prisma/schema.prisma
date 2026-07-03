@@ -58,6 +58,7 @@ model Trade {
   tpPrice            Float
   closePrice         Float?
   riskPercent        Float            @default(1.0)
+  riskAmount         Float?           // amount risked in account currency, entered at take time. Source of truth when set; riskPercent derived from it.
   resultR            Float?           // profit/loss in R
   resultPips         Float?
   outcome            String?          // "Win" | "Loss" | "BE" | "Open"

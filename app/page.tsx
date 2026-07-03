@@ -931,7 +931,7 @@ export default function Dashboard() {
               display: scoring ? "flex" : "grid",
               gridTemplateColumns: scoring ? undefined : "1fr auto",
               alignItems: "center", gap: 16,
-              backgroundImage: "radial-gradient(ellipse at top right, rgba(0,212,138,0.04) 0%, transparent 60%)",
+              backgroundImage: "radial-gradient(ellipse at top right, rgba(35,224,160,0.04) 0%, transparent 60%)",
             }}>
               {scoring ? (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1 }}>
@@ -963,7 +963,7 @@ export default function Dashboard() {
                 <div style={{
                   background: "var(--bg-card)", border: "1px solid var(--border)",
                   borderRadius: 14, padding: "22px 24px",
-                  backgroundImage: "radial-gradient(ellipse at top right, rgba(0,212,138,0.04) 0%, transparent 60%)",
+                  backgroundImage: "radial-gradient(ellipse at top right, rgba(35,224,160,0.04) 0%, transparent 60%)",
                 }}>
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
                     <div>
@@ -1037,7 +1037,7 @@ export default function Dashboard() {
                             return (
                               <td key={w.cur} style={{
                                 padding: "10px 16px", textAlign: "center",
-                                background: isBest ? "rgba(0,212,138,0.04)" : "transparent",
+                                background: isBest ? "rgba(35,224,160,0.04)" : "transparent",
                               }}>
                                 <p className="font-mono" style={{ fontSize: 11, fontWeight: 600, margin: "0 0 4px", color: isBest ? "var(--green)" : "var(--text-1)" }}>
                                   {p.pair}

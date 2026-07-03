@@ -81,7 +81,22 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const trade = await db.trade.create({
+
+    // Per-account $ risk: when riskAmount + accountId are given, derive
+    // riskPercent from the account's live balance so R math stays consistent.
+    const accountId: string | null = typeof body.accountId === 'string' && body.accountId.length > 0 ? body.accountId : null
+    const riskAmount: number | null = body.riskAmount != null && parseFloat(body.riskAmount) > 0 ? parseFloat(body.riskAmount) : null
+    let riskPercent = parseFloat(body.riskPercent || '1')
+    if (riskAmount !== null && accountId) {
+      const acc = await db.account.findUnique({ where: { id: accountId } })
+      const balance = acc ? (acc.currentBalance > 0 ? acc.currentBalance : acc.startingBalance) : 0
+      if (balance > 0) riskPercent = Math.round((riskAmount / balance) * 10000) / 100
+    }
+    // MT4 order number typed at entry — lets the EA's open/close events land
+    // on this row (accountId+ticket) instead of creating a limbo duplicate.
+    const ticket: number | null = body.ticket != null && parseInt(body.ticket) > 0 ? parseInt(body.ticket) : null
+
+    const trade = await (db.trade.create as any)({
       data: {
         date: new Date(body.date),
         pair: body.pair,
@@ -94,7 +109,10 @@ export async function POST(req: NextRequest) {
         initialSlPrice: parseFloat(body.initialSlPrice ?? body.slPrice),
         tpPrice: parseFloat(body.tpPrice),
         closePrice: body.closePrice ? parseFloat(body.closePrice) : null,
-        riskPercent: parseFloat(body.riskPercent || '1'),
+        riskPercent,
+        ...(riskAmount !== null && { riskAmount }),
+        ...(accountId && { accountId }),
+        ...(ticket !== null && { ticket }),
         resultR: body.resultR ? parseFloat(body.resultR) : null,
         resultPips: body.resultPips ? parseFloat(body.resultPips) : null,
         outcome: body.outcome || 'Open',
