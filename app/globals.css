@@ -254,19 +254,18 @@ textarea { resize: vertical; }
 }
 
 /* ── Dashboard responsive grids ─────────────────────────────────────────── */
-/* Status row at top of dashboard: 1 col on mobile, fluid grid on tablet+,
-   five tiles in a row on full desktop. */
+/* v2 status row: 4 tiles → 2 → 1 as the viewport narrows. */
 .dash-status {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
-  margin-bottom: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
 }
 @media (max-width: 1100px) {
-  .dash-status { grid-template-columns: repeat(3, 1fr); }
+  .dash-status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (max-width: 720px) {
-  .dash-status { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 640px) {
+  .dash-status { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Risk row (Daily R + Next event + Macros) collapses cleanly */
@@ -280,14 +279,34 @@ textarea { resize: vertical; }
   .dash-risk-row { grid-template-columns: 1fr; }
 }
 
-/* Main grid: 320px sidebar on desktop, single column on tablet/mobile */
+/* v2 main grid: wide content column + 360px right rail. The rail drops
+   below the main column on narrow viewports. */
 .dash-main {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 14px;
+  align-items: start;
 }
 @media (max-width: 1100px) {
   .dash-main { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Secondary idea cards under the priority-1 hero */
+.dash-ideas-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+@media (max-width: 720px) {
+  .dash-ideas-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Market-context cards (sectors / macro snapshot / sessions) */
+.dash-context-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
 }
 
 /* Default column inside .dash-main — vertical stack with gap. Defined as a

@@ -1,10 +1,11 @@
 'use client'
 // app/_components/PositionSizeCalc.tsx
-// Sidebar-friendly position-size calculator. Vertical stack of inputs so it
-// fits a narrow 320px column without overflowing. Pair input has a small
-// chevron-style datalist of common pairs.
+// Right-rail position-size calculator (v2). Same math as before — entry + SL
+// prices derive stop pips, then risk % of each active account's live balance
+// gives lot size + $ risk per account.
 
 import { useMemo, useState } from 'react'
+import { Calculator } from 'lucide-react'
 import { pipSize, riskInAccountCcy, lotSizeFor } from '@/lib/position-size'
 
 interface AccountLite {
@@ -45,23 +46,28 @@ export function PositionSizeCalc({ accounts, defaultPair }: {
 
   const fieldStyle: React.CSSProperties = {
     width: '100%',
-    minWidth: 0,        // critical: lets inputs shrink to fit the container
+    minWidth: 0,
     padding: '7px 10px',
     fontSize: 12,
     boxSizing: 'border-box',
   }
   const labelStyle: React.CSSProperties = {
-    fontSize: 10,
+    fontFamily: "'DM Mono', monospace",
+    fontSize: 9,
+    fontWeight: 500,
     color: 'var(--text-3)',
     textTransform: 'uppercase',
-    letterSpacing: '0.08em',
-    marginBottom: 3,
+    letterSpacing: '0.12em',
+    marginBottom: 4,
     display: 'block',
   }
 
   return (
-    <div className="card" style={{ padding: '14px 16px', minWidth: 0 }}>
-      <p className="section-label" style={{ marginTop: 0, marginBottom: 10 }}>Position size</p>
+    <div className="card" style={{ padding: '15px 17px', minWidth: 0 }}>
+      <div className="kicker" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+        <Calculator size={12} strokeWidth={2} />
+        Position size
+      </div>
 
       {/* Pair on its own row */}
       <div style={{ marginBottom: 8 }}>
@@ -78,7 +84,7 @@ export function PositionSizeCalc({ accounts, defaultPair }: {
         </datalist>
       </div>
 
-      {/* Entry + SL on one row — 2 cols, each minmax(0,1fr) so they never overflow */}
+      {/* Entry + SL side by side (these derive SL pips) */}
       <div style={{
         display: 'grid',
         gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
@@ -95,10 +101,27 @@ export function PositionSizeCalc({ accounts, defaultPair }: {
         </div>
       </div>
 
-      {/* Risk % */}
-      <div style={{ marginBottom: 4 }}>
-        <span style={labelStyle}>Risk %</span>
-        <input value={riskPct} onChange={(e) => setRiskPct(e.target.value)} placeholder="0.5" style={fieldStyle} />
+      {/* SL pips (derived) + Risk % side by side */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+        gap: 8,
+        marginBottom: 4,
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <span style={labelStyle}>SL pips</span>
+          <div className="font-mono" style={{
+            ...fieldStyle,
+            background: 'var(--bg-inset)', border: '1px solid var(--border-subtle)',
+            borderRadius: 8, color: results.length > 0 ? 'var(--text-1)' : 'var(--text-3)',
+          }}>
+            {results.length > 0 ? results[0].stopPips.toFixed(0) : '—'}
+          </div>
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <span style={labelStyle}>Risk %</span>
+          <input value={riskPct} onChange={(e) => setRiskPct(e.target.value)} placeholder="0.5" style={fieldStyle} />
+        </div>
       </div>
 
       {results.length === 0 ? (
@@ -106,22 +129,24 @@ export function PositionSizeCalc({ accounts, defaultPair }: {
           Enter entry + SL to see lot sizes per account.
         </p>
       ) : (
-        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {results.map((r) => (
             <div key={r.account.id} style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-              padding: '7px 10px', background: 'var(--bg-card-2)', borderRadius: 6,
-              minWidth: 0,
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '9px 11px', background: 'var(--bg-inset)',
+              border: '1px solid var(--border-subtle)', borderRadius: 8,
+              minWidth: 0, gap: 10,
             }}>
               <span style={{ color: 'var(--text-2)', fontSize: 11, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {r.account.name}
               </span>
-              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', flexShrink: 0 }}>
-                <span className="font-mono" style={{ color: 'var(--text-1)', fontWeight: 500, fontSize: 12 }}>
-                  {r.lots.toFixed(2)} lots
+              <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexShrink: 0 }}>
+                <span className="font-mono" style={{ color: 'var(--text-1)', fontWeight: 500, fontSize: 17 }}>
+                  {r.lots.toFixed(2)}
+                  <span style={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}> lots</span>
                 </span>
-                <span style={{ color: 'var(--text-3)', fontSize: 10 }}>
-                  ${Math.round(r.riskDollars)} · {r.stopPips.toFixed(0)} pips
+                <span className="font-mono" style={{ color: 'var(--green)', fontWeight: 500, fontSize: 14 }}>
+                  ${Math.round(r.riskDollars)}
                 </span>
               </span>
             </div>

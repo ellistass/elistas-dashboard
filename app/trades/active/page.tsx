@@ -1,65 +1,68 @@
 'use client'
-// app/trades/active/page.tsx
-// Focused command center for open positions: alignment, news collisions,
-// R-toward-TP progress, inline edit SL/TP, mark-closed flow.
+// app/trades/active/page.tsx — Active positions (v2 redesign).
+// Command center for open positions: alignment vs today's thesis, news
+// collisions, risk→TP price tracks, edit SL/TP (shared drawer), mark closed.
 //
-// Note: marking closed here marks the JOURNAL row closed. The actual MT4
-// position must be closed in MT4 itself — the EA will then sync the close
-// event and overwrite this row's close price/result/etc.
+// Data contract unchanged: GET /api/dashboard (openTrades) + GET /api/accounts;
+// actions via PATCH /api/trades. Marking closed here marks the JOURNAL row
+// closed — the actual MT4 position must be closed in MT4; the EA syncs the
+// real close back and overwrites this row.
+//
+// The page re-fetches every 60s so floating P&L / open R stay near-live
+// (the old page fetched once on mount).
 
-import { useEffect, useMemo, useState } from 'react'
-import { NewsCollisionBadge } from '@/app/_components/DashboardWidgets'
-import { SourceChip, RiskLine } from '@/app/_components/TradeChips'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  CheckCircle2, Crosshair, Newspaper, TriangleAlert, XCircle,
+} from 'lucide-react'
+import { EditTradeDrawer } from '@/app/_components/EditTradeDrawer'
+import { KpiRow } from './_components/KpiRow'
+import { PositionCard } from './_components/PositionCard'
+import { Account, OpenTrade, derivePosition, MONO } from './_components/types'
 
-interface OpenTrade {
-  id: string
-  pair: string
-  direction: string
-  model: string
-  grade: string
-  session: string
-  entryPrice: number
-  slPrice: number
-  tpPrice: number
-  riskPercent: number
-  strongCcy: string
-  weakCcy: string
-  divScore: number | null
-  date: string
-  source: string
-  accountId: string | null
-  alignmentStatus: 'Green' | 'Amber' | 'Red' | 'Unknown'
-  alignmentReason: string
-  newsCollisions: Array<{ title: string; country: string; currency: string; date: string; impact: string }>
-}
+type Filter = 'all' | 'green' | 'amber' | 'red' | 'news'
+type Sort = 'risk' | 'r' | 'pair'
 
-interface Account { id: string; name: string; currentBalance: number; currency: string }
-interface OpenTradeExtra { lotSize?: number | null; profitCcy?: number | null }
+const REFRESH_MS = 60_000
 
-export default function ActiveTradesPage() {
+export default function ActivePositionsPage() {
   const [trades, setTrades] = useState<OpenTrade[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
-  const [filter, setFilter] = useState<'all' | 'green' | 'amber' | 'red' | 'news'>('all')
+  const [filter, setFilter] = useState<Filter>('all')
+  const [sort, setSort] = useState<Sort>('risk')
   const [loading, setLoading] = useState(true)
-  const [edit, setEdit] = useState<{ id: string; sl: string; tp: string } | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [editing, setEditing] = useState<OpenTrade | null>(null)
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    const d = await fetch('/api/dashboard').then((r) => r.json())
-    setTrades(d.openTrades ?? [])
-    const a = await fetch('/api/accounts').then((r) => r.json())
-    setAccounts((a.accounts ?? []).map((x: any) => ({
-      id: x.id, name: x.name, currentBalance: x.currentBalance, currency: x.currency,
-    })))
-    setLoading(false)
+  async function load(showSpinner = false) {
+    if (showSpinner) setLoading(true)
+    try {
+      const [d, a] = await Promise.all([
+        fetch('/api/dashboard').then((r) => r.json()),
+        fetch('/api/accounts').then((r) => r.json()),
+      ])
+      setTrades(d.openTrades ?? [])
+      setAccounts((a.accounts ?? []).map((x: any) => ({
+        id: x.id, name: x.name, currentBalance: x.currentBalance,
+        startingBalance: x.startingBalance, currency: x.currency,
+      })))
+    } finally {
+      setLoading(false)
+    }
   }
-  useEffect(() => { load() }, [])
 
-  const filtered = useMemo(() => {
-    if (filter === 'all') return trades
-    if (filter === 'news') return trades.filter((t) => t.newsCollisions?.length > 0)
-    return trades.filter((t) => t.alignmentStatus.toLowerCase() === filter)
-  }, [trades, filter])
+  useEffect(() => {
+    load(true)
+    timer.current = setInterval(() => load(false), REFRESH_MS)
+    return () => { if (timer.current) clearInterval(timer.current) }
+  }, [])
+
+  const acctById = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
+  const derived = useMemo(
+    () => new Map(trades.map((t) => [t.id, derivePosition(t, t.accountId ? acctById.get(t.accountId) : undefined)])),
+    [trades, acctById],
+  )
 
   const counts = useMemo(() => ({
     all: trades.length,
@@ -69,164 +72,208 @@ export default function ActiveTradesPage() {
     news: trades.filter((t) => t.newsCollisions?.length > 0).length,
   }), [trades])
 
-  const accountName = (id: string | null) => accounts.find((a) => a.id === id)?.name ?? '—'
+  const unrealized = useMemo(() => {
+    const rs = trades.map((t) => derived.get(t.id)?.openR).filter((r): r is number => r != null)
+    return {
+      sum: rs.length ? Number(rs.reduce((s, r) => s + r, 0).toFixed(1)) : null,
+      coverage: rs.length,
+    }
+  }, [trades, derived])
 
-  async function saveSlTp(id: string, slStr: string, tpStr: string) {
-    const slPrice = parseFloat(slStr)
-    const tpPrice = parseFloat(tpStr)
-    if (!Number.isFinite(slPrice) || !Number.isFinite(tpPrice)) return
+  const visible = useMemo(() => {
+    let list = trades
+    if (filter === 'news') list = list.filter((t) => t.newsCollisions?.length > 0)
+    else if (filter !== 'all') list = list.filter((t) => t.alignmentStatus.toLowerCase() === filter)
+    const d = (id: string) => derived.get(id)
+    return [...list].sort((a, b) => {
+      if (sort === 'pair') return a.pair.localeCompare(b.pair)
+      if (sort === 'r') return (d(b.id)?.openR ?? -Infinity) - (d(a.id)?.openR ?? -Infinity)
+      return (d(b.id)?.riskDollars ?? -1) - (d(a.id)?.riskDollars ?? -1)
+    })
+  }, [trades, filter, sort, derived])
+
+  const accountCount = new Set(trades.map((t) => t.accountId).filter(Boolean)).size
+
+  async function saveMarkClosed(t: OpenTrade, closePrice: number) {
+    const outcome = closePrice === t.entryPrice ? 'BE' : (
+      (t.direction === 'Long' && closePrice > t.entryPrice) ||
+      (t.direction === 'Short' && closePrice < t.entryPrice) ? 'Win' : 'Loss'
+    )
     await fetch('/api/trades', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, slPrice, tpPrice }),
+      body: JSON.stringify({ id: t.id, closePrice, outcome }),
     })
-    setEdit(null)
-    await load()
+    setSelected((prev) => { const n = new Set(prev); n.delete(t.id); return n })
+    await load(false)
   }
 
-  async function markClosed(t: OpenTrade) {
-    const closePriceStr = prompt(`Close ${t.pair} at what price? (enter the price MT4 closed at, or 0 to skip)`)
-    if (closePriceStr == null) return
-    const closePrice = parseFloat(closePriceStr) || t.entryPrice
-    await fetch('/api/trades', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: t.id, closePrice, outcome: closePrice === t.entryPrice ? 'BE' : (
-        (t.direction === 'Long' && closePrice > t.entryPrice) || (t.direction === 'Short' && closePrice < t.entryPrice) ? 'Win' : 'Loss'
-      ) }),
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
     })
-    await load()
   }
 
-  if (loading) return <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-3)' }}>Loading open trades…</div>
+  const chips: Array<{ key: Filter; label: string; count: number; color: string; Icon: any }> = [
+    { key: 'all', label: 'All', count: counts.all, color: 'var(--accent)', Icon: null },
+    { key: 'green', label: 'Aligned', count: counts.green, color: 'var(--green)', Icon: CheckCircle2 },
+    { key: 'amber', label: 'Watch', count: counts.amber, color: 'var(--amber)', Icon: TriangleAlert },
+    { key: 'red', label: 'Against', count: counts.red, color: 'var(--red)', Icon: XCircle },
+    { key: 'news', label: 'News', count: counts.news, color: 'var(--amber)', Icon: Newspaper },
+  ]
+
+  if (loading) {
+    return <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>Loading open positions…</div>
+  }
+
+  const editingAcct = editing?.accountId ? acctById.get(editing.accountId) : undefined
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 14 }}>
+      <style>{`
+        .apos-kpis { }
+        @media (max-width: 900px) {
+          .apos-kpis { grid-template-columns: repeat(2, 1fr) !important; }
+          .apos-tiles { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
+
+      {/* ── header ── */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 18 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Active trades</h1>
-          <p style={{ fontSize: 13, color: 'var(--text-3)', margin: '2px 0 0' }}>
-            {trades.length} open across {new Set(trades.map((t) => t.accountId).filter(Boolean)).size} account(s)
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', margin: 0 }}>Active positions</h1>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontFamily: MONO, fontSize: 10.5, padding: '3px 10px', borderRadius: 999,
+              color: 'var(--accent)', background: 'var(--accent-dim)', border: '1px solid var(--accent-border)',
+            }}>
+              <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
+              live
+            </span>
+          </div>
+          <p style={{ fontSize: 13, color: 'var(--text-2)', margin: '4px 0 0' }}>
+            {trades.length} open across {accountCount} account{accountCount === 1 ? '' : 's'} · refreshes every 60s
           </p>
         </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="kicker">Sort</span>
+          <div className="seg">
+            {([['risk', 'Risk'], ['r', 'R'], ['pair', 'Pair']] as Array<[Sort, string]>).map(([k, label]) => (
+              <button key={k} className={sort === k ? 'on' : ''} onClick={() => setSort(k)}>{label}</button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
-        {(['all', 'green', 'amber', 'red', 'news'] as const).map((f) => (
-          <button key={f} onClick={() => setFilter(f)} style={{
-            fontSize: 12, padding: '5px 12px', borderRadius: 6,
-            background: filter === f ? 'var(--bg-elevated)' : 'transparent',
-            color: filter === f ? 'var(--text-1)' : 'var(--text-2)',
-            border: '1px solid var(--border)', cursor: 'pointer',
+      {/* ── KPI tiles ── */}
+      <KpiRow
+        openCount={trades.length}
+        unrealizedR={unrealized.sum}
+        unrealizedCoverage={unrealized.coverage}
+        againstCount={counts.red}
+        newsCount={counts.news}
+      />
+
+      {/* ── filter chips ── */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        {chips.map(({ key, label, count, color, Icon }) => {
+          const on = filter === key
+          const filledAll = on && key === 'all'
+          return (
+            <button key={key} onClick={() => setFilter(key)} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontSize: 12, fontWeight: on ? 500 : 400, padding: '6px 13px', borderRadius: 999, cursor: 'pointer',
+              background: filledAll ? 'var(--accent)' : on ? `color-mix(in srgb, ${color} 12%, transparent)` : 'transparent',
+              color: filledAll ? 'var(--accent-on)' : on ? color : 'var(--text-2)',
+              border: `1px solid ${on ? (filledAll ? 'var(--accent)' : color) : 'var(--border)'}`,
+            }}>
+              {Icon && <Icon size={12} strokeWidth={2} />}
+              {label}
+              <span style={{ fontFamily: MONO, fontSize: 11, opacity: filledAll ? 0.85 : 0.7 }}>{count}</span>
+            </button>
+          )
+        })}
+
+        {selected.size > 0 && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto',
+            fontSize: 12, color: 'var(--text-2)',
           }}>
-            {f === 'all' ? 'All' : f === 'news' ? '⚠ News' : f.charAt(0).toUpperCase() + f.slice(1)}
-            <span style={{ marginLeft: 6, color: 'var(--text-3)' }}>{counts[f]}</span>
-          </button>
-        ))}
+            <span style={{ fontFamily: MONO }}>{selected.size} selected</span>
+            <button onClick={() => setSelected(new Set())} style={{
+              fontSize: 11, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
+              background: 'transparent', color: 'var(--text-3)', border: '1px solid var(--border)',
+            }}>
+              Clear
+            </button>
+          </span>
+        )}
       </div>
 
-      {filtered.length === 0 ? (
-        <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>
-          {filter === 'all' ? 'No open trades.' : 'No trades match this filter.'}
+      {/* ── position list ── */}
+      {visible.length === 0 ? (
+        <div className="card" style={{ padding: '56px 20px', textAlign: 'center' }}>
+          <Crosshair size={26} strokeWidth={2} color="var(--text-3)" style={{ margin: '0 auto 12px', display: 'block' }} />
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-1)' }}>
+            {filter === 'all' ? 'No open positions' : 'No positions match this filter'}
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-3)', marginTop: 4 }}>
+            {filter === 'all'
+              ? 'Take an idea from the dashboard or open a trade in MT4 — the EA syncs it here.'
+              : 'Switch filters to see the rest of the book.'}
+          </div>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {filtered.map((t) => {
-            const isEditing = edit?.id === t.id
-            const alignColor =
-              t.alignmentStatus === 'Green' ? 'var(--green)' :
-              t.alignmentStatus === 'Amber' ? 'var(--amber)' :
-              t.alignmentStatus === 'Red'   ? 'var(--red)' : 'var(--text-3)'
-
-            return (
-              <div key={t.id} className="card" style={{ padding: '14px 16px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr auto', gap: 16, alignItems: 'start' }}>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span className="font-mono" style={{ fontSize: 16, fontWeight: 500 }}>{t.pair}</span>
-                      <span style={{ fontSize: 12, color: t.direction === 'Long' ? 'var(--green)' : 'var(--red)' }}>
-                        {t.direction === 'Long' ? '↑ Long' : '↓ Short'}
-                      </span>
-                      {t.grade && <span className={t.grade === 'A+' ? 'badge-aplus' : t.grade === 'B' ? 'badge-b' : 'badge-c'} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3 }}>{t.grade}</span>}
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: alignColor, display: 'inline-block' }} />
-                        <span style={{ fontSize: 11, color: alignColor }}>{t.alignmentStatus}</span>
-                      </span>
-                      <SourceChip source={t.source as any} compact />
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                      {accountName(t.accountId)} · {t.session} · opened {new Date(t.date).toLocaleString()}
-                    </div>
-                    {(() => {
-                      const account = accounts.find((a) => a.id === t.accountId)
-                      return (
-                        <div style={{ marginTop: 6 }}>
-                          <RiskLine
-                            riskPercent={t.riskPercent}
-                            accountBalance={account?.currentBalance}
-                            accountCcy={account?.currency}
-                            lotSize={(t as any).lotSize ?? null}
-                            profitCcy={(t as any).profitCcy ?? null}
-                            outcome="Open"
-                          />
-                        </div>
-                      )
-                    })()}
-                    <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 6 }}>
-                      {t.alignmentReason}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Levels</div>
-                    {isEditing ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <input value={edit.sl} onChange={(e) => setEdit({ ...edit, sl: e.target.value })} placeholder="SL" style={{ padding: '4px 8px', fontSize: 11 }} />
-                        <input value={edit.tp} onChange={(e) => setEdit({ ...edit, tp: e.target.value })} placeholder="TP" style={{ padding: '4px 8px', fontSize: 11 }} />
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button onClick={() => saveSlTp(t.id, edit.sl, edit.tp)} style={{ fontSize: 10, padding: '3px 8px', flex: 1, background: 'var(--green-dim)', color: 'var(--green)', border: '1px solid var(--green-border)', borderRadius: 4 }}>Save</button>
-                          <button onClick={() => setEdit(null)} style={{ fontSize: 10, padding: '3px 8px', flex: 1, background: 'transparent', color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 4 }}>×</button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: 11, color: 'var(--text-2)', fontFamily: 'DM Mono, monospace' }}>
-                        <div>Entry <span style={{ color: 'var(--text-1)' }}>{t.entryPrice}</span></div>
-                        <div>SL <span style={{ color: 'var(--red)' }}>{t.slPrice}</span></div>
-                        <div>TP <span style={{ color: 'var(--green)' }}>{t.tpPrice}</span></div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Risk</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
-                      {t.riskPercent?.toFixed(2)}% · {t.strongCcy} vs {t.weakCcy}
-                      {t.divScore != null && <> · div {t.divScore.toFixed(1)}</>}
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {!isEditing && (
-                      <button onClick={() => setEdit({ id: t.id, sl: String(t.slPrice), tp: String(t.tpPrice) })} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }}>
-                        Modify
-                      </button>
-                    )}
-                    <button onClick={() => markClosed(t)} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }}>
-                      Mark closed
-                    </button>
-                  </div>
-                </div>
-
-                <NewsCollisionBadge events={t.newsCollisions as any} />
-              </div>
-            )
-          })}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {visible.map((t) => (
+            <PositionCard
+              key={t.id}
+              trade={t}
+              account={t.accountId ? acctById.get(t.accountId) : undefined}
+              d={derived.get(t.id)!}
+              selected={selected.has(t.id)}
+              onToggleSelect={() => toggleSelect(t.id)}
+              onEdit={() => setEditing(t)}
+              onMarkClosed={(price) => saveMarkClosed(t, price)}
+            />
+          ))}
         </div>
       )}
 
-      <div className="card" style={{ marginTop: 18, padding: 12, fontSize: 11, color: 'var(--text-3)', textAlign: 'center' }}>
-        Closing a trade here only updates the journal. To close the actual MT4 position, close it in MT4 — the EA will sync the close back automatically.
-      </div>
+      <p style={{ marginTop: 18, fontSize: 11, color: 'var(--text-3)', textAlign: 'center', lineHeight: 1.6 }}>
+        Closing a trade here only updates the journal. To close the actual MT4 position, close it in MT4 —
+        the EA syncs the close back automatically.
+      </p>
+
+      {/* ── shared edit drawer (SL / TP / initial SL / risk $) ── */}
+      {editing && (
+        <EditTradeDrawer
+          trade={{
+            id: editing.id,
+            pair: editing.pair,
+            direction: editing.direction,
+            entryPrice: editing.entryPrice,
+            slPrice: editing.slPrice,
+            initialSlPrice: editing.initialSlPrice,
+            riskPercent: editing.riskPercent,
+            riskAmount: editing.riskAmount,
+            tpPrice: editing.tpPrice,
+            profitCcy: editing.profitCcy,
+            outcome: 'Open',
+            date: editing.date,
+            model: editing.model,
+            grade: editing.grade,
+          }}
+          currency={editingAcct?.currency}
+          startingBalance={editingAcct?.startingBalance}
+          onClose={() => setEditing(null)}
+          onSaved={async () => { setEditing(null); await load(false) }}
+        />
+      )}
     </div>
   )
 }

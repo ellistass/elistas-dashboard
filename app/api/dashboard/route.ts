@@ -120,6 +120,8 @@ export async function GET() {
         slPrice: trade.slPrice,
         tpPrice: trade.tpPrice,
         riskPercent: trade.riskPercent,
+        riskAmount: (trade as any).riskAmount ?? null,
+        initialSlPrice: (trade as any).initialSlPrice ?? null,
         strongCcy: trade.strongCcy,
         weakCcy: trade.weakCcy,
         divScore: trade.divScore,
