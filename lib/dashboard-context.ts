@@ -177,8 +177,13 @@ export function pickDxyVix(barchartData: any): MacroTile[] {
   const dxyMatch = all.find((r: any) => /^DX[Y]?[A-Z]?\d{1,2}$/.test(r.symbol) || /^\^?DXY$/.test(r.symbol) || /^DXY/.test(r.symbol))
   const vixMatch = all.find((r: any) => /^\^?VIX$/.test(r.symbol) || /^VI[A-Z]\d{1,2}$/.test(r.symbol))
   const tiles: MacroTile[] = []
-  if (dxyMatch) tiles.push({ symbol: 'DXY', name: 'US Dollar Index', latest: dxyMatch.latest, percentChange: dxyMatch.percentChange })
-  if (vixMatch) tiles.push({ symbol: 'VIX', name: 'CBOE Volatility',  latest: vixMatch.latest, percentChange: vixMatch.percentChange })
+  // Sanity bounds: roll-code regexes occasionally grab the wrong futures row.
+  // DXY trades ~80–130; VIX ~8–100. A "DXY" of 17.50 is a mismatched contract —
+  // better to show nothing than a wrong number. Also refuse the same row twice.
+  const dxyOk = dxyMatch && dxyMatch.latest >= 70 && dxyMatch.latest <= 140 && dxyMatch !== vixMatch
+  const vixOk = vixMatch && vixMatch.latest >= 5 && vixMatch.latest <= 150
+  if (dxyOk) tiles.push({ symbol: 'DXY', name: 'US Dollar Index', latest: dxyMatch.latest, percentChange: dxyMatch.percentChange })
+  if (vixOk) tiles.push({ symbol: 'VIX', name: 'CBOE Volatility',  latest: vixMatch.latest, percentChange: vixMatch.percentChange })
   return tiles
 }
 

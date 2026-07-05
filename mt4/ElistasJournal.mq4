@@ -420,7 +420,7 @@ void FlushEventQueue()
    int n = ArraySize(eventQueue);
    if(n == 0) { failStreak = 0; return; }
 
-   int count = MathMin(n, BatchSize);
+   int count = (int)MathMin(n, BatchSize);
    string body = "{\"events\":[";
    for(int i = 0; i < count; i++)
    {

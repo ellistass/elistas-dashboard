@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { pipSize } from '@/lib/mt4'
+import { runTradeScanJob } from '@/app/api/cron/trade-scan/route'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,6 +33,26 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
   }
 
+  const ideaOutcomes = await evaluateIdeaOutcomes()
+  let tradeScan = null
+  let tradeScanError: string | null = null
+
+  try {
+    tradeScan = await runTradeScanJob(req)
+  } catch (err) {
+    console.error('[idea-outcomes] trade scan failed:', err)
+    tradeScanError = err instanceof Error ? err.message : String(err)
+  }
+
+  return NextResponse.json({
+    ok: ideaOutcomes.ok && !tradeScanError,
+    ideaOutcomes,
+    tradeScan,
+    tradeScanError,
+  })
+}
+
+async function evaluateIdeaOutcomes() {
   // Yesterday at 00:00 UTC is the alertDate we evaluate against today's action.
   const now = new Date()
   const yesterday = new Date(now.getTime() - 24 * 3600 * 1000)
@@ -44,7 +65,7 @@ export async function GET(req: NextRequest) {
     orderBy: { fetchedAt: 'desc' },
   })
   if (!todaySnapshot) {
-    return NextResponse.json({ ok: false, message: 'No Barchart snapshot from today yet — wait and retry' }, { status: 409 })
+    return { ok: false, message: 'No Barchart snapshot from today yet — wait and retry' }
   }
   const perfBySymbol = extractPerfMap(todaySnapshot.data)
 
@@ -89,7 +110,7 @@ export async function GET(req: NextRequest) {
     evaluated++
   }
 
-  return NextResponse.json({ ok: true, evaluated, alertDate: dayStart })
+  return { ok: true, evaluated, alertDate: dayStart }
 }
 
 function startOfUtcDay(d: Date): Date {

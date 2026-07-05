@@ -310,3 +310,82 @@ model IdeaOutcome {
   @@index([outcome])
   @@index([source, userAction])
 }
+
+// ── Trend-Strength Screener ───────────────────────────────────────────────────
+// Daily H4 sweep of the whole universe (forex, metals, indices, big stocks).
+// Goal: rank markets by trend freshness/strength so the week's focus list is a
+// numbers game, not a forced trade. Volume/effort refinement is done manually
+// on MT4 for the shortlist. Runs alongside RFDM scoring for comparison.
+
+model ScanRun {
+  id         String       @id @default(cuid())
+  createdAt  DateTime     @default(now())
+  runType    String       @default("daily")   // "daily" | "weekly-digest" | "manual"
+  universe   Int                              // how many symbols were attempted
+  scanned    Int                              // how many succeeded
+  errors     String?                          // JSON array of { symbol, message }
+  results    ScanResult[]
+
+  @@index([createdAt])
+}
+
+model ScanResult {
+  id        String   @id @default(cuid())
+  runId     String
+  run       ScanRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  symbol      String                          // Yahoo symbol, e.g. "EURUSD=X", "GC=F", "^GSPC", "NVDA"
+  displayName String                          // human name, e.g. "EUR/USD", "Gold", "S&P 500"
+  assetClass  String                          // "forex" | "metal" | "index" | "stock" | "crypto" | "energy"
+  tradeable   Boolean  @default(true)         // tradeable on the user's MT4 account
+
+  // ── Indicator snapshot (H4, resampled from 1h) ────────────────────────────
+  lastClose   Float
+  adx         Float                           // ADX(14) on H4
+  adxPrev     Float                           // ADX 5 bars ago (slope check)
+  plusDi      Float
+  minusDi     Float
+  ema20       Float
+  ema50       Float
+  atrPct      Float                           // ATR(14) as % of price — volatility context
+  er          Float    @default(0)            // Kaufman Efficiency Ratio(20) — 1 = straight-line trend, ~0 = range
+
+  // ── Derived classification ────────────────────────────────────────────────
+  direction   String                          // "long" | "short" | "none" (DI dominance + EMA agreement)
+  phase       String                          // "fresh" | "established" | "fading" | "none"
+  condition   String   @default("transition") // "trend" | "big-range" | "tight-range" | "transition"
+
+  // ── Range box (set when condition is a range) ─────────────────────────────
+  rangeHigh     Float?
+  rangeLow      Float?
+  rangeWidthAtr Float?                        // box width in ATR(14) multiples — 4+ = "big" range
+  pricePosition Float?                        // 0 = at range low, 1 = at range high (edges = reversal watch)
+
+  adxRising   Boolean
+  emaAligned  Boolean                         // price/EMA20/EMA50 stacked in trend direction
+  structureOk Boolean                         // HH/HL (or LH/LL) over recent swings
+  score       Float                           // composite 0–100
+  grade       String                          // "A" | "B" | "C" | "skip"
+
+  // ── RFDM cross-check (forex only) ─────────────────────────────────────────
+  rfdmAgrees  Boolean?                        // null = not a forex pair / no score available
+  rfdmNote    String?                         // e.g. "RFDM: EUR #2 strong, USD #8 — agrees with long"
+
+  // ── Automatic outcome tracking (filled in by later scans, no manual input) ─
+  // R = forward move in ATR(14) units, SIGNED RELATIVE TO THE SCANNED DIRECTION
+  // (positive = price went the way the scan called). For trend signals you want
+  // positive R; for climax signals a negative R means the reversal thesis won.
+  evalBars    Int      @default(0)            // forward H4 bars evaluated so far (caps at 30)
+  rFwd5       Float?                          // R at +5 H4 bars  (~1 trading day)
+  rFwd15      Float?                          // R at +15 H4 bars (~3 days)
+  rFwd30      Float?                          // R at +30 H4 bars (~6 days)
+  mfe30       Float?                          // best R reached within 30 bars (max favourable excursion)
+  mae30       Float?                          // worst R reached within 30 bars (max adverse excursion)
+  evaluatedAt DateTime?                       // set once the full 30-bar window is graded
+
+  @@index([runId])
+  @@index([symbol, createdAt])
+  @@index([grade])
+  @@index([evaluatedAt])
+}

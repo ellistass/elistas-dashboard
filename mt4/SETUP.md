@@ -22,17 +22,28 @@ This EA logs every trade on the MT4 account to the Elistas dashboard. One EA per
    - **ApiKey**: paste the per-account key from the dashboard
    - **SendScreenshots**: leave on (entry + close)
    - **CatchupHistoryDays**: how far back to sweep when the terminal starts up. **`0` (default) = sweep ALL history the broker exposes** — best for the first run so account balance reconciles against the trade ledger. Use a positive number (e.g. 30, 90) to limit the sweep window once you've completed an initial backfill.
+   - **BatchSize** (default 25): events bundled per HTTP request while draining the queue. Leave as is.
+   - **BalanceHeartbeatSec** (default 300): how often live balance/equity is pushed to the dashboard between trades. `0` disables.
 
-   > First-run note: with `CatchupHistoryDays = 0` on a multi-year account, the initial sweep can take several minutes — the EA throttles POSTs after the first 50 to avoid rate limits. Watch the Experts tab for `Catchup progress: N posted` lines.
+   > v2 note: the catchup no longer blocks the terminal. Events are queued in memory and drain in the background at one batched request per poll tick — a 2,000-trade backfill is ~160 requests spread over a few minutes, with `Flushed 25 events, N still queued` progress lines in the Experts tab. MT4 stays responsive throughout.
 7. **Common tab → tick "Allow live trading"** → OK.
 8. Check the smiley face is happy in the top-right corner of the chart.
 
 ## Verify it's working
 
-- Open Experts tab at bottom of MT4 — you should see `[ElistasJournal] Starting for MT4 account ...`
-- Open the dashboard `/journal` page — any open positions should appear within ~2 seconds.
+- Open Experts tab at bottom of MT4 — you should see `[ElistasJournal v2] Starting for MT4 account ...`
+- Open the dashboard `/journal` page — any open positions should appear within a few seconds.
+- The account's **balance on the dashboard now updates automatically** — on every open/close and via the 5-minute heartbeat. If the Accounts page balance moves to match MT4, the pipeline is healthy.
 - If you see `WebRequest error 4060` — the URL isn't in the allowed list (step 4).
 - If you see `401 Unauthorized` in the logs — wrong API key, or the account isn't linked in the dashboard.
+- `Batch POST failed (code=...) — retrying in N ticks` — transient network/server issue; the EA backs off and re-sends automatically. Nothing is lost unless the terminal is closed with events still queued (they re-sync from server state on next start).
+
+## How dashboard "Take" placeholders get linked
+
+When you take an idea on the dashboard, a placeholder trade row is created per account. The EA's open event links to it automatically:
+- If you typed the **MT4 order number** at take time, the match is exact (account + ticket).
+- If not, the EA's open event **auto-adopts** the newest placeholder with the same account + pair + direction from the last 12 hours.
+- Manual rescue: set the Order # on the trade in the journal's edit drawer.
 
 ## Shadow terminal for phone-traded accounts
 

@@ -7,7 +7,7 @@
     },
     {
       "path": "/api/cron/idea-outcomes",
-      "schedule": "0 21 * * 1-5"
+      "schedule": "15 21 * * 1-5"
     }
   ]
 }
