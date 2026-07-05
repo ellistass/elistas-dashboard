@@ -1,11 +1,14 @@
 "use client";
-// app/scanner/page.tsx — Trend-strength screener (v2 design).
-// Reads the latest ScanRun from GET /api/scan; "Run scan" POSTs a manual sweep.
-// Sections: fresh trends, established trends, big ranges (reversal watch),
-// then the full ranked table with condition + RFDM cross-check.
+// app/scanner/page.tsx — Trend-strength screener (v2 design), briefing-first.
+//
+// Layout philosophy: the pipeline already did the interpretation, so the page
+// leads with the verdict, not the evidence. Top: one-line market read + focus
+// cards (each a single decision unit). Everything else — established trends,
+// ranges, full ranking, performance stats — collapses behind <details> and is
+// only there when you want the numbers.
 
 import { useState, useEffect, useCallback } from "react";
-import { Radar, RefreshCw, TrendingUp, TrendingDown, AlertTriangle } from "lucide-react";
+import { Radar, RefreshCw, TrendingUp, TrendingDown, AlertTriangle, Flame } from "lucide-react";
 
 interface ScanResultRow {
   id: string;
@@ -108,14 +111,105 @@ function Dir({ d }: { d: string }) {
   return <span style={{ color: "var(--text-3)" }}>—</span>;
 }
 
-function edgeText(r: ScanResultRow): { text: string; hot: boolean } {
-  const pos = r.pricePosition ?? 0.5;
-  if (pos >= 0.8) return { text: "AT TOP — upthrust watch", hot: true };
-  if (pos <= 0.2) return { text: "AT BOTTOM — spring watch", hot: true };
-  return { text: `mid-range ${Math.round(pos * 100)}%`, hot: false };
+const fmtPx = (v: number | null, close: number) => (v == null ? "—" : v.toFixed(close < 10 ? 4 : 2));
+
+// ── Focus items: the day's decision units ─────────────────────────────────────
+
+type FocusKind = "trend" | "edge" | "climax";
+interface FocusItem {
+  kind: FocusKind;
+  row: ScanResultRow;
+  headline: string;
+  why: string;
+  action: string;
 }
 
-const fmtPx = (v: number | null, close: number) => (v == null ? "—" : v.toFixed(close < 10 ? 4 : 2));
+function buildFocus(results: ScanResultRow[]): FocusItem[] {
+  const items: FocusItem[] = [];
+
+  for (const r of results) {
+    if (r.condition === "trend" && r.phase === "fresh" && (r.grade === "A" || r.grade === "B")) {
+      items.push({
+        kind: "trend",
+        row: r,
+        headline: `${r.direction === "long" ? "Long" : "Short"} ${r.displayName}`,
+        why: [
+          `fresh trend, ADX ${r.adx} rising`,
+          r.structureOk ? "structure confirmed" : null,
+          r.emaAligned ? "EMAs stacked" : null,
+          r.rfdmAgrees === true ? "RFDM agrees" : r.rfdmAgrees === false ? "RFDM CONFLICTS" : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        action: "Volume/effort read on MT4, then Model A/B at H4 pool",
+      });
+    } else if (
+      r.condition === "big-range" &&
+      r.pricePosition != null &&
+      (r.pricePosition >= 0.8 || r.pricePosition <= 0.2)
+    ) {
+      const top = r.pricePosition >= 0.8;
+      items.push({
+        kind: "edge",
+        row: r,
+        headline: `${r.displayName} at range ${top ? "top" : "bottom"}`,
+        why: `box ${fmtPx(r.rangeLow, r.lastClose)}–${fmtPx(r.rangeHigh, r.lastClose)} · ${r.rangeWidthAtr} ATRs wide · price at the ${top ? "highs" : "lows"}`,
+        action: top ? "Upthrust watch — H1 sweep + volume climax = Model A short" : "Spring watch — H1 sweep + volume climax = Model A long",
+      });
+    } else if (r.phase === "climax" && !r.adxRising) {
+      items.push({
+        kind: "climax",
+        row: r,
+        headline: `${r.displayName} exhaustion`,
+        why: `ADX ${r.adx} hooked down from 50+ — trend on its last leg`,
+        action: "Reversal hunt — do NOT join the trend; wait for the turn structure",
+      });
+    }
+  }
+
+  // Trends first (A before B), then edges, then climax. Cap at 6 — a focus
+  // list longer than that isn't a focus list.
+  const rank = (i: FocusItem) => (i.kind === "trend" ? (i.row.grade === "A" ? 0 : 1) : i.kind === "edge" ? 2 : 3);
+  return items.sort((a, b) => rank(a) - rank(b) || b.row.score - a.row.score).slice(0, 6);
+}
+
+// ── One-line market read, composed from the data ─────────────────────────────
+
+function buildVerdict(results: ScanResultRow[], focus: FocusItem[]): string {
+  if (!results.length) return "";
+
+  // Currency clusters from forex trend signals: long base = base strong + quote weak.
+  const tally = new Map<string, number>();
+  const bump = (c: string, v: number) => tally.set(c, (tally.get(c) ?? 0) + v);
+  for (const r of results) {
+    const m = r.symbol.match(/^([A-Z]{3})([A-Z]{3})=X$/);
+    if (!m || r.condition !== "trend" || r.direction === "none") continue;
+    const s = r.direction === "long" ? 1 : -1;
+    bump(m[1], s);
+    bump(m[2], -s);
+  }
+  const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+  const strong = ranked.filter(([, v]) => v >= 3).map(([c]) => c);
+  const weak = ranked.filter(([, v]) => v <= -3).map(([c]) => c);
+
+  const parts: string[] = [];
+  if (strong.length || weak.length) {
+    const bits = [];
+    if (strong.length) bits.push(`${strong.join("/")} strong`);
+    if (weak.length) bits.push(`${weak.join("/")} weak across the board`);
+    parts.push(bits.join(", "));
+  }
+  const edges = focus.filter((f) => f.kind === "edge").length;
+  if (edges) parts.push(`${edges} market${edges > 1 ? "s" : ""} at range edges`);
+  const hooks = focus.filter((f) => f.kind === "climax").length;
+  if (hooks) parts.push(`${hooks} exhaustion hook${hooks > 1 ? "s" : ""}`);
+
+  const setups = focus.length;
+  parts.push(setups ? `${setups} setup${setups > 1 ? "s" : ""} worth your time` : "nothing qualifies — doing nothing is the trade");
+  return parts.join(" — ");
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ScannerPage() {
   const [run, setRun] = useState<RunMeta | null>(null);
@@ -162,16 +256,20 @@ export default function ScannerPage() {
     setScanning(false);
   };
 
+  const focus = buildFocus(results);
+  const verdict = buildVerdict(results, focus);
+
   const trends = results.filter((r) => r.condition === "trend" && r.grade !== "skip");
-  const fresh = trends.filter((r) => r.phase === "fresh");
   const established = trends.filter((r) => r.phase === "established");
   const forming = results.filter(
     (r) => r.condition === "transition" && r.score >= 55 && r.adxRising && r.direction !== "none",
   );
-  const climax = results.filter((r) => r.phase === "climax");
   const bigRanges = results
     .filter((r) => r.condition === "big-range")
     .sort((a, b) => Math.abs((b.pricePosition ?? 0.5) - 0.5) - Math.abs((a.pricePosition ?? 0.5) - 0.5));
+  const climax = results.filter((r) => r.phase === "climax");
+
+  const headlineStats = stats.find((s) => s.key === "trend/A");
 
   return (
     <div style={{ padding: "28px 32px", maxWidth: 1280 }}>
@@ -202,9 +300,15 @@ export default function ScannerPage() {
           {scanning ? "Scanning…" : "Run scan"}
         </button>
       </div>
-      <style>{`.spin { animation: scanspin 1s linear infinite; } @keyframes scanspin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`
+        .spin { animation: scanspin 1s linear infinite; } @keyframes scanspin { to { transform: rotate(360deg); } }
+        details.scn > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 12px 2px; }
+        details.scn > summary::-webkit-details-marker { display: none; }
+        details.scn > summary::before { content: '▸'; color: var(--text-3); font-size: 11px; transition: transform .15s; }
+        details.scn[open] > summary::before { transform: rotate(90deg); }
+      `}</style>
 
-      <p style={{ ...LABEL, marginBottom: 24 }}>
+      <p style={{ ...LABEL, marginBottom: 18 }}>
         {run
           ? `last run ${new Date(run.createdAt).toLocaleString()} · ${run.runType} · ${run.scanned}/${run.universe} markets`
           : loading
@@ -213,158 +317,261 @@ export default function ScannerPage() {
         {status ? ` · ${status}` : ""}
       </p>
 
-      {/* ── Fresh trends ── */}
-      <Section title="Fresh trends — ADX 20–30 rising (the prize)">
-        {fresh.length ? (
-          <TrendTable rows={fresh} />
-        ) : (
-          <Empty text="none right now — don't force it" />
-        )}
-      </Section>
+      {/* ── The verdict ── */}
+      {verdict && (
+        <div
+          style={{
+            border: "1px solid var(--accent-border)",
+            background: "var(--accent-dim)",
+            borderRadius: 10,
+            padding: "14px 18px",
+            marginBottom: 20,
+            fontSize: 14,
+            color: "var(--text-1)",
+            lineHeight: 1.5,
+          }}
+        >
+          {verdict}
+        </div>
+      )}
 
-      {/* ── Established ── */}
-      <Section title="Established trends — later in the move">
+      {/* ── Focus cards ── */}
+      {focus.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
+            gap: 12,
+            marginBottom: 26,
+          }}
+        >
+          {focus.map((f) => (
+            <FocusCard key={f.row.id} item={f} />
+          ))}
+        </div>
+      )}
+      {!focus.length && !loading && results.length > 0 && (
+        <div
+          style={{
+            border: "1px dashed var(--border)",
+            borderRadius: 10,
+            padding: "22px 18px",
+            marginBottom: 26,
+            color: "var(--text-2)",
+            fontSize: 13,
+          }}
+        >
+          No qualifying setups today. The scanner's most valuable output is permission to do nothing.
+        </div>
+      )}
+
+      {/* ── Performance headline chips ── */}
+      {headlineStats && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 26, flexWrap: "wrap" }}>
+          <Chip label="A-grade hit rate" value={`${headlineStats.hitRate}%`} good={headlineStats.hitRate >= 50} />
+          <Chip
+            label="A-grade avg R (30 bars)"
+            value={headlineStats.avgR30 == null ? "—" : `${headlineStats.avgR30 > 0 ? "+" : ""}${headlineStats.avgR30}R`}
+            good={(headlineStats.avgR30 ?? 0) > 0}
+          />
+          <Chip label="signals graded" value={String(headlineStats.signals)} good />
+        </div>
+      )}
+
+      {/* ── Collapsed detail ── */}
+      <Collapse title={`Established trends (${established.length})`}>
         {established.length ? <TrendTable rows={established} /> : <Empty text="none" />}
-      </Section>
-
-      {/* ── Forming ── */}
-      <Section title="Forming — ADX rising but price still crawling (watch for promotion)">
+      </Collapse>
+      <Collapse title={`Forming — watch for promotion (${forming.length})`}>
         {forming.length ? <TrendTable rows={forming} /> : <Empty text="none" />}
-      </Section>
-
-      {/* ── Climax ── */}
-      <Section title="Climax — ADX 50+ (never a trend entry; reversal hunt on the hook down)">
+      </Collapse>
+      <Collapse title={`Big ranges (${bigRanges.length})`}>
+        {bigRanges.length ? <RangeTable rows={bigRanges} /> : <Empty text="none" />}
+      </Collapse>
+      <Collapse title={`Climax — ADX 50+ (${climax.length})`}>
         {climax.length ? <TrendTable rows={climax} /> : <Empty text="none" />}
-      </Section>
-
-      {/* ── Big ranges ── */}
-      <Section title="Big ranges — reversal watch (springs / upthrusts at the edges)">
-        {bigRanges.length ? (
-          <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--bg-card)" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-                  <th style={TH}>Market</th>
-                  <th style={TH}>Box</th>
-                  <th style={TH}>Width</th>
-                  <th style={TH}>Price position</th>
-                  <th style={TH}>ADX</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bigRanges.map((r) => {
-                  const edge = edgeText(r);
-                  return (
-                    <tr key={r.id} style={{ borderBottom: "1px solid var(--border-faint)" }}>
-                      <td style={{ ...TD, color: "var(--text-1)", fontWeight: 500 }}>
-                        {r.displayName}
-                        {!r.tradeable && <span style={{ ...LABEL, marginLeft: 8 }}>not on MT4</span>}
-                      </td>
-                      <td style={{ ...TD, ...MONO, fontSize: 12 }}>
-                        {fmtPx(r.rangeLow, r.lastClose)} – {fmtPx(r.rangeHigh, r.lastClose)}
-                      </td>
-                      <td style={{ ...TD, ...MONO, fontSize: 12 }}>{r.rangeWidthAtr} ATRs</td>
-                      <td style={{ ...TD }}>
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 6,
-                            color: edge.hot ? "var(--amber)" : "var(--text-2)",
-                            fontSize: 12,
-                          }}
-                        >
-                          {edge.hot && <AlertTriangle size={13} />}
-                          {edge.text}
-                        </span>
-                      </td>
-                      <td style={{ ...TD, ...MONO, fontSize: 12 }}>
-                        {r.adx}
-                        {r.adxRising ? "↑" : "↓"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty text="none" />
-        )}
-      </Section>
-
-      {/* ── Full ranking ── */}
-      <Section title={`Full ranking — ${results.length} markets`}>
+      </Collapse>
+      <Collapse title={`Full ranking (${results.length} markets)`}>
         {results.length ? <TrendTable rows={results} showCondition /> : <Empty text={loading ? "loading…" : "no data"} />}
-      </Section>
-
-      {/* ── Auto-tracked signal performance ── */}
-      <Section title="Signal performance — auto-graded by later scans (R = ATR units in called direction; climax wants negative)">
-        {stats.length ? (
-          <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--bg-card)", minWidth: 640 }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-                  <th style={TH}>Bucket</th>
-                  <th style={TH}>Signals</th>
-                  <th style={TH}>Hit rate</th>
-                  <th style={TH}>Avg R +5</th>
-                  <th style={TH}>Avg R +15</th>
-                  <th style={TH}>Avg R +30</th>
-                  <th style={TH}>Avg MFE</th>
-                  <th style={TH}>Avg MAE</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stats.map((s) => (
-                  <tr key={s.key} style={{ borderBottom: "1px solid var(--border-faint)" }}>
-                    <td style={{ ...TD, ...MONO, fontSize: 12, color: "var(--text-1)" }}>{s.key}</td>
-                    <td style={{ ...TD, ...MONO, fontSize: 12 }}>{s.signals}</td>
-                    <td style={{ ...TD, ...MONO, fontSize: 12, color: s.hitRate >= 50 ? "var(--green)" : "var(--red)" }}>
-                      {s.hitRate}%
-                    </td>
-                    {[s.avgR5, s.avgR15, s.avgR30, s.avgMfe, s.avgMae].map((v, i) => (
-                      <td
-                        key={i}
-                        style={{ ...TD, ...MONO, fontSize: 12, color: v == null ? "var(--text-3)" : v >= 0 ? "var(--green)" : "var(--red)" }}
-                      >
-                        {v == null ? "—" : v.toFixed(2)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty text="no graded signals yet — fills in automatically ~6 days after the first scans deploy" />
-        )}
-      </Section>
+      </Collapse>
+      <Collapse title={`Signal performance — all buckets (${stats.length})`}>
+        {stats.length ? <StatsTable stats={stats} /> : <Empty text="no graded signals yet — fills in automatically ~6 days after deploy" />}
+      </Collapse>
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+// ── Pieces ────────────────────────────────────────────────────────────────────
+
+function FocusCard({ item }: { item: FocusItem }) {
+  const r = item.row;
+  const accent =
+    item.kind === "trend"
+      ? r.direction === "long"
+        ? "var(--green)"
+        : "var(--red)"
+      : item.kind === "edge"
+        ? "var(--purple)"
+        : "var(--amber)";
+  const Icon = item.kind === "trend" ? (r.direction === "long" ? TrendingUp : TrendingDown) : item.kind === "edge" ? AlertTriangle : Flame;
   return (
-    <div style={{ marginBottom: 28 }}>
-      <p style={{ ...LABEL, marginBottom: 10 }}>{title}</p>
-      {children}
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        borderLeft: `3px solid ${accent}`,
+        borderRadius: 10,
+        background: "var(--bg-card)",
+        padding: "14px 16px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "var(--text-1)" }}>
+          <Icon size={15} style={{ color: accent }} />
+          {item.headline}
+        </span>
+        <span style={{ ...MONO, fontSize: 12, color: gradeColor(r.grade) }}>
+          {item.kind === "trend" ? `${r.grade} · ${r.score}` : item.kind === "edge" ? "MODEL A" : "REVERSAL"}
+        </span>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--text-2)", margin: "0 0 8px", lineHeight: 1.5 }}>{item.why}</p>
+      <p style={{ fontSize: 12, color: "var(--text-body)", margin: 0, lineHeight: 1.5 }}>
+        <span style={{ color: accent }}>→</span> {item.action}
+        {!r.tradeable && <span style={{ ...LABEL, marginLeft: 6 }}>not on MT4</span>}
+      </p>
     </div>
+  );
+}
+
+function Chip({ label, value, good }: { label: string; value: string; good: boolean }) {
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        background: "var(--bg-card)",
+        padding: "8px 14px",
+        display: "flex",
+        alignItems: "baseline",
+        gap: 8,
+      }}
+    >
+      <span style={{ ...MONO, fontSize: 15, fontWeight: 600, color: good ? "var(--green)" : "var(--red)" }}>{value}</span>
+      <span style={LABEL}>{label}</span>
+    </div>
+  );
+}
+
+function Collapse({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <details className="scn" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+      <summary style={LABEL}>{title}</summary>
+      <div style={{ paddingBottom: 18 }}>{children}</div>
+    </details>
   );
 }
 
 function Empty({ text }: { text: string }) {
   return (
-    <div
-      style={{
-        border: "1px dashed var(--border)",
-        borderRadius: 10,
-        padding: "18px 16px",
-        color: "var(--text-3)",
-        fontSize: 13,
-      }}
-    >
+    <div style={{ border: "1px dashed var(--border)", borderRadius: 10, padding: "18px 16px", color: "var(--text-3)", fontSize: 13 }}>
       {text}
+    </div>
+  );
+}
+
+function edgeText(r: ScanResultRow): { text: string; hot: boolean } {
+  const pos = r.pricePosition ?? 0.5;
+  if (pos >= 0.8) return { text: "AT TOP — upthrust watch", hot: true };
+  if (pos <= 0.2) return { text: "AT BOTTOM — spring watch", hot: true };
+  return { text: `mid-range ${Math.round(pos * 100)}%`, hot: false };
+}
+
+function RangeTable({ rows }: { rows: ScanResultRow[] }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--bg-card)" }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+            <th style={TH}>Market</th>
+            <th style={TH}>Box</th>
+            <th style={TH}>Width</th>
+            <th style={TH}>Price position</th>
+            <th style={TH}>ADX</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const edge = edgeText(r);
+            return (
+              <tr key={r.id} style={{ borderBottom: "1px solid var(--border-faint)" }}>
+                <td style={{ ...TD, color: "var(--text-1)", fontWeight: 500 }}>
+                  {r.displayName}
+                  {!r.tradeable && <span style={{ ...LABEL, marginLeft: 8 }}>not on MT4</span>}
+                </td>
+                <td style={{ ...TD, ...MONO, fontSize: 12 }}>
+                  {fmtPx(r.rangeLow, r.lastClose)} – {fmtPx(r.rangeHigh, r.lastClose)}
+                </td>
+                <td style={{ ...TD, ...MONO, fontSize: 12 }}>{r.rangeWidthAtr} ATRs</td>
+                <td style={TD}>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      color: edge.hot ? "var(--amber)" : "var(--text-2)",
+                      fontSize: 12,
+                    }}
+                  >
+                    {edge.hot && <AlertTriangle size={13} />}
+                    {edge.text}
+                  </span>
+                </td>
+                <td style={{ ...TD, ...MONO, fontSize: 12 }}>
+                  {r.adx}
+                  {r.adxRising ? "↑" : "↓"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function StatsTable({ stats }: { stats: StatBucket[] }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--bg-card)", minWidth: 640 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+            <th style={TH}>Bucket</th>
+            <th style={TH}>Signals</th>
+            <th style={TH}>Hit rate</th>
+            <th style={TH}>Avg R +5</th>
+            <th style={TH}>Avg R +15</th>
+            <th style={TH}>Avg R +30</th>
+            <th style={TH}>Avg MFE</th>
+            <th style={TH}>Avg MAE</th>
+          </tr>
+        </thead>
+        <tbody>
+          {stats.map((s) => (
+            <tr key={s.key} style={{ borderBottom: "1px solid var(--border-faint)" }}>
+              <td style={{ ...TD, ...MONO, fontSize: 12, color: "var(--text-1)" }}>{s.key}</td>
+              <td style={{ ...TD, ...MONO, fontSize: 12 }}>{s.signals}</td>
+              <td style={{ ...TD, ...MONO, fontSize: 12, color: s.hitRate >= 50 ? "var(--green)" : "var(--red)" }}>{s.hitRate}%</td>
+              {[s.avgR5, s.avgR15, s.avgR30, s.avgMfe, s.avgMae].map((v, i) => (
+                <td
+                  key={i}
+                  style={{ ...TD, ...MONO, fontSize: 12, color: v == null ? "var(--text-3)" : v >= 0 ? "var(--green)" : "var(--red)" }}
+                >
+                  {v == null ? "—" : v.toFixed(2)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
