@@ -1,9 +1,10 @@
 // app/api/mcp/[secret]/[transport]/route.ts
 //
 // MCP server co-located inside the Elistas Next.js app. Claude.ai connects to
-// this URL as a custom connector and gets two tools:
+// this URL as a custom connector and gets three tools:
 //   • get_scoring_data    — wraps GET /api/scoring/prompt-data?bare=true
 //   • save_scoring_result — wraps POST /api/scoring/save
+//   • scan_ranges         — wraps POST /api/scanner/run (Wyckoff Range Scanner)
 //
 // Auth model: the URL itself contains the secret (`[secret]` path segment).
 // Anyone who has the full URL can call the tools. Treat the URL like a password.
@@ -162,6 +163,42 @@ const mcpHandler = createMcpHandler(
         if (!r.ok) {
           return {
             content: [{ type: 'text', text: `save failed (${r.status}): ${text}` }],
+            isError: true,
+          }
+        }
+        return { content: [{ type: 'text', text }] }
+      },
+    )
+
+    // Wyckoff Range Scanner (spec §10/§12). HARD RULE: the payload returned to
+    // the trader contains NO direction verdict, NO entry recommendation, and NO
+    // engine verdict — the mechanical accum/distrib call is persisted server-side
+    // (scanner_candidates.engineVerdict) for the blind you-vs-engine benchmark
+    // only. Do not infer or request a direction from this tool.
+    server.tool(
+      'scan_ranges',
+      'Run the Wyckoff Range Scanner over the ~60-instrument real-volume basket ' +
+        '(CME currency/index/commodity futures + US stocks/ETFs, daily bars). ' +
+        'Detects horizontal trading ranges and returns FRESH candidates only: ' +
+        'ranges still open at a decision point (terminal test just printed or ' +
+        'price pressing a boundary) or that broke out within the last ~5 bars. ' +
+        'Each candidate has rangeLo/rangeHi, contextPct (trend into the range), ' +
+        'terminalTest (spring/upthrust/both/none), stoppingAction, barsInRange, ' +
+        'status (open/broken) and breakoutDate. By design it contains NO ' +
+        'direction, NO verdict and NO entry advice — the trader reads the chart ' +
+        'and decides. Every detected range (fresh or not) is persisted to the DB ' +
+        'for the accuracy benchmark. Takes no parameters; allow ~1-2 minutes.',
+      {},
+      async () => {
+        const r = await fetch(`${APP_URL}/api/scanner/run`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+          cache: 'no-store',
+        })
+        const text = await r.text()
+        if (!r.ok) {
+          return {
+            content: [{ type: 'text', text: `scan_ranges failed (${r.status}): ${text}` }],
             isError: true,
           }
         }

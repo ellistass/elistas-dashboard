@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import {
   Gauge, Crosshair, CalendarDays, PenLine,
   TrendingUp, Trophy, History as HistoryIcon,
-  Wallet, Database, Pencil, LogOut, Menu, Radar,
+  Wallet, Database, Pencil, LogOut, Menu, Radar, Frame,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -31,6 +31,7 @@ const GROUPS: NavGroup[] = [
     label: 'Analysis',
     items: [
       { href: '/scanner',    label: 'Screener',   icon: Radar },
+      { href: '/wyckoff',    label: 'Wyckoff',    icon: Frame, input: true },
       { href: '/analytics',  label: 'Stats',      icon: TrendingUp },
       { href: '/scoreboard', label: 'Scoreboard', icon: Trophy },
       { href: '/analysis',   label: 'History',    icon: HistoryIcon },

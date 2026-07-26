@@ -389,3 +389,45 @@ model ScanResult {
   @@index([grade])
   @@index([evaluatedAt])
 }
+
+// ── Wyckoff Range Scanner ─────────────────────────────────────────────────────
+// One row per detected trading range (keyed on instrument + range start date).
+// engineVerdict is the mechanical accumulation/distribution call, LOGGED BLIND
+// for the you-vs-engine benchmark — it is NEVER surfaced in the scan_ranges
+// tool payload. The trader reads the chart and decides; outcome is backfilled
+// by cron once RESOLVE_BARS trading days have passed after the breakout.
+
+model ScannerCandidate {
+  id             String    @id @default(cuid())
+  scanDate       DateTime  @default(now())     // first time this range was seen
+  instrument     String                        // spec ticker: "6E", "ES", "AAPL"
+  rangeLo        Float
+  rangeHi        Float
+  contextPct     Float?                        // §4 trend into the range; null = <60 bars history
+  terminalTest   String                        // spring | upthrust | both | none
+  stoppingAction Boolean                       // §6 selling climax + automatic rally
+  engineVerdict  String                        // accum | distrib | neutral (LOGGED, blind, not shown)
+  loggedBlind    Boolean   @default(true)      // false = range had already resolved when first logged
+                                               //         (2y history seed rows) — exclude from strict benchmark
+  outcome        String?                       // up | down | chop (backfilled §9)
+  outcomeAt      DateTime?                     // when the backfill resolved it
+  status         String    @default("broken")  // "open" (no breakout yet) | "broken" (frozen)
+  // ── Trader's blind read (the "you" side of the you-vs-engine benchmark) ────
+  // Logged from the /wyckoff page BEFORE resolution, then IMMUTABLE — the API
+  // rejects any write once traderVerdict is set or outcome exists. Engine
+  // verdict stays server-side until outcome != null.
+  traderVerdict  String?                       // accum | distrib | pass
+  traderEntry    Float?                        // optional committed entry price
+  traderStop     Float?                        // optional committed stop price
+  traderReadAt   DateTime?                     // when the read was locked
+  barsInRange    Int
+  rangeStartDate DateTime                      // date of bar `start` — stable dedupe key
+  breakoutDate   DateTime?                     // date of bar `end`; null while status = "open"
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([instrument, rangeStartDate])
+  @@index([instrument, scanDate])
+  @@index([outcome, status])
+  @@map("scanner_candidates")
+}

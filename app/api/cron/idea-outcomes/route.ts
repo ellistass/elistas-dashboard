@@ -13,6 +13,9 @@ import { pipSize } from '@/lib/mt4'
 import { runTradeScanJob } from '@/app/api/cron/trade-scan/route'
 
 export const dynamic = 'force-dynamic'
+// The trade-scan job now runs THREE lanes (trend sweep + Wyckoff range scan
+// + outcome backfill) — well past any default function timeout.
+export const maxDuration = 300
 
 interface BarchartRow {
   symbol: string

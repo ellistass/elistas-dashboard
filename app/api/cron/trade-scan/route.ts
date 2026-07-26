@@ -1,8 +1,25 @@
-// app/api/cron/trade-scan/route.ts — daily trend-strength screener.
+// app/api/cron/trade-scan/route.ts — the combined daily scan job.
 //
-// Schedule (vercel.json): 21:15 UTC Mon–Fri = 10:15pm WAT, after NY close.
-// Mondays additionally send the weekly focus-list digest to Telegram so the
-// week starts with "these are the markets" instead of forcing the usual pairs.
+// Schedule: fired from /api/cron/idea-outcomes at 21:15 UTC Mon–Fri (10:15pm
+// WAT, after NY close — equity daily bars final at 20:00 UTC, CME futures
+// sessions closed by 21:00 UTC, and Yahoo posts the settled bars promptly).
+//
+// ONE run, THREE independently error-isolated lanes, ONE two-section Telegram
+// digest. The lanes answer different questions and must not blur into one
+// signal:
+//   1. Trend screener (H4 ADX momentum — which markets are strong/weak).
+//      Existing logic, unchanged.
+//   2. Wyckoff Range Scanner (structural — which markets have a range at a
+//      decision point). Persists EVERY range with its locked engine verdict;
+//      surfaces FRESH candidates only.
+//   3. Wyckoff outcome backfill (§9) — keeps the you-vs-engine benchmark
+//      current.
+//
+// HARD RULE: the Wyckoff section of the digest NEVER contains the engine
+// verdict, a direction, or an entry. The persistence path (lib/wyckoff/scan)
+// writes the verdict; the digest assembly below reads only trader-facing
+// fields. If a lane fails, the others still run and the digest says so —
+// a quiet day reads "no fresh candidates", not silence.
 //
 // Manual trigger: GET /api/cron/trade-scan?digest=1 with the CRON_SECRET bearer.
 
@@ -12,6 +29,7 @@ export const maxDuration = 300;
 import { NextResponse } from "next/server";
 import { runScan, persistScan, type MarketScan } from "@/lib/screener/scan";
 import { evaluateOutcomes } from "@/lib/screener/outcomes";
+import { runWyckoffScan, backfillOutcomes, type Candidate } from "@/lib/wyckoff/scan";
 import { sendTelegramMessage } from "@/lib/telegram";
 
 export async function GET(req: Request) {
@@ -28,62 +46,120 @@ export async function runTradeScanJob(req: Request) {
   const isMondayUtc = new Date().getUTCDay() === 1;
   const wantDigest = searchParams.get("digest") === "1" || isMondayUtc;
 
-  const outcome = await runScan();
-  const runId = await persistScan(outcome, wantDigest ? "weekly-digest" : "daily");
+  // ── Lane 1: trend screener (existing logic, unchanged) ─────────────────────
+  let trend: Record<string, unknown> | null = null;
+  let trendError: string | null = null;
+  let trendSection = "";
+  try {
+    const outcome = await runScan();
+    const runId = await persistScan(outcome, wantDigest ? "weekly-digest" : "daily");
 
-  // Grade past signals with tonight's candles — fully automatic, no extra fetches.
-  const evalSummary = await evaluateOutcomes(outcome.candles).catch((e) => {
-    console.error("outcome evaluation failed:", e);
-    return null;
-  });
+    // Grade past signals with tonight's candles — fully automatic, no extra fetches.
+    const evalSummary = await evaluateOutcomes(outcome.candles).catch((e) => {
+      console.error("outcome evaluation failed:", e);
+      return null;
+    });
 
-  // Alert-worthy: fresh trends grading A/B. Daily runs only ping on A-grade
-  // fresh trends (rare, worth interrupting for); Monday digest is the full list.
-  const focus = outcome.results.filter((r) => r.grade === "A" || r.grade === "B");
+    const focus = outcome.results.filter((r) => r.grade === "A" || r.grade === "B");
+    const edgeTouches = outcome.results.filter(
+      (r) =>
+        r.condition === "big-range" &&
+        r.pricePosition != null &&
+        (r.pricePosition >= 0.85 || r.pricePosition <= 0.15),
+    );
+    const climaxHooks = outcome.results.filter((r) => r.phase === "climax" && !r.adxRising);
+    const freshA = focus.filter(
+      (r) => r.grade === "A" && r.phase === "fresh" && r.condition === "trend",
+    );
 
-  // Daily interrupts: fresh A-grade trends, big ranges where price has reached
-  // an edge (top/bottom 15% of the box — spring/upthrust watch), and ADX
-  // climax hooks (ADX was 50+, now turning down — exhaustion confirmed).
-  const edgeTouches = outcome.results.filter(
-    (r) => r.condition === "big-range" && r.pricePosition != null && (r.pricePosition >= 0.85 || r.pricePosition <= 0.15),
-  );
-  const climaxHooks = outcome.results.filter((r) => r.phase === "climax" && !r.adxRising);
+    trendSection = wantDigest
+      ? weeklyDigest(outcome.results)
+      : dailyTrendSection(freshA, edgeTouches, climaxHooks);
 
-  if (wantDigest) {
-    await sendTelegramMessage(weeklyDigest(outcome.results));
-  } else {
-    const freshA = focus.filter((r) => r.grade === "A" && r.phase === "fresh" && r.condition === "trend");
-    if (freshA.length || edgeTouches.length || climaxHooks.length)
-      await sendTelegramMessage(dailyAlert(freshA, edgeTouches, climaxHooks));
+    trend = {
+      runId,
+      scanned: outcome.results.length,
+      outcomes: evalSummary,
+      errors: outcome.errors,
+      focus: focus.map((r) => ({
+        market: r.market.displayName,
+        condition: r.condition,
+        direction: r.direction,
+        phase: r.phase,
+        adx: r.adx,
+        er: r.er,
+        score: r.score,
+        grade: r.grade,
+        rfdm: r.rfdmNote,
+      })),
+      rangeWatch: edgeTouches.map((r) => ({
+        market: r.market.displayName,
+        box: [r.rangeLow, r.rangeHigh],
+        widthAtr: r.rangeWidthAtr,
+        pricePosition: r.pricePosition,
+      })),
+    };
+  } catch (e) {
+    trendError = e instanceof Error ? e.message : String(e);
+    console.error("[trade-scan] trend lane failed:", e);
+    trendSection = `*Trend screener*\n_scan failed today — see logs_`;
+  }
+
+  // ── Lane 2: Wyckoff range scan (persist-all, surface-fresh) ────────────────
+  let wyckoff: Record<string, unknown> | null = null;
+  let wyckoffError: string | null = null;
+  let wyckoffSection = "";
+  try {
+    const res = await runWyckoffScan();
+    wyckoffSection = wyckoffDigest(res.candidates, res.latestBarDate, res.scanned, res.rangesFound);
+    // Counts only in the job log — candidates carry no verdict anyway, but the
+    // ops payload doesn't need to repeat the digest.
+    wyckoff = {
+      scanned: res.scanned,
+      rangesFound: res.rangesFound,
+      persisted: res.persisted,
+      freshCount: res.candidates.length,
+      latestBarDate: res.latestBarDate,
+      errors: res.errors,
+    };
+  } catch (e) {
+    wyckoffError = e instanceof Error ? e.message : String(e);
+    console.error("[trade-scan] wyckoff lane failed:", e);
+    wyckoffSection = `*Wyckoff ranges*\n_scan failed today — see logs_`;
+  }
+
+  // ── Lane 3: Wyckoff outcome backfill (benchmark upkeep) ────────────────────
+  let backfill: Record<string, unknown> | null = null;
+  let backfillError: string | null = null;
+  try {
+    backfill = { ...(await backfillOutcomes()) };
+  } catch (e) {
+    backfillError = e instanceof Error ? e.message : String(e);
+    console.error("[trade-scan] wyckoff backfill failed:", e);
+  }
+
+  // ── One two-section digest ─────────────────────────────────────────────────
+  let telegramSent = false;
+  try {
+    await sendTelegramMessage(`${trendSection}\n\n${wyckoffSection}`);
+    telegramSent = true;
+  } catch (e) {
+    console.error("[trade-scan] telegram send failed:", e);
   }
 
   return {
-    ok: true,
-    runId,
-    scanned: outcome.results.length,
-    outcomes: evalSummary,
-    errors: outcome.errors,
-    focus: focus.map((r) => ({
-      market: r.market.displayName,
-      condition: r.condition,
-      direction: r.direction,
-      phase: r.phase,
-      adx: r.adx,
-      er: r.er,
-      score: r.score,
-      grade: r.grade,
-      rfdm: r.rfdmNote,
-    })),
-    rangeWatch: edgeTouches.map((r) => ({
-      market: r.market.displayName,
-      box: [r.rangeLow, r.rangeHigh],
-      widthAtr: r.rangeWidthAtr,
-      pricePosition: r.pricePosition,
-    })),
+    ok: !trendError && !wyckoffError && !backfillError,
+    trend,
+    trendError,
+    wyckoff,
+    wyckoffError,
+    backfill,
+    backfillError,
+    telegramSent,
   };
 }
 
-// ── Telegram formatting ───────────────────────────────────────────────────────
+// ── Telegram formatting — trend lane (unchanged content) ──────────────────────
 
 const dirArrow = (d: string) => (d === "long" ? "▲ LONG" : d === "short" ? "▼ SHORT" : "–");
 
@@ -149,8 +225,14 @@ function weeklyDigest(results: MarketScan[]): string {
   return msg;
 }
 
-function dailyAlert(freshA: MarketScan[], edgeTouches: MarketScan[], climaxHooks: MarketScan[]): string {
+// Daily trend section — same interrupt logic as before, but a quiet day now
+// says so explicitly (the combined digest sends every day, so silence must be
+// distinguishable from a broken job).
+function dailyTrendSection(freshA: MarketScan[], edgeTouches: MarketScan[], climaxHooks: MarketScan[]): string {
   let msg = `*Trend Screener — daily*\n`;
+  if (!freshA.length && !edgeTouches.length && !climaxHooks.length) {
+    return msg + `_no interrupts today — no fresh A-grades, edge touches, or climax hooks_`;
+  }
   if (freshA.length) {
     msg += `\n*Fresh A-grade trend${freshA.length > 1 ? "s" : ""}*\n${freshA.map(line).join("\n")}\n`;
   }
@@ -162,4 +244,40 @@ function dailyAlert(freshA: MarketScan[], edgeTouches: MarketScan[], climaxHooks
   }
   msg += `\n→ Check volume/effort on MT4 before acting`;
   return msg;
+}
+
+// ── Telegram formatting — Wyckoff lane ────────────────────────────────────────
+// Trader-facing fields ONLY: instrument, box, bars, context, terminal test,
+// stopping action, open/broken. No engine verdict. No direction. No entry.
+
+function wyckoffLine(c: Candidate): string {
+  const digits = c.rangeHi < 10 ? 4 : 2;
+  const box = `${c.rangeLo.toFixed(digits)}–${c.rangeHi.toFixed(digits)}`;
+  const ctx = c.contextPct == null ? "ctx n/a" : `ctx ${c.contextPct > 0 ? "+" : ""}${c.contextPct}%`;
+  const test = c.terminalTest === "none" ? "no terminal test" : `test: ${c.terminalTest}`;
+  const stop = c.stoppingAction ? " · stopping action" : "";
+  const state = c.status === "open" ? "OPEN — still inside" : `broke out ${c.breakoutDate}`;
+  return `*${c.instrument}* — box ${box} · ${c.barsInRange} bars · ${ctx} · ${test}${stop} · ${state}`;
+}
+
+function wyckoffDigest(
+  candidates: Candidate[],
+  latestBarDate: string | null,
+  scanned: number,
+  rangesFound: number,
+): string {
+  const dataNote = latestBarDate ? ` (data through ${latestBarDate})` : "";
+  if (!candidates.length) {
+    // A quiet day is the normal state for a ~6-setups-a-month edge — confirm
+    // the scan RAN and found nothing, so silence is never ambiguous.
+    return (
+      `*Wyckoff ranges*${dataNote}\n` +
+      `_no fresh candidates today — scan ran clean (${scanned} instruments, ${rangesFound} ranges tracked)_`
+    );
+  }
+  return (
+    `*Wyckoff ranges — ${candidates.length} fresh candidate${candidates.length > 1 ? "s" : ""}*${dataNote}\n` +
+    candidates.map(wyckoffLine).join("\n") +
+    `\n→ read the charts — the tool gives no direction`
+  );
 }
