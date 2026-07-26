@@ -215,10 +215,13 @@ console.log("— benchmark scoring (you vs engine) —");
     { outcome: "chop", engineVerdict: "neutral", traderVerdict: null, loggedBlind: true },
     // resolved seed row (not blind): excluded from engine-overall-blind
     { outcome: "up", engineVerdict: "accum", traderVerdict: null, loggedBlind: false },
+    // seed row WITH a stray trader read (not blind): must be excluded from the
+    // headline you-vs-engine tallies too — structural, not visual, exclusion
+    { outcome: "up", engineVerdict: "accum", traderVerdict: "accum", loggedBlind: false },
     // unresolved: excluded everywhere
     { outcome: null, engineVerdict: "accum", traderVerdict: "accum", loggedBlind: true },
   ]);
-  check("shared sample = 2", sb.resolvedWithRead === 2, String(sb.resolvedWithRead));
+  check("shared sample = 2 (seed read excluded)", sb.resolvedWithRead === 2, String(sb.resolvedWithRead));
   check("you 2/2", sb.you.n === 2 && sb.you.correct === 2);
   check("engine same-set 1/2", sb.engineSameSet.n === 2 && sb.engineSameSet.correct === 1);
   check("engine overall-blind 2/3 (seed excluded)", sb.engineOverallBlind.n === 3 && sb.engineOverallBlind.correct === 2);

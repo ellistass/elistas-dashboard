@@ -412,6 +412,8 @@ model ScannerCandidate {
   outcome        String?                       // up | down | chop (backfilled §9)
   outcomeAt      DateTime?                     // when the backfill resolved it
   status         String    @default("broken")  // "open" (no breakout yet) | "broken" (frozen)
+  fresh          Boolean   @default(false)     // at a decision point NOW — refreshed each scan
+                                               // while open; drives the readable list on /wyckoff
   // ── Trader's blind read (the "you" side of the you-vs-engine benchmark) ────
   // Logged from the /wyckoff page BEFORE resolution, then IMMUTABLE — the API
   // rejects any write once traderVerdict is set or outcome exists. Engine

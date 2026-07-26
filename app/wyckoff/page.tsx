@@ -91,6 +91,9 @@ export default function WyckoffPage() {
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
+  const [trackedOpen, setTrackedOpen] = useState(0);
+  const [awaitingBackfill, setAwaitingBackfill] = useState(0);
+  const [passRate, setPassRate] = useState<{ total: number; pass: number } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,6 +105,9 @@ export default function WyckoffPage() {
       setPending(j.pending);
       setResolved(j.resolved);
       setScore(j.score);
+      setTrackedOpen(j.trackedOpen ?? 0);
+      setAwaitingBackfill(j.awaitingBackfill ?? 0);
+      setPassRate(j.passRate ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -121,7 +127,8 @@ export default function WyckoffPage() {
       const j = await res.json().catch(() => null);
       if (!res.ok || !j?.ok) throw new Error(j?.error ?? `scan failed (${res.status})`);
       setScanNote(
-        `scanned ${j.scanned} · ${j.rangesFound} ranges · ${j.freshCount} fresh · data through ${j.latestBarDate ?? "?"}`,
+        `scanned ${j.scanned} · ${j.rangesFound} ranges · ${j.freshCount} fresh · ` +
+        `${j.backfill?.updated ?? 0} outcomes resolved · data through ${j.latestBarDate ?? "?"}`,
       );
       await load();
     } catch (e) {
@@ -175,7 +182,7 @@ export default function WyckoffPage() {
       </header>
 
       {/* ── Scoreboard ── */}
-      {score && <ScoreRow score={score} />}
+      {score && <ScoreRow score={score} passRate={passRate} />}
 
       {error && (
         <div className="card" style={{ padding: 16, marginBottom: 14, border: "1px solid var(--red-border)", color: "var(--red)" }}>
@@ -190,11 +197,19 @@ export default function WyckoffPage() {
       ) : (
         <>
           {/* ── Pending (blind) ── */}
-          <SectionTitle icon={<Lock size={13} strokeWidth={2} />} title="Unresolved — blind" note="engine verdict sealed · reads lock on submit" />
+          <SectionTitle icon={<Lock size={13} strokeWidth={2} />} title="At a decision point — blind" note="fresh candidates only · engine verdict sealed · reads lock on submit" />
+          {(trackedOpen > 0 || awaitingBackfill > 0) && (
+            <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", margin: "0 0 10px" }}>
+              also tracking {trackedOpen} open range{trackedOpen === 1 ? "" : "s"} not yet at a
+              decision point · {awaitingBackfill} older breakout{awaitingBackfill === 1 ? "" : "s"} awaiting
+              outcome backfill — neither is readable (that read wouldn&apos;t be blind)
+            </p>
+          )}
           {pending.length === 0 ? (
             <div className="card" style={{ padding: 32, textAlign: "center", marginBottom: 22 }}>
               <p style={{ fontSize: 13, color: "var(--text-3)", margin: 0 }}>
-                No unresolved ranges right now — the daily scan repopulates this after each close.
+                No candidates at a decision point right now — a quiet day is the normal state.
+                The daily scan repopulates this after each close.
               </p>
             </div>
           ) : (
@@ -224,7 +239,12 @@ export default function WyckoffPage() {
 
 /* ── Scoreboard row ─────────────────────────────────────────────────────── */
 
-function ScoreRow({ score }: { score: Scoreboard }) {
+function ScoreRow({ score, passRate }: { score: Scoreboard; passRate: { total: number; pass: number } | null }) {
+  // Pass-rate discipline gauge: validated healthy zone is roughly a third to a
+  // half of all reads. Dropping below that is the earliest sign of forcing
+  // directional calls — it moves weeks before the accuracy tiles can.
+  const prPct = passRate && passRate.total > 0 ? passRate.pass / passRate.total : null;
+  const prHealthy = prPct != null && prPct >= 0.33 && prPct <= 0.55;
   const tiles = [
     {
       label: "You",
@@ -249,6 +269,15 @@ function ScoreRow({ score }: { score: Scoreboard }) {
       main: pct(score.engineOverallBlind.correct, score.engineOverallBlind.n),
       sub: `${score.engineOverallBlind.correct}/${score.engineOverallBlind.n} blind-logged ranges`,
       accent: "var(--text-2)",
+    },
+    {
+      label: "Pass rate",
+      main: prPct == null ? "—" : `${Math.round(prPct * 100)}%`,
+      sub:
+        passRate && passRate.total > 0
+          ? `${passRate.pass} pass / ${passRate.total} reads · healthy ≈ 33–50%`
+          : "no reads yet · healthy ≈ 33–50%",
+      accent: prPct == null ? "var(--text-2)" : prHealthy ? "var(--green)" : "var(--amber, #e0b34d)",
     },
   ];
   return (

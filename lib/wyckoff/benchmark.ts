@@ -66,7 +66,11 @@ export function computeScoreboard(rows: BenchmarkRow[]): Scoreboard {
     if (r.loggedBlind) {
       addToTally(engineOverallBlind, r.engineVerdict as AnyVerdict, r.outcome);
     }
-    if (r.traderVerdict != null) {
+    // The headline tallies require BOTH sides to have been blind before
+    // resolution: a locked trader read AND a blind-logged engine verdict.
+    // Seed rows (loggedBlind=false — outcome was already visible when first
+    // logged) are STRUCTURALLY excluded even if a read was ever logged on one.
+    if (r.traderVerdict != null && r.loggedBlind) {
       resolvedWithRead++;
       addToTally(you, r.traderVerdict as AnyVerdict, r.outcome);
       addToTally(engineSameSet, r.engineVerdict as AnyVerdict, r.outcome);

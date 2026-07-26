@@ -67,6 +67,7 @@ interface AnalyzedRange {
   candidate: Candidate;
   verdict: string; // LOGGED, never surfaced
   loggedBlind: boolean; // true when the outcome was NOT yet determinable at log time
+  fresh: boolean; // at a decision point NOW (§10 filter) — drives payload AND page
 }
 
 function analyze(instrument: string, bars: Bar[], range: DetectedRange): AnalyzedRange {
@@ -95,6 +96,7 @@ function analyze(instrument: string, bars: Bar[], range: DetectedRange): Analyze
     // outcome visible in the data at log time — flag them so the strict
     // you-vs-engine benchmark can filter to genuinely blind verdicts.
     loggedBlind: status === "open" || !outcomeReady(bars.length, end),
+    fresh: isFresh(bars, range, springIdx, upthrustIdx),
   };
 }
 
@@ -122,6 +124,7 @@ async function persistRange(a: AnalyzedRange): Promise<boolean> {
     status: a.candidate.status,
     engineVerdict: a.verdict,
     loggedBlind: a.loggedBlind,
+    fresh: a.fresh, // refreshed on every scan while the row is still open
     breakoutDate: a.candidate.breakoutDate ? toUtcDate(a.candidate.breakoutDate) : null,
   };
   if (existing) {
@@ -175,9 +178,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
             message: `persist failed: ${e instanceof Error ? e.message : e}`,
           });
         }
-        const springIdx = lastSpring(bars, a.range.start, a.range.end, a.range.lo);
-        const upthrustIdx = lastUpthrust(bars, a.range.start, a.range.end, a.range.hi);
-        if (isFresh(bars, a.range, springIdx, upthrustIdx)) fresh.push(a.candidate);
+        if (a.fresh) fresh.push(a.candidate);
       }
     }
   }

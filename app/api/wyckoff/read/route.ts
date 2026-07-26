@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
 
   const row = await (db as any).scannerCandidate.findUnique({
     where: { id },
-    select: { id: true, outcome: true, traderVerdict: true },
+    select: { id: true, outcome: true, traderVerdict: true, status: true, fresh: true, breakoutDate: true, loggedBlind: true },
   });
   if (!row) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
   if (row.outcome != null) {
@@ -60,6 +60,20 @@ export async function POST(req: NextRequest) {
   if (row.traderVerdict != null) {
     return NextResponse.json(
       { error: "Read already locked — reads are immutable once submitted" },
+      { status: 409 },
+    );
+  }
+  // Only CURRENTLY-READABLE candidates accept a read — the same freshness rule
+  // the page uses, enforced here so a direct POST can't log a "blind" read on
+  // a stale range whose resolution is already visible on the chart.
+  const brokenCutoff = new Date(Date.now() - 7 * 86_400_000);
+  const readable =
+    row.loggedBlind !== false &&
+    ((row.status === "open" && row.fresh === true) ||
+      (row.status === "broken" && row.breakoutDate != null && new Date(row.breakoutDate) >= brokenCutoff));
+  if (!readable) {
+    return NextResponse.json(
+      { error: "Candidate is not at a live decision point — reading it would not be blind" },
       { status: 409 },
     );
   }
