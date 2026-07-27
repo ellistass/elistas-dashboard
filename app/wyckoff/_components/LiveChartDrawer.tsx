@@ -37,11 +37,9 @@ const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const fmtVol = (v: number) =>
   v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : v.toFixed(0);
 
-// TradingView mapping: futures read on the continuous contract; three currency
-// futures are quoted INVERTED versus their MT4 pairs.
-const FUTURES = new Set(["6E", "6B", "6A", "6C", "6J", "6S", "6N", "ES", "NQ", "YM", "RTY", "GC", "SI", "HG", "CL", "NG"]);
-const INVERTED: Record<string, string> = { "6C": "USDCAD", "6J": "USDJPY", "6S": "USDCHF" };
-const tvSymbol = (s: string) => (FUTURES.has(s) ? `${s}1!` : s);
+// TradingView + execute mapping come from the instrument config — one source
+// of truth (lib/wyckoff/basket) for feed symbol, CFD/spot, and inversion.
+import { instrumentInfo, tradingViewSymbol } from "@/lib/wyckoff/basket";
 
 export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const [data, setData] = useState<LiveChart | null>(null);
@@ -104,10 +102,18 @@ export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: 
             <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
               <span style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>
                 <span style={{ color: "var(--text-3)" }}>confirm on TradingView: </span>
-                <b>{tvSymbol(data.instrument)}</b>
-                {INVERTED[data.instrument] && (
-                  <span style={{ color: "var(--amber)" }}> · inverse of {INVERTED[data.instrument]} — the read flips on MT4</span>
-                )}
+                <b>{tradingViewSymbol(data.instrument)}</b>
+                {(() => {
+                  const inst = instrumentInfo(data.instrument);
+                  if (!inst || !inst.executeSymbol || inst.executeSymbol === data.instrument) return null;
+                  return inst.inverted ? (
+                    <span style={{ color: "var(--amber)" }}>
+                      {" "}· execute on {inst.executeSymbol} — INVERTED, your locked read auto-translates
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--text-3)" }}> · execute on {inst.executeSymbol}</span>
+                  );
+                })()}
                 <ExternalLink size={11} strokeWidth={2} style={{ marginLeft: 5, verticalAlign: "-1px", color: "var(--text-3)" }} />
               </span>
               <span style={{ ...mono, fontSize: 10, color: "var(--text-3)", marginLeft: "auto" }}>

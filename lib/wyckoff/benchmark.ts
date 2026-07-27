@@ -41,7 +41,10 @@ export function addToTally(t: Tally, verdict: AnyVerdict, outcome: string): void
   }
 }
 
+import { SUSPECT_VOLUME } from "./basket";
+
 export interface BenchmarkRow {
+  instrument: string;
   outcome: string | null;
   engineVerdict: string;
   traderVerdict: string | null;
@@ -63,6 +66,12 @@ export function computeScoreboard(rows: BenchmarkRow[]): Scoreboard {
 
   for (const r of rows) {
     if (r.outcome == null) continue;
+    // GOVERNING RULE (mapping spec §1): an engine verdict computed on suspect
+    // volume is noise dressed as a verdict — those instruments are surfaced
+    // and readable, but structurally EXCLUDED from every scoring tally. The
+    // trader's chart reads on them use a real feed (TradingView), but keeping
+    // the comparison apples-to-apples means both sides sit out here.
+    if (SUSPECT_VOLUME.has(r.instrument)) continue;
     if (r.loggedBlind) {
       addToTally(engineOverallBlind, r.engineVerdict as AnyVerdict, r.outcome);
     }

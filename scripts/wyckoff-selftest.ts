@@ -208,23 +208,40 @@ console.log("— benchmark scoring (you vs engine) —");
 
   const sb = computeScoreboard([
     // resolved, read logged: you right (accum/up), engine wrong (distrib)
-    { outcome: "up", engineVerdict: "distrib", traderVerdict: "accum", loggedBlind: true },
+    { instrument: "SPY", outcome: "up", engineVerdict: "distrib", traderVerdict: "accum", loggedBlind: true },
     // resolved, read logged: both right
-    { outcome: "down", engineVerdict: "distrib", traderVerdict: "distrib", loggedBlind: true },
+    { instrument: "AAPL", outcome: "down", engineVerdict: "distrib", traderVerdict: "distrib", loggedBlind: true },
     // resolved, NO read: engine-overall only
-    { outcome: "chop", engineVerdict: "neutral", traderVerdict: null, loggedBlind: true },
+    { instrument: "NVDA", outcome: "chop", engineVerdict: "neutral", traderVerdict: null, loggedBlind: true },
     // resolved seed row (not blind): excluded from engine-overall-blind
-    { outcome: "up", engineVerdict: "accum", traderVerdict: null, loggedBlind: false },
+    { instrument: "SPY", outcome: "up", engineVerdict: "accum", traderVerdict: null, loggedBlind: false },
     // seed row WITH a stray trader read (not blind): must be excluded from the
     // headline you-vs-engine tallies too — structural, not visual, exclusion
-    { outcome: "up", engineVerdict: "accum", traderVerdict: "accum", loggedBlind: false },
+    { instrument: "SPY", outcome: "up", engineVerdict: "accum", traderVerdict: "accum", loggedBlind: false },
     // unresolved: excluded everywhere
-    { outcome: null, engineVerdict: "accum", traderVerdict: "accum", loggedBlind: true },
+    { instrument: "SPY", outcome: null, engineVerdict: "accum", traderVerdict: "accum", loggedBlind: true },
+    // SUSPECT-VOLUME instrument (GC): read + blind + resolved — would score,
+    // but the governing rule excludes it from EVERY tally (verdict = noise)
+    { instrument: "GC", outcome: "up", engineVerdict: "accum", traderVerdict: "accum", loggedBlind: true },
   ]);
   check("shared sample = 2 (seed read excluded)", sb.resolvedWithRead === 2, String(sb.resolvedWithRead));
   check("you 2/2", sb.you.n === 2 && sb.you.correct === 2);
   check("engine same-set 1/2", sb.engineSameSet.n === 2 && sb.engineSameSet.correct === 1);
   check("engine overall-blind 2/3 (seed excluded)", sb.engineOverallBlind.n === 3 && sb.engineOverallBlind.correct === 2);
+  // The GC row above is the suspect-volume probe: if any tally counted it,
+  // the numbers checked above would shift — their passing IS the exclusion test.
+  const { SUSPECT_VOLUME, executeCall, instrumentInfo } = require("../lib/wyckoff/basket") as typeof import("../lib/wyckoff/basket");
+  check("GC is suspect in config", SUSPECT_VOLUME.has("GC"));
+  check("SPY is real in config", !SUSPECT_VOLUME.has("SPY"));
+  check("ES stays real (verified feed)", !SUSPECT_VOLUME.has("ES"));
+  // Inversion mapping: accum on 6J = SELL USDJPY; accum on 6E = BUY EURUSD
+  check("accum 6J → SELL USDJPY", JSON.stringify(executeCall("6J", "accum")) === '{"action":"SELL","symbol":"USDJPY"}');
+  check("distrib 6C → BUY USDCAD", JSON.stringify(executeCall("6C", "distrib")) === '{"action":"BUY","symbol":"USDCAD"}');
+  check("accum 6E → BUY EURUSD", JSON.stringify(executeCall("6E", "accum")) === '{"action":"BUY","symbol":"EURUSD"}');
+  check("accum GC → BUY XAUUSD (not inverted)", JSON.stringify(executeCall("GC", "accum")) === '{"action":"BUY","symbol":"XAUUSD"}');
+  check("pass → no execute call", executeCall("6E", "pass") === null);
+  check("HO has no CFD → null", executeCall("HO", "accum") === null);
+  check("instrument lookup works", instrumentInfo("ES")?.executeSymbol === "US500");
 }
 
 console.log("— review tool (resolved replay computation) —");

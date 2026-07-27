@@ -9,8 +9,8 @@
 // green/red on the card is the factual context % sign.
 
 import { useState } from "react";
-import { Lock, ShieldCheck, AlertTriangle, CandlestickChart } from "lucide-react";
-import { SUSPECT_VOLUME } from "@/lib/wyckoff/review";
+import { Lock, ShieldCheck, AlertTriangle, CandlestickChart, ArrowLeftRight } from "lucide-react";
+import { SUSPECT_VOLUME, instrumentInfo, executeCall } from "@/lib/wyckoff/basket";
 
 export interface PendingRow {
   id: string;
@@ -51,6 +51,7 @@ export default function CandidateCard({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const suspect = SUSPECT_VOLUME.has(row.instrument);
+  const inst = instrumentInfo(row.instrument);
 
   async function lockRead() {
     if (!verdict || busy) return;
@@ -83,6 +84,18 @@ export default function CandidateCard({
         <span style={{ ...mono, fontSize: 17, fontWeight: 500, color: "var(--text-1)", letterSpacing: "0.02em" }}>
           {row.instrument}
         </span>
+        {inst && inst.executeSymbol && inst.executeSymbol !== row.instrument && (
+          <span
+            title={inst.inverted
+              ? `INVERTED: ${row.instrument} moves opposite ${inst.executeSymbol} — your locked read is auto-translated to the execute side`
+              : `execute on ${inst.executeSymbol}${inst.cfdNote ? ` (${inst.cfdNote})` : ""}`}
+            style={{ ...mono, display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: inst.inverted ? "var(--amber)" : "var(--text-3)" }}
+          >
+            <ArrowLeftRight size={10} strokeWidth={2} />
+            {inst.executeSymbol}
+            {inst.inverted && " ·inv"}
+          </span>
+        )}
         {suspect && (
           <span title="Yahoo volume unreliable for this instrument — read on TradingView's CME feed">
             <AlertTriangle size={12} strokeWidth={2} style={{ color: "var(--amber)", display: "block" }} />
@@ -150,6 +163,20 @@ export default function CandidateCard({
               <ShieldCheck size={12} strokeWidth={2} />
               {verdictLabel(row.traderVerdict)} · locked {day(row.traderReadAt)}
             </span>
+            {(() => {
+              // The execute translation of YOUR OWN locked read — inversion
+              // applied for you (6C/6J/6S), never flipped in your head.
+              const call = executeCall(row.instrument, row.traderVerdict);
+              if (!call) return null;
+              return (
+                <span style={{
+                  ...mono, fontSize: 11, fontWeight: 500,
+                  color: call.action === "BUY" ? "var(--green)" : "var(--red)",
+                }}>
+                  → {call.action} {call.symbol}
+                </span>
+              );
+            })()}
             {row.traderEntry != null && (
               <span style={{ ...mono, fontSize: 10.5, color: "var(--text-3)" }}>
                 entry {px(row.traderEntry, row.rangeHi)} · stop {row.traderStop != null ? px(row.traderStop, row.rangeHi) : "—"}

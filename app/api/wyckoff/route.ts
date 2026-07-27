@@ -96,7 +96,7 @@ export async function GET() {
     // Scoreboard over ALL resolved rows (not just the 100 shown).
     const allResolved: BenchmarkRow[] = await (db as any).scannerCandidate.findMany({
       where: { outcome: { not: null } },
-      select: { outcome: true, engineVerdict: true, traderVerdict: true, loggedBlind: true },
+      select: { instrument: true, outcome: true, engineVerdict: true, traderVerdict: true, loggedBlind: true },
     });
 
     // Discipline metric: pass rate over ALL locked reads (resolved or not) —

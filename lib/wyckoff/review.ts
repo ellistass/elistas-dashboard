@@ -11,15 +11,11 @@
 
 import { CFG, lastSpring, lastUpthrust, type Bar } from "./engine";
 
-// Instruments whose Yahoo volume is a broken subsample (verified: GC=F prints
-// tens of contracts/day vs a real ~250k). The engine's verdict on these may
-// reflect bad DATA, not bad reasoning — never draw a volume lesson from them.
-// Index futures (ES/NQ/YM/RTY) checked out fine; stocks/ETFs are consolidated
-// tape. Spec addendum §3 list, verbatim.
-export const SUSPECT_VOLUME = new Set([
-  "GC", "SI", "HG", "CL", "NG",
-  "6E", "6B", "6A", "6C", "6J", "6S", "6N",
-]);
+// SUSPECT_VOLUME now lives in the instrument config (lib/wyckoff/basket) —
+// derived from each instrument's audited volumeQuality, so upgrading a feed
+// verdict in ONE place updates badges, the learnable filter, and the blind
+// score together. Re-exported here for existing importers.
+export { SUSPECT_VOLUME } from "./basket";
 
 export interface ReviewComputation {
   bars: Bar[]; // sliced window, chronological
