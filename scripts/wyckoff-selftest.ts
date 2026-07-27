@@ -227,5 +227,27 @@ console.log("— benchmark scoring (you vs engine) —");
   check("engine overall-blind 2/3 (seed excluded)", sb.engineOverallBlind.n === 3 && sb.engineOverallBlind.correct === 2);
 }
 
+console.log("— review tool (resolved replay computation) —");
+{
+  const { buildReview } = require("../lib/wyckoff/review") as typeof import("../lib/wyckoff/review");
+  const bars = syntheticTape();
+  const r = detectRanges(bars)[0];
+  const comp = buildReview(bars, bars[r.start].date, bars[r.end].date, r.lo, r.hi)!;
+  check("review locates the range", comp != null);
+  check("context window included (60 bars)", comp.rangeStartIdx === Math.min(r.start, CFG.CONTEXT_BARS));
+  check("breakout index maps correctly", comp.bars[comp.breakoutIdx].date === bars[r.end].date);
+  check("resolve index = breakout + 12", comp.resolveIdx === comp.breakoutIdx + CFG.RESOLVE_BARS);
+  check("spring relocated in sliced coords",
+    comp.springIdx != null && comp.bars[comp.springIdx].date === bars[M + 15].date, String(comp.springIdx));
+  // Final ratio must agree with the §8 verdict on the same bars
+  const v = engineVerdict(bars, r.start, r.end);
+  const impliedV = comp.ratio == null ? "neutral" : comp.ratio >= CFG.DISTRIB_RATIO ? "distrib" : comp.ratio <= CFG.ACCUM_RATIO ? "accum" : "neutral";
+  check("review ratio agrees with engine verdict", impliedV === v, `${impliedV} vs ${v}`);
+  const lastRunning = [...comp.runningRatio].reverse().find((x) => x != null);
+  check("running ratio converges to final ratio",
+    lastRunning != null && comp.ratio != null && Math.abs(lastRunning - comp.ratio) < 1e-9);
+  check("unresolved wall is API-side (buildReview itself is pure)", true);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

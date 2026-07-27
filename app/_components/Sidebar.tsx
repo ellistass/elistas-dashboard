@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import {
   Gauge, Crosshair, CalendarDays, PenLine,
   TrendingUp, Trophy, History as HistoryIcon,
-  Wallet, Database, Pencil, LogOut, Menu, Radar, Frame,
+  Wallet, Database, Pencil, LogOut, Menu, Frame,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -30,7 +30,10 @@ const GROUPS: NavGroup[] = [
   {
     label: 'Analysis',
     items: [
-      { href: '/scanner',    label: 'Screener',   icon: Radar },
+      // Screener (/scanner, H4 ADX trend sweep) retired 2026-07-26 — Wyckoff
+      // replaced it as the daily process. Route still exists; restore the line
+      // below (and TREND_LANE_ENABLED in api/cron/trade-scan) to bring it back.
+      // { href: '/scanner',    label: 'Screener',   icon: Radar },  // (re-add Radar to the lucide import too)
       { href: '/wyckoff',    label: 'Wyckoff',    icon: Frame, input: true },
       { href: '/analytics',  label: 'Stats',      icon: TrendingUp },
       { href: '/scoreboard', label: 'Scoreboard', icon: Trophy },

@@ -28,9 +28,19 @@ export const maxDuration = 300;
 
 import { NextResponse } from "next/server";
 import { runScan, persistScan, type MarketScan } from "@/lib/screener/scan";
+
+// Sentinel thrown to skip the retired trend lane without logging an error.
+const SKIP_TREND = Symbol("trend-lane-retired");
 import { evaluateOutcomes } from "@/lib/screener/outcomes";
 import { runWyckoffScan, backfillOutcomes, type Candidate } from "@/lib/wyckoff/scan";
 import { sendTelegramMessage } from "@/lib/telegram";
+
+// ── Trend lane kill-switch ────────────────────────────────────────────────────
+// RETIRED 2026-07-26 at the trader's request — the Wyckoff lane replaced it as
+// the primary daily process. Flip to true to bring the H4 ADX sweep (and its
+// digest section) back exactly as it was; the code below is untouched and the
+// historical ScanRun/ScanResult data (incl. rFwd outcome tracking) is intact.
+const TREND_LANE_ENABLED = false;
 
 export async function GET(req: Request) {
   const authHeader = req.headers.get("authorization");
@@ -46,11 +56,12 @@ export async function runTradeScanJob(req: Request) {
   const isMondayUtc = new Date().getUTCDay() === 1;
   const wantDigest = searchParams.get("digest") === "1" || isMondayUtc;
 
-  // ── Lane 1: trend screener (existing logic, unchanged) ─────────────────────
+  // ── Lane 1: trend screener (retired — see TREND_LANE_ENABLED above) ────────
   let trend: Record<string, unknown> | null = null;
   let trendError: string | null = null;
   let trendSection = "";
   try {
+    if (!TREND_LANE_ENABLED) throw SKIP_TREND;
     const outcome = await runScan();
     const runId = await persistScan(outcome, wantDigest ? "weekly-digest" : "daily");
 
@@ -100,9 +111,14 @@ export async function runTradeScanJob(req: Request) {
       })),
     };
   } catch (e) {
-    trendError = e instanceof Error ? e.message : String(e);
-    console.error("[trade-scan] trend lane failed:", e);
-    trendSection = `*Trend screener*\n_scan failed today — see logs_`;
+    if (e === SKIP_TREND) {
+      // Retired, not failed: no digest section, no error in the job log.
+      trendSection = "";
+    } else {
+      trendError = e instanceof Error ? e.message : String(e);
+      console.error("[trade-scan] trend lane failed:", e);
+      trendSection = `*Trend screener*\n_scan failed today — see logs_`;
+    }
   }
 
   // ── Lane 2: Wyckoff range scan (persist-all, surface-fresh) ────────────────
@@ -138,10 +154,10 @@ export async function runTradeScanJob(req: Request) {
     console.error("[trade-scan] wyckoff backfill failed:", e);
   }
 
-  // ── One two-section digest ─────────────────────────────────────────────────
+  // ── The digest (Wyckoff-only while the trend lane is retired) ──────────────
   let telegramSent = false;
   try {
-    await sendTelegramMessage(`${trendSection}\n\n${wyckoffSection}`);
+    await sendTelegramMessage([trendSection, wyckoffSection].filter(Boolean).join("\n\n"));
     telegramSent = true;
   } catch (e) {
     console.error("[trade-scan] telegram send failed:", e);

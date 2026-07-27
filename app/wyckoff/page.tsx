@@ -1,38 +1,22 @@
 "use client";
-// app/wyckoff/page.tsx — Wyckoff Range Scanner (v2 design tokens).
+// app/wyckoff/page.tsx — Wyckoff reading desk + scorekeeper (v2 design).
 //
-// The validation instrument, not a signal feed:
-//   • PENDING ranges (unresolved) — the server response for these NEVER
-//     contains the engine verdict, so there is nothing to peek at. You log a
-//     blind read (accum / distrib / pass + optional entry & stop). Submitting
-//     locks it server-side — immutable, timestamped.
-//   • RESOLVED ranges — full reveal: your read vs the engine's vs what price
-//     actually did, plus running accuracy tallies on the same candidate set.
+// Composition (top to bottom):
+//   1. Header — title, data state, Run scan.
+//   2. ScoreStrip — the you-vs-engine benchmark as one unit + pass-rate meter.
+//   3. Reading desk — fresh candidates as a card grid (read in seconds, lock).
+//   4. Resolved archive — filterable reveal table + Review replay.
 //
-// Data: GET /api/wyckoff, POST /api/wyckoff/read.
+// The blind rules all live server-side; this page is presentation only.
 
 import { useCallback, useEffect, useState } from "react";
-import { Frame, Lock, Eye, ShieldCheck, RefreshCw } from "lucide-react";
+import { Frame, Lock, Eye, RefreshCw, PlaySquare, AlertTriangle, Inbox } from "lucide-react";
+import ReviewDrawer from "./_components/ReviewDrawer";
+import ScoreStrip, { type Scoreboard } from "./_components/ScoreStrip";
+import CandidateCard, { type PendingRow } from "./_components/CandidateCard";
+import { SUSPECT_VOLUME } from "@/lib/wyckoff/review";
 
-/* ── Types (mirror app/api/wyckoff) ─────────────────────────────────────── */
-
-interface PendingRow {
-  id: string;
-  instrument: string;
-  rangeLo: number;
-  rangeHi: number;
-  contextPct: number | null;
-  terminalTest: string;
-  stoppingAction: boolean;
-  barsInRange: number;
-  status: "open" | "broken";
-  rangeStartDate: string;
-  breakoutDate: string | null;
-  traderVerdict: string | null;
-  traderEntry: number | null;
-  traderStop: number | null;
-  traderReadAt: string | null;
-}
+/* ── Types ──────────────────────────────────────────────────────────────── */
 
 interface ResolvedRow extends PendingRow {
   outcome: string;
@@ -41,45 +25,32 @@ interface ResolvedRow extends PendingRow {
   loggedBlind: boolean;
 }
 
-interface Tally {
-  n: number;
-  correct: number;
-  decisiveN: number;
-  decisiveCorrect: number;
-}
-
-interface Scoreboard {
-  resolvedWithRead: number;
-  you: Tally;
-  engineSameSet: Tally;
-  engineOverallBlind: Tally;
-}
-
-/* ── Small helpers ──────────────────────────────────────────────────────── */
+/* ── Helpers ────────────────────────────────────────────────────────────── */
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const day = (iso: string | null) => (iso ? iso.slice(0, 10) : "—");
 const px = (v: number, hi: number) => v.toFixed(hi < 10 ? 4 : 2);
-const box = (r: { rangeLo: number; rangeHi: number }) =>
-  `${px(r.rangeLo, r.rangeHi)}–${px(r.rangeHi, r.rangeHi)}`;
+const boxFmt = (r: { rangeLo: number; rangeHi: number }) => `${px(r.rangeLo, r.rangeHi)}–${px(r.rangeHi, r.rangeHi)}`;
 const ctxFmt = (v: number | null) => (v == null ? "n/a" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
-const pct = (c: number, n: number) => (n ? `${Math.round((c / n) * 100)}%` : "—");
 
 const VERDICT_COLOR: Record<string, string> = {
-  accum: "var(--green)",
-  distrib: "var(--red)",
-  pass: "var(--text-3)",
-  neutral: "var(--text-3)",
+  accum: "var(--green)", distrib: "var(--red)", pass: "var(--text-3)", neutral: "var(--text-3)",
 };
-const OUTCOME_COLOR: Record<string, string> = {
-  up: "var(--green)",
-  down: "var(--red)",
-  chop: "var(--text-3)",
-};
+const OUTCOME_COLOR: Record<string, string> = { up: "var(--green)", down: "var(--red)", chop: "var(--text-3)" };
 const verdictLabel = (v: string) =>
   v === "accum" ? "ACCUM" : v === "distrib" ? "DISTRIB" : v === "pass" ? "PASS" : "NEUTRAL";
 const verdictHits = (v: string, outcome: string) =>
   v === "accum" ? outcome === "up" : v === "distrib" ? outcome === "down" : outcome === "chop";
+
+/* Review learnable-set filter (addendum §2): engine committed a direction, the
+   market resolved directionally, and the volume is trustworthy. */
+const isLearnable = (r: { engineVerdict: string; outcome: string; instrument: string }) =>
+  (r.engineVerdict === "accum" || r.engineVerdict === "distrib") &&
+  (r.outcome === "up" || r.outcome === "down") &&
+  !SUSPECT_VOLUME.has(r.instrument);
+
+const REVIEW_FILTERS = ["learnable", "failures", "successes", "everything"] as const;
+type ReviewFilter = (typeof REVIEW_FILTERS)[number];
 
 /* ── Page ───────────────────────────────────────────────────────────────── */
 
@@ -87,13 +58,15 @@ export default function WyckoffPage() {
   const [pending, setPending] = useState<PendingRow[]>([]);
   const [resolved, setResolved] = useState<ResolvedRow[]>([]);
   const [score, setScore] = useState<Scoreboard | null>(null);
+  const [passRate, setPassRate] = useState<{ total: number; pass: number } | null>(null);
+  const [trackedOpen, setTrackedOpen] = useState(0);
+  const [awaitingBackfill, setAwaitingBackfill] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
-  const [trackedOpen, setTrackedOpen] = useState(0);
-  const [awaitingBackfill, setAwaitingBackfill] = useState(0);
-  const [passRate, setPassRate] = useState<{ total: number; pass: number } | null>(null);
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("learnable");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -105,18 +78,16 @@ export default function WyckoffPage() {
       setPending(j.pending);
       setResolved(j.resolved);
       setScore(j.score);
+      setPassRate(j.passRate ?? null);
       setTrackedOpen(j.trackedOpen ?? 0);
       setAwaitingBackfill(j.awaitingBackfill ?? 0);
-      setPassRate(j.passRate ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   async function runScanNow() {
     if (scanning) return;
@@ -137,21 +108,26 @@ export default function WyckoffPage() {
     setScanning(false);
   }
 
+  const filteredResolved = resolved.filter((r) =>
+    reviewFilter === "everything" ? true :
+    reviewFilter === "learnable" ? isLearnable(r) :
+    reviewFilter === "failures" ? isLearnable(r) && !verdictHits(r.engineVerdict, r.outcome) :
+    isLearnable(r) && verdictHits(r.engineVerdict, r.outcome),
+  );
+
   return (
-    <div>
-      {/* ── Header ── */}
-      <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 18, flexWrap: "wrap", marginBottom: 16 }}>
+    <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+      {/* ── 1 · Header ── */}
+      <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 18, flexWrap: "wrap", marginBottom: 22 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 6 }}>
-            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: "-0.02em" }}>
-              Wyckoff ranges
-            </h1>
+            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: "-0.02em" }}>Wyckoff ranges</h1>
             <span style={{ ...mono, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-3)", paddingTop: 6 }}>
               <Frame size={13} strokeWidth={2} />
-              {pending.length} unresolved · {resolved.length} resolved shown
+              {pending.length} to read · {resolved.length} resolved
             </span>
           </div>
-          <p style={{ margin: 0, fontSize: 13, color: "var(--text-label)", fontWeight: 300 }}>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--text-label)", fontWeight: 300, maxWidth: 620 }}>
             Read the chart, lock your call before the range resolves. The engine&apos;s verdict stays
             sealed server-side until the outcome exists — then both reads are revealed together.
           </p>
@@ -161,300 +137,187 @@ export default function WyckoffPage() {
             onClick={runScanNow}
             disabled={scanning}
             style={{
-              display: "inline-flex", alignItems: "center", gap: 8,
-              padding: "10px 15px", borderRadius: 9, border: "none",
-              background: "var(--accent)", color: "var(--accent-on)",
+              display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 15px",
+              borderRadius: 9, border: "none", background: "var(--accent)", color: "var(--accent-on)",
               fontSize: 13, fontWeight: 600, cursor: scanning ? "default" : "pointer",
-              boxShadow: "0 0 20px rgba(58,212,236,0.26)",
-              opacity: scanning ? 0.6 : 1, fontFamily: "'Sora', sans-serif",
+              boxShadow: "0 0 20px rgba(58,212,236,0.26)", opacity: scanning ? 0.6 : 1,
+              fontFamily: "'Sora', sans-serif",
             }}
           >
-            <RefreshCw size={15} strokeWidth={2} className={scanning ? "spin" : undefined}
-              style={scanning ? { animation: "spin 1s linear infinite" } : undefined} />
+            <RefreshCw size={15} strokeWidth={2} style={scanning ? { animation: "spin 1s linear infinite" } : undefined} />
             {scanning ? "Scanning… (~1 min)" : "Run scan"}
           </button>
           {scanNote && (
-            <span style={{ ...mono, fontSize: 10, color: "var(--text-3)", maxWidth: 320, textAlign: "right" }}>
-              {scanNote}
-            </span>
+            <span style={{ ...mono, fontSize: 10, color: "var(--text-3)", maxWidth: 340, textAlign: "right" }}>{scanNote}</span>
           )}
         </div>
       </header>
 
-      {/* ── Scoreboard ── */}
-      {score && <ScoreRow score={score} passRate={passRate} />}
+      {/* ── 2 · Benchmark ── */}
+      {score && <ScoreStrip score={score} passRate={passRate} />}
 
       {error && (
-        <div className="card" style={{ padding: 16, marginBottom: 14, border: "1px solid var(--red-border)", color: "var(--red)" }}>
-          <span style={{ ...mono, fontSize: 12 }}>{error}</span>
+        <div className="card" style={{ padding: 16, marginBottom: 14, border: "1px solid var(--red-border)" }}>
+          <span style={{ ...mono, fontSize: 12, color: "var(--red)" }}>{error}</span>
         </div>
       )}
 
       {loading ? (
         <div className="card" style={{ padding: 48, textAlign: "center" }}>
-          <p style={{ fontSize: 12, color: "var(--text-3)" }}>Loading candidates…</p>
+          <p style={{ ...mono, fontSize: 12, color: "var(--text-3)", margin: 0 }}>Loading candidates…</p>
         </div>
       ) : (
         <>
-          {/* ── Pending (blind) ── */}
-          <SectionTitle icon={<Lock size={13} strokeWidth={2} />} title="At a decision point — blind" note="fresh candidates only · engine verdict sealed · reads lock on submit" />
+          {/* ── 3 · Reading desk ── */}
+          <SectionHeader
+            icon={<Lock size={13} strokeWidth={2} />}
+            title="At a decision point"
+            count={pending.length}
+            note="blind · fresh candidates only · reads lock on submit"
+          />
           {(trackedOpen > 0 || awaitingBackfill > 0) && (
-            <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", margin: "0 0 10px" }}>
-              also tracking {trackedOpen} open range{trackedOpen === 1 ? "" : "s"} not yet at a
-              decision point · {awaitingBackfill} older breakout{awaitingBackfill === 1 ? "" : "s"} awaiting
-              outcome backfill — neither is readable (that read wouldn&apos;t be blind)
+            <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", margin: "0 0 12px" }}>
+              silently tracking {trackedOpen} open range{trackedOpen === 1 ? "" : "s"} mid-box · {awaitingBackfill} older
+              breakout{awaitingBackfill === 1 ? "" : "s"} awaiting backfill — not readable (that read wouldn&apos;t be blind)
             </p>
           )}
           {pending.length === 0 ? (
-            <div className="card" style={{ padding: 32, textAlign: "center", marginBottom: 22 }}>
-              <p style={{ fontSize: 13, color: "var(--text-3)", margin: 0 }}>
-                No candidates at a decision point right now — a quiet day is the normal state.
-                The daily scan repopulates this after each close.
-              </p>
-            </div>
+            <EmptyState
+              text="No candidates at a decision point — a quiet day is the normal state. The daily scan repopulates this after each close."
+            />
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 26 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))", gap: 12, marginBottom: 30 }}>
               {pending.map((row) => (
-                <PendingCard key={row.id} row={row} onLocked={load} />
+                <CandidateCard key={row.id} row={row} onLocked={load} />
               ))}
             </div>
           )}
 
-          {/* ── Resolved (revealed) ── */}
-          <SectionTitle icon={<Eye size={13} strokeWidth={2} />} title="Resolved — revealed" note="your read vs engine vs what price did" />
+          {/* ── 4 · Resolved archive ── */}
+          <SectionHeader
+            icon={<Eye size={13} strokeWidth={2} />}
+            title="Resolved — revealed"
+            count={filteredResolved.length}
+            note="your read vs engine vs what price did"
+            right={
+              resolved.length > 0 ? (
+                <div className="seg">
+                  {REVIEW_FILTERS.map((f) => (
+                    <button key={f} className={reviewFilter === f ? "on" : ""} onClick={() => setReviewFilter(f)}>
+                      {f === "learnable" ? "Learnable" : f === "failures" ? "Failures" : f === "successes" ? "Successes" : "Everything"}
+                    </button>
+                  ))}
+                </div>
+              ) : undefined
+            }
+          />
           {resolved.length === 0 ? (
-            <div className="card" style={{ padding: 32, textAlign: "center" }}>
-              <p style={{ fontSize: 13, color: "var(--text-3)", margin: 0 }}>
-                Nothing resolved yet — outcomes backfill 12 trading days after each breakout.
-              </p>
-            </div>
+            <EmptyState text="Nothing resolved yet — outcomes backfill 12 trading days after each breakout." />
+          ) : filteredResolved.length === 0 ? (
+            <EmptyState text="No resolved cases match this filter yet." small />
           ) : (
-            <ResolvedTable rows={resolved} />
+            <ResolvedTable rows={filteredResolved} onReview={setReviewId} />
           )}
         </>
       )}
+
+      {reviewId && <ReviewDrawer id={reviewId} onClose={() => setReviewId(null)} />}
     </div>
   );
 }
 
-/* ── Scoreboard row ─────────────────────────────────────────────────────── */
+/* ── Section header — one consistent pattern ────────────────────────────── */
 
-function ScoreRow({ score, passRate }: { score: Scoreboard; passRate: { total: number; pass: number } | null }) {
-  // Pass-rate discipline gauge: validated healthy zone is roughly a third to a
-  // half of all reads. Dropping below that is the earliest sign of forcing
-  // directional calls — it moves weeks before the accuracy tiles can.
-  const prPct = passRate && passRate.total > 0 ? passRate.pass / passRate.total : null;
-  const prHealthy = prPct != null && prPct >= 0.33 && prPct <= 0.55;
-  const tiles = [
-    {
-      label: "You",
-      main: pct(score.you.correct, score.you.n),
-      sub: `${score.you.correct}/${score.you.n} · decisive ${pct(score.you.decisiveCorrect, score.you.decisiveN)}`,
-      accent: "var(--accent)",
-    },
-    {
-      label: "Engine (same set)",
-      main: pct(score.engineSameSet.correct, score.engineSameSet.n),
-      sub: `${score.engineSameSet.correct}/${score.engineSameSet.n} · decisive ${pct(score.engineSameSet.decisiveCorrect, score.engineSameSet.decisiveN)}`,
-      accent: "var(--text-2)",
-    },
-    {
-      label: "Shared sample",
-      main: String(score.resolvedWithRead),
-      sub: "resolved candidates with your read",
-      accent: "var(--text-2)",
-    },
-    {
-      label: "Engine overall (blind)",
-      main: pct(score.engineOverallBlind.correct, score.engineOverallBlind.n),
-      sub: `${score.engineOverallBlind.correct}/${score.engineOverallBlind.n} blind-logged ranges`,
-      accent: "var(--text-2)",
-    },
-    {
-      label: "Pass rate",
-      main: prPct == null ? "—" : `${Math.round(prPct * 100)}%`,
-      sub:
-        passRate && passRate.total > 0
-          ? `${passRate.pass} pass / ${passRate.total} reads · healthy ≈ 33–50%`
-          : "no reads yet · healthy ≈ 33–50%",
-      accent: prPct == null ? "var(--text-2)" : prHealthy ? "var(--green)" : "var(--amber, #e0b34d)",
-    },
-  ];
+function SectionHeader({ icon, title, count, note, right }: {
+  icon: React.ReactNode; title: string; count: number; note: string; right?: React.ReactNode;
+}) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 20 }}>
-      {tiles.map((t) => (
-        <div key={t.label} className="card" style={{ padding: "14px 16px" }}>
-          <p className="kicker" style={{ margin: "0 0 6px" }}>{t.label}</p>
-          <p style={{ ...mono, margin: 0, fontSize: 24, fontWeight: 500, color: t.accent }}>{t.main}</p>
-          <p style={{ ...mono, margin: "4px 0 0", fontSize: 10, color: "var(--text-3)" }}>{t.sub}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SectionTitle({ icon, title, note }: { icon: React.ReactNode; title: string; note: string }) {
-  return (
-    <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "0 0 10px" }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: "var(--text-1)" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 12px", flexWrap: "wrap" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 14.5, fontWeight: 600, color: "var(--text-1)" }}>
         {icon} {title}
       </span>
+      <span style={{ ...mono, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: "1px solid var(--border-strong)", color: "var(--text-2)" }}>
+        {count}
+      </span>
       <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>{note}</span>
+      {right && <div style={{ marginLeft: "auto" }}>{right}</div>}
     </div>
   );
 }
 
-/* ── Pending candidate card with the blind-read form ────────────────────── */
-
-function PendingCard({ row, onLocked }: { row: PendingRow; onLocked: () => void }) {
-  const [verdict, setVerdict] = useState<string | null>(null);
-  const [entry, setEntry] = useState("");
-  const [stop, setStop] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function lockRead() {
-    if (!verdict || busy) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await fetch("/api/wyckoff/read", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: row.id,
-          verdict,
-          entry: entry.trim() ? Number(entry) : undefined,
-          stop: stop.trim() ? Number(stop) : undefined,
-        }),
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? `failed (${res.status})`);
-      onLocked();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
-  }
-
-  const facts: Array<[string, string]> = [
-    ["box", box(row)],
-    ["bars", String(row.barsInRange)],
-    ["context", ctxFmt(row.contextPct)],
-    ["test", row.terminalTest],
-    ["stopping", row.stoppingAction ? "yes" : "no"],
-    [row.status === "open" ? "state" : "broke out", row.status === "open" ? "OPEN" : day(row.breakoutDate)],
-  ];
-
+function EmptyState({ text, small }: { text: string; small?: boolean }) {
   return (
-    <div className="card" style={{ padding: "14px 16px" }}>
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
-        <span style={{ ...mono, fontSize: 15, fontWeight: 500, color: "var(--text-1)", minWidth: 52 }}>
-          {row.instrument}
-        </span>
-        {facts.map(([k, v]) => (
-          <span key={k} style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>
-            <span style={{ color: "var(--text-3)" }}>{k} </span>
-            {v}
-          </span>
-        ))}
-      </div>
-
-      {row.traderVerdict ? (
-        // Locked read — shown back to you; still no engine verdict anywhere.
-        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{
-            ...mono, display: "inline-flex", alignItems: "center", gap: 6,
-            fontSize: 11, padding: "4px 10px", borderRadius: 999,
-            border: "1px solid var(--border-strong)", color: VERDICT_COLOR[row.traderVerdict],
-          }}>
-            <ShieldCheck size={12} strokeWidth={2} />
-            your read: {verdictLabel(row.traderVerdict)} · locked {day(row.traderReadAt)}
-          </span>
-          {row.traderEntry != null && (
-            <span style={{ ...mono, fontSize: 11, color: "var(--text-3)" }}>
-              entry {px(row.traderEntry, row.rangeHi)} · stop {row.traderStop != null ? px(row.traderStop, row.rangeHi) : "—"}
-            </span>
-          )}
-        </div>
-      ) : (
-        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <div className="seg">
-            {(["accum", "distrib", "pass"] as const).map((v) => (
-              <button key={v} className={verdict === v ? "on" : ""} onClick={() => setVerdict(v)}>
-                {verdictLabel(v)}
-              </button>
-            ))}
-          </div>
-          <input value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="entry (opt)" inputMode="decimal" style={inputStyle} />
-          <input value={stop} onChange={(e) => setStop(e.target.value)} placeholder="stop (opt)" inputMode="decimal" style={inputStyle} />
-          <button
-            onClick={lockRead}
-            disabled={!verdict || busy}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              padding: "7px 14px", borderRadius: 8, border: "none",
-              background: verdict ? "var(--accent)" : "var(--border-subtle)",
-              color: verdict ? "var(--accent-on)" : "var(--text-3)",
-              fontSize: 12, fontWeight: 600, cursor: verdict ? "pointer" : "default",
-              opacity: busy ? 0.6 : 1, fontFamily: "'Sora', sans-serif",
-            }}
-          >
-            <Lock size={12} strokeWidth={2} />
-            {busy ? "Locking…" : "Lock read"}
-          </button>
-          <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>immutable once locked</span>
-          {err && <span style={{ ...mono, fontSize: 11, color: "var(--red)" }}>{err}</span>}
-        </div>
-      )}
+    <div className="card" style={{ padding: small ? 26 : 40, textAlign: "center", marginBottom: 30 }}>
+      <Inbox size={18} strokeWidth={1.6} style={{ color: "var(--text-3)", marginBottom: 8 }} />
+      <p style={{ fontSize: 12.5, color: "var(--text-3)", margin: 0, maxWidth: 460, marginInline: "auto", lineHeight: 1.5 }}>{text}</p>
     </div>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  fontFamily: "'DM Mono', monospace",
-  fontSize: 11,
-  width: 92,
-  padding: "7px 9px",
-  borderRadius: 8,
-  border: "1px solid var(--border)",
-  background: "transparent",
-  color: "var(--text-1)",
-  outline: "none",
-};
 
 /* ── Resolved table — the reveal ────────────────────────────────────────── */
 
-function ResolvedTable({ rows }: { rows: ResolvedRow[] }) {
+function ResolvedTable({ rows, onReview }: { rows: ResolvedRow[]; onReview: (id: string) => void }) {
+  const th: React.CSSProperties = {
+    ...mono, textAlign: "left", fontSize: 9.5, letterSpacing: "0.12em", textTransform: "uppercase",
+    color: "var(--text-3)", fontWeight: 500, padding: "10px 13px", borderBottom: "1px solid var(--border-subtle)",
+    whiteSpace: "nowrap",
+  };
+  const td: React.CSSProperties = { ...mono, padding: "10px 13px", color: "var(--text-2)", whiteSpace: "nowrap" };
   return (
-    <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+    <div className="card" style={{ padding: 0, overflowX: "auto", marginBottom: 30 }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
         <thead>
           <tr>
-            {["Instrument", "Box", "Bars", "Context", "Test", "Broke out", "Outcome", "Your read", "Engine", "Blind"].map((h) => (
-              <th key={h} style={{
-                ...mono, textAlign: "left", fontSize: 9.5, letterSpacing: "0.12em",
-                textTransform: "uppercase", color: "var(--text-3)", fontWeight: 500,
-                padding: "10px 12px", borderBottom: "1px solid var(--border-subtle)",
-              }}>{h}</th>
-            ))}
+            <th style={th}>Instrument</th>
+            <th style={th}>Box</th>
+            <th style={{ ...th, textAlign: "right" }}>Bars</th>
+            <th style={{ ...th, textAlign: "right" }}>Context</th>
+            <th style={th}>Test</th>
+            <th style={th}>Broke out</th>
+            <th style={th}>Outcome</th>
+            <th style={th}>Your read</th>
+            <th style={th}>Engine</th>
+            <th style={th}>Blind</th>
+            <th style={th} />
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.id} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-              <td style={{ ...mono, padding: "9px 12px", color: "var(--text-1)", fontWeight: 500 }}>{r.instrument}</td>
-              <td style={{ ...mono, padding: "9px 12px", color: "var(--text-2)" }}>{box(r)}</td>
-              <td style={{ ...mono, padding: "9px 12px", color: "var(--text-2)" }}>{r.barsInRange}</td>
-              <td style={{ ...mono, padding: "9px 12px", color: "var(--text-2)" }}>{ctxFmt(r.contextPct)}</td>
-              <td style={{ ...mono, padding: "9px 12px", color: "var(--text-2)" }}>{r.terminalTest}</td>
-              <td style={{ ...mono, padding: "9px 12px", color: "var(--text-2)" }}>{day(r.breakoutDate)}</td>
-              <td style={{ ...mono, padding: "9px 12px", color: OUTCOME_COLOR[r.outcome] ?? "var(--text-2)", fontWeight: 500 }}>
-                {r.outcome.toUpperCase()}
+            <tr
+              key={r.id}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-card-2, var(--border-subtle))")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              style={{ borderBottom: "1px solid var(--border-faint, var(--border-subtle))", transition: "background 0.1s" }}
+            >
+              <td style={{ ...td, color: "var(--text-1)", fontWeight: 500 }}>
+                {r.instrument}
+                {SUSPECT_VOLUME.has(r.instrument) && (
+                  <AlertTriangle size={11} strokeWidth={2} style={{ color: "var(--amber)", marginLeft: 5, verticalAlign: "-1px" }} aria-label="Yahoo volume unreliable" />
+                )}
               </td>
+              <td style={td}>{boxFmt(r)}</td>
+              <td style={{ ...td, textAlign: "right" }}>{r.barsInRange}</td>
+              <td style={{ ...td, textAlign: "right" }}>{ctxFmt(r.contextPct)}</td>
+              <td style={td}>{r.terminalTest}</td>
+              <td style={td}>{day(r.breakoutDate)}</td>
+              <td style={{ ...td, color: OUTCOME_COLOR[r.outcome] ?? "var(--text-2)", fontWeight: 500 }}>{r.outcome.toUpperCase()}</td>
               <VerdictCell verdict={r.traderVerdict} outcome={r.outcome} />
               <VerdictCell verdict={r.engineVerdict} outcome={r.outcome} />
-              <td style={{ ...mono, padding: "9px 12px", color: "var(--text-3)" }}>{r.loggedBlind ? "✓" : "seed"}</td>
+              <td style={{ ...td, color: "var(--text-3)" }}>{r.loggedBlind ? "✓" : "seed"}</td>
+              <td style={{ padding: "8px 13px" }}>
+                <button
+                  onClick={() => onReview(r.id)}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px",
+                    borderRadius: 7, cursor: "pointer", fontSize: 11, fontWeight: 600,
+                    fontFamily: "'Sora', sans-serif", background: "transparent",
+                    color: "var(--text-1)", border: "1px solid var(--border-strong)",
+                  }}
+                >
+                  <PlaySquare size={12} strokeWidth={2} />
+                  Review
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -464,10 +327,10 @@ function ResolvedTable({ rows }: { rows: ResolvedRow[] }) {
 }
 
 function VerdictCell({ verdict, outcome }: { verdict: string | null; outcome: string }) {
-  if (!verdict) return <td style={{ ...mono, padding: "9px 12px", color: "var(--text-3)" }}>—</td>;
+  if (!verdict) return <td style={{ ...mono, padding: "10px 13px", color: "var(--text-3)" }}>—</td>;
   const hit = verdictHits(verdict, outcome);
   return (
-    <td style={{ ...mono, padding: "9px 12px", color: VERDICT_COLOR[verdict] ?? "var(--text-2)" }}>
+    <td style={{ ...mono, padding: "10px 13px", color: VERDICT_COLOR[verdict] ?? "var(--text-2)", whiteSpace: "nowrap" }}>
       {verdictLabel(verdict)}{" "}
       <span style={{ color: hit ? "var(--green)" : "var(--red)" }}>{hit ? "✓" : "✗"}</span>
     </td>
