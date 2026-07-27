@@ -35,6 +35,45 @@ export interface ReviewComputation {
   //                                  bar inside the range; null outside/undefined
 }
 
+// ── Live chart (pre-resolution) ───────────────────────────────────────────────
+// Bars + structure ONLY — deliberately returns NO engine internals (no ratio,
+// no effort numbers, no verdict). This feeds the live-candidate chart so the
+// trader can read price/volume without opening TradingView; the engine's
+// reasoning stays sealed until the range resolves. Spring/upthrust indexes are
+// safe: terminalTest is already disclosed in the trader payload, and the bars
+// themselves show these to any eye.
+export interface LiveChartData {
+  bars: Bar[];
+  rangeStartIdx: number;
+  breakoutIdx: number | null; // null while the range is still open
+  springIdx: number | null;
+  upthrustIdx: number | null;
+}
+
+export function buildLiveChart(
+  all: Bar[],
+  rangeStartDate: string,
+  breakoutDate: string | null,
+  lo: number,
+  hi: number,
+): LiveChartData | null {
+  const s = all.findIndex((b) => b.date === rangeStartDate);
+  if (s < 0) return null;
+  const e = breakoutDate ? all.findIndex((b) => b.date === breakoutDate) : -1;
+  const from = Math.max(0, s - CFG.CONTEXT_BARS);
+  const bars = all.slice(from); // through the latest bar — the decision is NOW
+  const rangeStartIdx = s - from;
+  const breakoutIdx = e >= 0 ? e - from : null;
+  const testEnd = breakoutIdx ?? bars.length; // spring/upthrust search window
+  return {
+    bars,
+    rangeStartIdx,
+    breakoutIdx,
+    springIdx: lastSpring(bars, rangeStartIdx, testEnd, lo),
+    upthrustIdx: lastUpthrust(bars, rangeStartIdx, testEnd, hi),
+  };
+}
+
 /** Locate the stored range inside a freshly fetched series and compute the
  *  replay payload. Returns null if the stored dates can't be found (series
  *  too short or symbol history revised). */

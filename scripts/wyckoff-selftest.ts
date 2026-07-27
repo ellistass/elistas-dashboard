@@ -247,6 +247,18 @@ console.log("— review tool (resolved replay computation) —");
   check("running ratio converges to final ratio",
     lastRunning != null && comp.ratio != null && Math.abs(lastRunning - comp.ratio) < 1e-9);
   check("unresolved wall is API-side (buildReview itself is pure)", true);
+
+  // Live chart builder: bars + structure ONLY — assert no engine fields leak.
+  const { buildLiveChart } = require("../lib/wyckoff/review") as typeof import("../lib/wyckoff/review");
+  const live = buildLiveChart(bars, bars[r.start].date, null, r.lo, r.hi)!;
+  check("live chart: open range has null breakoutIdx", live.breakoutIdx === null);
+  check("live chart: extends to the latest bar", live.bars.length === bars.length - Math.max(0, r.start - CFG.CONTEXT_BARS));
+  const liveKeys = Object.keys(live).sort().join(",");
+  check(
+    "live chart payload carries NO engine internals",
+    liveKeys === "bars,breakoutIdx,rangeStartIdx,springIdx,upthrustIdx",
+    liveKeys,
+  );
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

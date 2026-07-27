@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Frame, Lock, Eye, RefreshCw, PlaySquare, AlertTriangle, Inbox } from "lucide-react";
 import ReviewDrawer from "./_components/ReviewDrawer";
+import LiveChartDrawer from "./_components/LiveChartDrawer";
 import ScoreStrip, { type Scoreboard } from "./_components/ScoreStrip";
 import CandidateCard, { type PendingRow } from "./_components/CandidateCard";
 import { SUSPECT_VOLUME } from "@/lib/wyckoff/review";
@@ -66,6 +67,7 @@ export default function WyckoffPage() {
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
   const [reviewId, setReviewId] = useState<string | null>(null);
+  const [chartId, setChartId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("learnable");
 
   const load = useCallback(async () => {
@@ -188,7 +190,7 @@ export default function WyckoffPage() {
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))", gap: 12, marginBottom: 30 }}>
               {pending.map((row) => (
-                <CandidateCard key={row.id} row={row} onLocked={load} />
+                <CandidateCard key={row.id} row={row} onLocked={load} onChart={setChartId} />
               ))}
             </div>
           )}
@@ -222,6 +224,7 @@ export default function WyckoffPage() {
       )}
 
       {reviewId && <ReviewDrawer id={reviewId} onClose={() => setReviewId(null)} />}
+      {chartId && <LiveChartDrawer id={chartId} onClose={() => setChartId(null)} />}
     </div>
   );
 }

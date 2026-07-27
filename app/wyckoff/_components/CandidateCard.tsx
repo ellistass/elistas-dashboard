@@ -9,7 +9,7 @@
 // green/red on the card is the factual context % sign.
 
 import { useState } from "react";
-import { Lock, ShieldCheck, AlertTriangle } from "lucide-react";
+import { Lock, ShieldCheck, AlertTriangle, CandlestickChart } from "lucide-react";
 import { SUSPECT_VOLUME } from "@/lib/wyckoff/review";
 
 export interface PendingRow {
@@ -36,7 +36,15 @@ const day = (iso: string | null) => (iso ? iso.slice(0, 10) : "—");
 const VERDICT_COLOR: Record<string, string> = { accum: "var(--green)", distrib: "var(--red)", pass: "var(--text-3)" };
 const verdictLabel = (v: string) => (v === "accum" ? "ACCUM" : v === "distrib" ? "DISTRIB" : "PASS");
 
-export default function CandidateCard({ row, onLocked }: { row: PendingRow; onLocked: () => void }) {
+export default function CandidateCard({
+  row,
+  onLocked,
+  onChart,
+}: {
+  row: PendingRow;
+  onLocked: () => void;
+  onChart: (id: string) => void;
+}) {
   const [verdict, setVerdict] = useState<string | null>(null);
   const [entry, setEntry] = useState("");
   const [stop, setStop] = useState("");
@@ -80,8 +88,22 @@ export default function CandidateCard({ row, onLocked }: { row: PendingRow; onLo
             <AlertTriangle size={12} strokeWidth={2} style={{ color: "var(--amber)", display: "block" }} />
           </span>
         )}
+        <button
+          onClick={() => onChart(row.id)}
+          title="Read the chart here (daily bars + volume) — confirm on TradingView"
+          style={{
+            marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5,
+            padding: "4px 9px", borderRadius: 7, cursor: "pointer",
+            fontSize: 11, fontWeight: 600, fontFamily: "'Sora', sans-serif",
+            background: "transparent", color: "var(--text-1)",
+            border: "1px solid var(--border-strong)",
+          }}
+        >
+          <CandlestickChart size={12} strokeWidth={2} />
+          Chart
+        </button>
         <span style={{
-          ...mono, marginLeft: "auto", fontSize: 9.5, letterSpacing: "0.1em",
+          ...mono, fontSize: 9.5, letterSpacing: "0.1em",
           padding: "3px 9px", borderRadius: 999,
           border: `1px solid ${row.status === "open" ? "var(--accent-border, var(--accent))" : "var(--border-strong)"}`,
           color: row.status === "open" ? "var(--accent)" : "var(--text-2)",
