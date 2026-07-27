@@ -152,7 +152,9 @@ const btnStyle = (primary: boolean): React.CSSProperties => ({
   border: primary ? "none" : "1px solid var(--border-strong)",
 });
 
-/* ── The replay chart: candles + volume, fixed scales, progressive reveal ── */
+/* ── The replay chart: candles + volume, fixed scales, progressive reveal.
+     Hover/drag anywhere on the plot for a crosshair + per-bar tooltip
+     (date · OHLC · volume · Δclose · running ratio) — trainer-style. ── */
 
 function ReplayChart({ data, visible }: { data: ReviewData; visible: number }) {
   const W = 900, PH = 300, VH = 90, GAP = 14, PAD = 44;
@@ -172,9 +174,26 @@ function ReplayChart({ data, visible }: { data: ReviewData; visible: number }) {
   const shown = bars.slice(0, visible);
   const boxEndX = x(Math.min(Math.max(visible - 1, rangeStartIdx), breakoutIdx));
 
+  // ── Crosshair state: pointer position → revealed bar index ──
+  const [hover, setHover] = useState<number | null>(null);
+  const toIndex = (e: React.PointerEvent<SVGSVGElement>): number | null => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const xv = ((e.clientX - rect.left) / rect.width) * W;
+    const i = Math.round((xv - PAD - xw / 2) / xw);
+    return i >= 0 && i < visible ? i : null;
+  };
+  const hb = hover != null ? bars[hover] : null;
+  const digits = rangeHi < 10 ? 4 : 2;
+
   return (
-    <div className="card" style={{ padding: 10 }}>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
+    <div className="card" style={{ padding: 10, position: "relative" }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        style={{ width: "100%", display: "block", touchAction: "none", cursor: "crosshair" }}
+        onPointerMove={(e) => setHover(toIndex(e))}
+        onPointerDown={(e) => setHover(toIndex(e))}
+        onPointerLeave={() => setHover(null)}
+      >
         {/* price gridline labels */}
         {[rangeHi, rangeLo].map((p, i) => (
           <text key={i} x={4} y={y(p) + 3} fontSize={9} fill="var(--text-3)" fontFamily="'DM Mono', monospace">
@@ -216,7 +235,62 @@ function ReplayChart({ data, visible }: { data: ReviewData; visible: number }) {
         {visible > resolveIdx && (
           <Marker x={x(resolveIdx)} y={y(bars[resolveIdx].h) - 6} label={data.outcome === "up" ? "↑" : data.outcome === "down" ? "↓" : "·"} title="outcome" color={V_COLOR[data.outcome]} />
         )}
+
+        {/* ── Crosshair ── */}
+        {hover != null && hb && (
+          <g pointerEvents="none">
+            <line x1={x(hover)} y1={4} x2={x(hover)} y2={H} stroke="var(--text-3)" strokeWidth={0.8} strokeDasharray="3 3" opacity={0.7} />
+            <line x1={PAD - 4} y1={y(hb.c)} x2={W - 6} y2={y(hb.c)} stroke="var(--text-3)" strokeWidth={0.6} strokeDasharray="2 4" opacity={0.45} />
+            <circle cx={x(hover)} cy={y(hb.c)} r={3.2} fill="var(--accent)" stroke="var(--bg-card, #0a0b0f)" strokeWidth={1.2} />
+            <rect x={x(hover) - cw / 2 - 1.5} y={vy(hb.v) - 1.5} width={cw + 3} height={PH + GAP + VH - vy(hb.v) + 1.5} fill="none" stroke="var(--accent)" strokeWidth={1} opacity={0.9} />
+            <text x={4} y={y(hb.c) + 3} fontSize={9} fill="var(--accent)" fontFamily="'DM Mono', monospace">
+              {hb.c.toFixed(digits)}
+            </text>
+          </g>
+        )}
       </svg>
+
+      {/* ── Tooltip (flips side past mid-chart) ── */}
+      {hover != null && hb && (
+        <div
+          style={{
+            position: "absolute", top: 14, pointerEvents: "none", zIndex: 5,
+            ...(x(hover) / W < 0.58
+              ? { left: `calc(${(x(hover) / W) * 100}% + 14px)` }
+              : { right: `calc(${100 - (x(hover) / W) * 100}% + 14px)` }),
+            background: "var(--bg-elevated, var(--bg-card-raised, #14161d))",
+            border: "1px solid var(--border-strong)", borderRadius: 9,
+            padding: "8px 11px", boxShadow: "0 6px 22px rgba(0,0,0,0.45)",
+            fontFamily: "'DM Mono', monospace", fontSize: 10.5, lineHeight: 1.65,
+            color: "var(--text-2)", whiteSpace: "nowrap",
+          }}
+        >
+          <div style={{ color: "var(--text-1)", fontWeight: 500 }}>
+            {hb.date}
+            <span style={{ color: "var(--text-3)", fontWeight: 400 }}>
+              {" "}· {hover < rangeStartIdx ? "context" : hover < breakoutIdx ? `range bar ${hover - rangeStartIdx + 1}` : hover === breakoutIdx ? "breakout" : "resolution"}
+            </span>
+          </div>
+          <div>
+            O {hb.o.toFixed(digits)} · H {hb.h.toFixed(digits)} · L {hb.l.toFixed(digits)} · C{" "}
+            <span style={{ color: hb.c >= hb.o ? "var(--green)" : "var(--red)" }}>{hb.c.toFixed(digits)}</span>
+          </div>
+          <div>
+            vol <span style={{ color: "var(--text-1)" }}>{fmtVol(hb.v)}</span>
+            {hover > 0 && (() => {
+              const d = hb.c - bars[hover - 1].c;
+              return (
+                <span style={{ color: d >= 0 ? "var(--green)" : "var(--red)" }}>
+                  {"  "}Δ {d >= 0 ? "+" : ""}{d.toFixed(digits)}
+                </span>
+              );
+            })()}
+            {data.runningRatio[hover] != null && (
+              <span style={{ color: "var(--text-3)" }}>{"  "}ratio {data.runningRatio[hover]!.toFixed(3)}</span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
