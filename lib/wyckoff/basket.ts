@@ -152,6 +152,22 @@ export function executeCall(
   return { action: buy ? "BUY" : "SELL", symbol: inst.executeSymbol };
 }
 
+
+/** Plain-language names for the read codes — the trader shouldn't have to
+ *  memorize that ZM means soybean meal. Stocks/ETFs are their own names. */
+const NAMES: Record<string, string> = {
+  ES: "S&P 500", NQ: "Nasdaq 100", YM: "Dow 30", RTY: "Russell 2000",
+  DAX: "DAX 40", STOXX: "EuroStoxx 50", FTSE: "FTSE 100", CAC: "CAC 40",
+  NKY: "Nikkei 225", HSI: "Hang Seng", ASX: "ASX 200",
+  GC: "Gold", SI: "Silver", HG: "Copper", PL: "Platinum", PA: "Palladium",
+  CL: "WTI Crude", BZ: "Brent", NG: "Nat Gas", RB: "Gasoline", HO: "Heating Oil",
+  ZC: "Corn", ZW: "Wheat", ZS: "Soybeans", ZL: "Soybean Oil", ZM: "Soybean Meal",
+  SB: "Sugar", KC: "Coffee", CT: "Cotton", CC: "Cocoa",
+  "6E": "Euro FX", "6B": "British Pound", "6A": "Aussie Dollar", "6N": "NZ Dollar",
+  "6C": "Canadian Dollar", "6J": "Japanese Yen", "6S": "Swiss Franc",
+};
+export const instrumentName = (symbol: string): string => NAMES[symbol] ?? symbol;
+
 /** TradingView symbol for the read chart: futures = continuous contract. */
 export function tradingViewSymbol(symbol: string): string {
   const inst = BY_SYMBOL.get(symbol);

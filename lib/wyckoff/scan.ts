@@ -52,6 +52,7 @@ export interface WyckoffScanResult {
   scanned: number; // instruments successfully fetched
   rangesFound: number; // all ranges across all instruments (persisted)
   persisted: number; // rows written/updated this run
+  staleRemoved: number; // phantom open rows swept (range re-anchored to a new start)
   latestBarDate: string | null; // newest bar seen across all instruments —
   //                               lets the digest show what data date the scan
   //                               actually read (staleness visibility)
@@ -142,6 +143,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
   let scanned = 0;
   let rangesFound = 0;
   let persisted = 0;
+  let staleRemoved = 0;
   let latestBarDate: string | null = null;
 
   const BATCH = 5; // polite to Yahoo, same as the trend screener
@@ -165,7 +167,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
         continue;
       }
       scanned++;
-      const { bars, analyzed } = s.value;
+      const { inst, bars, analyzed } = s.value;
       const last = bars[bars.length - 1]?.date ?? null;
       if (last && (!latestBarDate || last > latestBarDate)) latestBarDate = last;
       rangesFound += analyzed.length;
@@ -180,6 +182,33 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
         }
         if (a.fresh) fresh.push(a.candidate);
       }
+      // ── Stale-open sweep ──────────────────────────────────────────────────
+      // As bars accumulate, the greedy detector can legitimately re-anchor an
+      // open range to a different start date — leaving the previous open row
+      // behind as a phantom duplicate (two "OPEN" cards for one instrument).
+      // Any open row this scan did NOT re-detect is stale: remove it, unless
+      // a read was locked on it (a locked read is immutable evidence — those
+      // rows are kept and will simply age out of the readable list).
+      try {
+        const openStarts = analyzed
+          .filter((a) => a.range.status === "open")
+          .map((a) => toUtcDate(a.candidate.rangeStartDate));
+        const del = await (db as any).scannerCandidate.deleteMany({
+          where: {
+            instrument: inst.symbol,
+            status: "open",
+            outcome: null,
+            traderVerdict: null,
+            rangeStartDate: { notIn: openStarts },
+          },
+        });
+        staleRemoved += del.count ?? 0;
+      } catch (e) {
+        errors.push({
+          instrument: inst.symbol,
+          message: `stale-open sweep failed: ${e instanceof Error ? e.message : e}`,
+        });
+      }
     }
   }
 
@@ -192,7 +221,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
     return x.instrument.localeCompare(y.instrument);
   });
 
-  return { candidates: fresh, scanned, rangesFound, persisted, latestBarDate, errors };
+  return { candidates: fresh, scanned, rangesFound, persisted, staleRemoved, latestBarDate, errors };
 }
 
 // ── §9 Outcome backfill ───────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ import ReviewDrawer from "./_components/ReviewDrawer";
 import LiveChartDrawer from "./_components/LiveChartDrawer";
 import ScoreStrip, { type Scoreboard } from "./_components/ScoreStrip";
 import CandidateCard, { type PendingRow } from "./_components/CandidateCard";
-import { SUSPECT_VOLUME } from "@/lib/wyckoff/review";
+import { SUSPECT_VOLUME, instrumentInfo, instrumentName } from "@/lib/wyckoff/basket";
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 
@@ -69,6 +69,8 @@ export default function WyckoffPage() {
   const [reviewId, setReviewId] = useState<string | null>(null);
   const [chartId, setChartId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("learnable");
+  const [search, setSearch] = useState("");
+  const [period, setPeriod] = useState("all"); // breakout-date window
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -101,7 +103,8 @@ export default function WyckoffPage() {
       if (!res.ok || !j?.ok) throw new Error(j?.error ?? `scan failed (${res.status})`);
       setScanNote(
         `scanned ${j.scanned} · ${j.rangesFound} ranges · ${j.freshCount} fresh · ` +
-        `${j.backfill?.updated ?? 0} outcomes resolved · data through ${j.latestBarDate ?? "?"}`,
+        `${j.backfill?.updated ?? 0} outcomes resolved · ${j.staleRemoved ?? 0} stale opens swept · ` +
+        `data through ${j.latestBarDate ?? "?"}`,
       );
       await load();
     } catch (e) {
@@ -110,11 +113,28 @@ export default function WyckoffPage() {
     setScanning(false);
   }
 
-  const filteredResolved = resolved.filter((r) =>
-    reviewFilter === "everything" ? true :
-    reviewFilter === "learnable" ? isLearnable(r) :
-    reviewFilter === "failures" ? isLearnable(r) && !verdictHits(r.engineVerdict, r.outcome) :
-    isLearnable(r) && verdictHits(r.engineVerdict, r.outcome),
+  // Per-tab counts computed up front — an empty tab must read as a DATA fact
+  // ("engine has 0 successes yet"), never as a possibly-broken page.
+  const matches = (r: ResolvedRow, f: ReviewFilter) =>
+    f === "everything" ? true :
+    f === "learnable" ? isLearnable(r) :
+    f === "failures" ? isLearnable(r) && !verdictHits(r.engineVerdict, r.outcome) :
+    isLearnable(r) && verdictHits(r.engineVerdict, r.outcome);
+  const tabCounts = Object.fromEntries(
+    REVIEW_FILTERS.map((f) => [f, resolved.filter((r) => matches(r, f)).length]),
+  ) as Record<ReviewFilter, number>;
+  const q = search.trim().toUpperCase();
+  const inPeriod = (r: ResolvedRow): boolean => {
+    if (period === "all" || !r.breakoutDate) return period === "all";
+    const d = r.breakoutDate.slice(0, 10);
+    if (period === "30d" || period === "90d") {
+      const days = period === "30d" ? 30 : 90;
+      return new Date(`${d}T00:00:00Z`).getTime() >= Date.now() - days * 86_400_000;
+    }
+    return d.startsWith(period); // "2026" | "2025" | "2024"
+  };
+  const filteredResolved = resolved.filter(
+    (r) => matches(r, reviewFilter) && inPeriod(r) && (!q || r.instrument.toUpperCase().includes(q)),
   );
 
   return (
@@ -200,15 +220,45 @@ export default function WyckoffPage() {
             icon={<Eye size={13} strokeWidth={2} />}
             title="Resolved — revealed"
             count={filteredResolved.length}
+            total={resolved.length}
             note="your read vs engine vs what price did"
             right={
               resolved.length > 0 ? (
-                <div className="seg">
-                  {REVIEW_FILTERS.map((f) => (
-                    <button key={f} className={reviewFilter === f ? "on" : ""} onClick={() => setReviewFilter(f)}>
-                      {f === "learnable" ? "Learnable" : f === "failures" ? "Failures" : f === "successes" ? "Successes" : "Everything"}
-                    </button>
-                  ))}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="filter instrument…"
+                    style={{
+                      ...mono, fontSize: 11, width: 130, padding: "7px 10px",
+                      borderRadius: 8, border: "1px solid var(--border)",
+                      background: "transparent", color: "var(--text-1)", outline: "none",
+                    }}
+                  />
+                  <select
+                    value={period}
+                    onChange={(e) => setPeriod(e.target.value)}
+                    style={{
+                      ...mono, fontSize: 11, padding: "7px 9px", borderRadius: 8,
+                      border: "1px solid var(--border)", background: "var(--bg-card, transparent)",
+                      color: "var(--text-1)", outline: "none", cursor: "pointer",
+                    }}
+                  >
+                    <option value="all">all time</option>
+                    <option value="30d">broke out ≤ 30d</option>
+                    <option value="90d">broke out ≤ 90d</option>
+                    <option value="2026">2026</option>
+                    <option value="2025">2025</option>
+                    <option value="2024">2024</option>
+                  </select>
+                  <div className="seg">
+                    {REVIEW_FILTERS.map((f) => (
+                      <button key={f} className={reviewFilter === f ? "on" : ""} onClick={() => setReviewFilter(f)}>
+                        {(f === "learnable" ? "Learnable" : f === "failures" ? "Failures" : f === "successes" ? "Successes" : "Everything") +
+                          ` ${tabCounts[f]}`}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ) : undefined
             }
@@ -216,7 +266,18 @@ export default function WyckoffPage() {
           {resolved.length === 0 ? (
             <EmptyState text="Nothing resolved yet — outcomes backfill 12 trading days after each breakout." />
           ) : filteredResolved.length === 0 ? (
-            <EmptyState text="No resolved cases match this filter yet." small />
+            <EmptyState
+              small
+              text={
+                q
+                  ? `No ${reviewFilter} cases match "${search.trim()}".`
+                  : reviewFilter === "successes"
+                    ? `Engine successes: 0 of ${tabCounts.learnable} learnable cases so far — the engine's directional calls haven't landed yet. That's a data fact, not a bug; it IS the benchmark. See Everything (${tabCounts.everything}) for the full archive.`
+                    : reviewFilter === "failures"
+                      ? `Engine failures: 0 of ${tabCounts.learnable} learnable cases so far. See Everything (${tabCounts.everything}) for the full archive.`
+                      : `Learnable is empty: of ${tabCounts.everything} resolved cases, none has BOTH a decisive engine call (accum/distrib, not neutral) AND a directional outcome (up/down, not chop) on trusted volume. Neutral verdicts and chop resolutions are excluded by design — they teach nothing. Open Everything (${tabCounts.everything}) to browse the full archive.`
+              }
+            />
           ) : (
             <ResolvedTable rows={filteredResolved} onReview={setReviewId} />
           )}
@@ -231,8 +292,8 @@ export default function WyckoffPage() {
 
 /* ── Section header — one consistent pattern ────────────────────────────── */
 
-function SectionHeader({ icon, title, count, note, right }: {
-  icon: React.ReactNode; title: string; count: number; note: string; right?: React.ReactNode;
+function SectionHeader({ icon, title, count, total, note, right }: {
+  icon: React.ReactNode; title: string; count: number; total?: number; note: string; right?: React.ReactNode;
 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 12px", flexWrap: "wrap" }}>
@@ -240,7 +301,7 @@ function SectionHeader({ icon, title, count, note, right }: {
         {icon} {title}
       </span>
       <span style={{ ...mono, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: "1px solid var(--border-strong)", color: "var(--text-2)" }}>
-        {count}
+        {total != null && total !== count ? `${count} of ${total}` : count}
       </span>
       <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>{note}</span>
       {right && <div style={{ marginLeft: "auto" }}>{right}</div>}
@@ -297,6 +358,19 @@ function ResolvedTable({ rows, onReview }: { rows: ResolvedRow[]; onReview: (id:
                 {SUSPECT_VOLUME.has(r.instrument) && (
                   <AlertTriangle size={11} strokeWidth={2} style={{ color: "var(--amber)", marginLeft: 5, verticalAlign: "-1px" }} aria-label="Yahoo volume unreliable" />
                 )}
+                {(() => {
+                  const name = instrumentName(r.instrument);
+                  const cfd = instrumentInfo(r.instrument)?.executeSymbol;
+                  const extra = [
+                    name !== r.instrument ? name : null,
+                    cfd && cfd !== r.instrument ? cfd : null,
+                  ].filter(Boolean).join(" · ");
+                  return extra ? (
+                    <span style={{ ...mono, fontSize: 9.5, color: "var(--text-3)", fontWeight: 400, marginLeft: 6 }}>
+                      {extra}
+                    </span>
+                  ) : null;
+                })()}
               </td>
               <td style={td}>{boxFmt(r)}</td>
               <td style={{ ...td, textAlign: "right" }}>{r.barsInRange}</td>

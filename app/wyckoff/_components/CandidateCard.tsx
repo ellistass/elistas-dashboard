@@ -10,7 +10,7 @@
 
 import { useState } from "react";
 import { Lock, ShieldCheck, AlertTriangle, CandlestickChart, ArrowLeftRight } from "lucide-react";
-import { SUSPECT_VOLUME, instrumentInfo, executeCall } from "@/lib/wyckoff/basket";
+import { SUSPECT_VOLUME, instrumentInfo, executeCall, instrumentName } from "@/lib/wyckoff/basket";
 
 export interface PendingRow {
   id: string;
@@ -84,6 +84,12 @@ export default function CandidateCard({
         <span style={{ ...mono, fontSize: 17, fontWeight: 500, color: "var(--text-1)", letterSpacing: "0.02em" }}>
           {row.instrument}
         </span>
+        {instrumentName(row.instrument) !== row.instrument && (
+          <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 300 }}>
+            {instrumentName(row.instrument)}
+            {inst && <span style={{ ...mono, fontSize: 9, letterSpacing: "0.08em" }}> · {inst.assetClass.toUpperCase()}</span>}
+          </span>
+        )}
         {inst && inst.executeSymbol && inst.executeSymbol !== row.instrument && (
           <span
             title={inst.inverted
@@ -94,6 +100,14 @@ export default function CandidateCard({
             <ArrowLeftRight size={10} strokeWidth={2} />
             {inst.executeSymbol}
             {inst.inverted && " ·inv"}
+          </span>
+        )}
+        {inst && !inst.executeSymbol && (
+          <span
+            title={`No common CFD for ${row.instrument}${inst.cfdNote ? ` — ${inst.cfdNote}` : ""}. Surfaced for reading and benchmark scoring only.`}
+            style={{ ...mono, fontSize: 9.5, letterSpacing: "0.06em", padding: "2px 7px", borderRadius: 999, border: "1px dashed var(--border-strong)", color: "var(--text-3)" }}
+          >
+            read only
           </span>
         )}
         {suspect && (

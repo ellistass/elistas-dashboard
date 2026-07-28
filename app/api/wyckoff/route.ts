@@ -138,7 +138,7 @@ export async function POST() {
 
   try {
     const { runWyckoffScan, backfillOutcomes } = await import("@/lib/wyckoff/scan");
-    const { candidates, scanned, rangesFound, persisted, latestBarDate, errors } =
+    const { candidates, scanned, rangesFound, persisted, staleRemoved, latestBarDate, errors } =
       await runWyckoffScan();
     // Backfill too, so resolvable history moves to the revealed section instead
     // of lingering as unreadable "unresolved" rows.
@@ -151,6 +151,7 @@ export async function POST() {
       scanned,
       rangesFound,
       persisted,
+      staleRemoved,
       freshCount: candidates.length,
       latestBarDate,
       backfill,
