@@ -47,8 +47,23 @@ export interface Candidate {
   lastBarDate: string; // most recent bar in the series (data freshness)
 }
 
+// A watched level that a daily bar actually traded through. Trader-side data
+// only (your tag, your note, your level) — no verdict, no direction.
+export interface WatchAlert {
+  instrument: string;
+  watch: string; // "now" | "later"
+  level: number;
+  barDate: string; // the bar that triggered it
+  close: number;
+  via: "touch" | "gap"; // traded through the level, or gapped clean over it
+  note: string | null;
+  rangeLo: number;
+  rangeHi: number;
+}
+
 export interface WyckoffScanResult {
   candidates: Candidate[]; // FRESH only, neutral sort, verdict-free
+  alerts: WatchAlert[]; // watched levels touched since the alert was armed
   scanned: number; // instruments successfully fetched
   rangesFound: number; // all ranges across all instruments (persisted)
   persisted: number; // rows written/updated this run
@@ -145,6 +160,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
   let persisted = 0;
   let staleRemoved = 0;
   let latestBarDate: string | null = null;
+  const alerts: WatchAlert[] = [];
 
   const BATCH = 5; // polite to Yahoo, same as the trend screener
   for (let i = 0; i < BASKET.length; i += BATCH) {
@@ -199,6 +215,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
             status: "open",
             outcome: null,
             traderVerdict: null,
+            watch: null, // triaged rows are yours — the sweep never takes them
             rangeStartDate: { notIn: openStarts },
           },
         });
@@ -207,6 +224,18 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
         errors.push({
           instrument: inst.symbol,
           message: `stale-open sweep failed: ${e instanceof Error ? e.message : e}`,
+        });
+      }
+
+      // ── Watchlist alert check ─────────────────────────────────────────────
+      // Bars for this instrument are already in hand, so the check is free:
+      // no extra fetch, no separate cron, no intraday polling.
+      try {
+        alerts.push(...(await fireWatchAlerts(inst.symbol, bars)));
+      } catch (e) {
+        errors.push({
+          instrument: inst.symbol,
+          message: `watch alert check failed: ${e instanceof Error ? e.message : e}`,
         });
       }
     }
@@ -221,7 +250,77 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
     return x.instrument.localeCompare(y.instrument);
   });
 
-  return { candidates: fresh, scanned, rangesFound, persisted, staleRemoved, latestBarDate, errors };
+  alerts.sort((a, b) => (a.watch === b.watch ? a.instrument.localeCompare(b.instrument) : a.watch === "now" ? -1 : 1));
+
+  return { candidates: fresh, alerts, scanned, rangesFound, persisted, staleRemoved, latestBarDate, errors };
+}
+
+// ── Watchlist alerts ─────────────────────────────────────────────────────────
+// Fires when a daily bar's range contains the level you set on the chart.
+//
+// Only bars STRICTLY AFTER the arm day count: setting a level at a price today
+// already traded is not news, and letting it fire immediately would train you
+// to ignore the alert. One shot per arming — alertHitAt is stamped and the row
+// goes quiet until you move or re-set the level.
+async function fireWatchAlerts(instrument: string, bars: Bar[]): Promise<WatchAlert[]> {
+  const armed: Array<{
+    id: string;
+    watch: string | null;
+    watchNote: string | null;
+    alertPrice: number | null;
+    alertSetAt: Date | null;
+    rangeLo: number;
+    rangeHi: number;
+  }> = await (db as any).scannerCandidate.findMany({
+    where: { instrument, outcome: null, alertPrice: { not: null }, alertHitAt: null },
+    select: {
+      id: true, watch: true, watchNote: true, alertPrice: true,
+      alertSetAt: true, rangeLo: true, rangeHi: true,
+    },
+  });
+  if (!armed.length) return [];
+
+  const hits: WatchAlert[] = [];
+  for (const row of armed) {
+    const level = row.alertPrice;
+    if (level == null) continue;
+    const armedDay = row.alertSetAt ? row.alertSetAt.toISOString().slice(0, 10) : null;
+
+    // Walk forward from the arm day. A level counts as reached when the bar
+    // TRADED through it (low <= level <= high) — or when price GAPPED clean
+    // over it (previous close one side, this close the other). Without the gap
+    // case an overnight jump through your level would leave the alert armed
+    // forever, silent on exactly the move worth knowing about.
+    let prevClose: number | null = null;
+    let hit: { bar: Bar; via: "touch" | "gap" } | null = null;
+    for (const b of bars) {
+      if (armedDay != null && b.date <= armedDay) { prevClose = b.c; continue; }
+      if (b.l <= level && level <= b.h) { hit = { bar: b, via: "touch" }; break; }
+      if (prevClose != null && (prevClose - level) * (b.c - level) < 0) {
+        hit = { bar: b, via: "gap" };
+        break;
+      }
+      prevClose = b.c;
+    }
+    if (!hit) continue;
+    const touch = hit.bar;
+    await (db as any).scannerCandidate.update({
+      where: { id: row.id },
+      data: { alertHitAt: new Date(), alertHitDate: toUtcDate(touch.date) },
+    });
+    hits.push({
+      instrument,
+      watch: row.watch ?? "later",
+      level,
+      barDate: touch.date,
+      close: touch.c,
+      via: hit.via,
+      note: row.watchNote,
+      rangeLo: row.rangeLo,
+      rangeHi: row.rangeHi,
+    });
+  }
+  return hits;
 }
 
 // ── §9 Outcome backfill ───────────────────────────────────────────────────────

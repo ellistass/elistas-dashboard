@@ -4,13 +4,15 @@
 // Composition (top to bottom):
 //   1. Header — title, data state, Run scan.
 //   2. ScoreStrip — the you-vs-engine benchmark as one unit + pass-rate meter.
-//   3. Reading desk — fresh candidates as a card grid (read in seconds, lock).
+//   3. Watching — the ranges you triaged, pinned above the desk so a decision
+//      you cared about can't quietly scroll away.
+//   4. Reading desk — fresh candidates as a card grid (read in seconds, lock).
 //   4. Resolved archive — filterable reveal table + Review replay.
 //
 // The blind rules all live server-side; this page is presentation only.
 
 import { useCallback, useEffect, useState } from "react";
-import { Frame, Lock, Eye, RefreshCw, PlaySquare, AlertTriangle, Inbox } from "lucide-react";
+import { Frame, Lock, Eye, RefreshCw, PlaySquare, AlertTriangle, Inbox, Star, Zap, Clock, BellRing } from "lucide-react";
 import ReviewDrawer from "./_components/ReviewDrawer";
 import LiveChartDrawer from "./_components/LiveChartDrawer";
 import ScoreStrip, { type Scoreboard } from "./_components/ScoreStrip";
@@ -57,6 +59,7 @@ type ReviewFilter = (typeof REVIEW_FILTERS)[number];
 
 export default function WyckoffPage() {
   const [pending, setPending] = useState<PendingRow[]>([]);
+  const [watching, setWatching] = useState<PendingRow[]>([]);
   const [resolved, setResolved] = useState<ResolvedRow[]>([]);
   const [score, setScore] = useState<Scoreboard | null>(null);
   const [passRate, setPassRate] = useState<{ total: number; pass: number } | null>(null);
@@ -80,6 +83,7 @@ export default function WyckoffPage() {
       const j = await res.json().catch(() => null);
       if (!res.ok) throw new Error(j?.error ?? `load failed (${res.status})`);
       setPending(j.pending);
+      setWatching(j.watching ?? []);
       setResolved(j.resolved);
       setScore(j.score);
       setPassRate(j.passRate ?? null);
@@ -146,7 +150,7 @@ export default function WyckoffPage() {
             <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: "-0.02em" }}>Wyckoff ranges</h1>
             <span style={{ ...mono, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-3)", paddingTop: 6 }}>
               <Frame size={13} strokeWidth={2} />
-              {pending.length} to read · {resolved.length} resolved
+              {pending.length} to read · {watching.length} watching · {resolved.length} resolved
             </span>
           </div>
           <p style={{ margin: 0, fontSize: 13, color: "var(--text-label)", fontWeight: 300, maxWidth: 620 }}>
@@ -190,7 +194,12 @@ export default function WyckoffPage() {
         </div>
       ) : (
         <>
-          {/* ── 3 · Reading desk ── */}
+          {/* ── 3 · Watching — your triage, pinned ── */}
+          {watching.length > 0 && (
+            <WatchingSection rows={watching} onChanged={load} onChart={setChartId} />
+          )}
+
+          {/* ── 4 · Reading desk ── */}
           <SectionHeader
             icon={<Lock size={13} strokeWidth={2} />}
             title="At a decision point"
@@ -205,17 +214,21 @@ export default function WyckoffPage() {
           )}
           {pending.length === 0 ? (
             <EmptyState
-              text="No candidates at a decision point — a quiet day is the normal state. The daily scan repopulates this after each close."
+              text={
+                watching.length > 0
+                  ? "Desk clear — everything at a decision point is triaged above. A quiet day is the normal state; the daily scan repopulates this after each close."
+                  : "No candidates at a decision point — a quiet day is the normal state. The daily scan repopulates this after each close."
+              }
             />
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))", gap: 12, marginBottom: 30 }}>
               {pending.map((row) => (
-                <CandidateCard key={row.id} row={row} onLocked={load} onChart={setChartId} />
+                <CandidateCard key={row.id} row={row} onLocked={load} onChart={setChartId} onWatchChange={load} />
               ))}
             </div>
           )}
 
-          {/* ── 4 · Resolved archive ── */}
+          {/* ── 5 · Resolved archive ── */}
           <SectionHeader
             icon={<Eye size={13} strokeWidth={2} />}
             title="Resolved — revealed"
@@ -285,8 +298,85 @@ export default function WyckoffPage() {
       )}
 
       {reviewId && <ReviewDrawer id={reviewId} onClose={() => setReviewId(null)} />}
-      {chartId && <LiveChartDrawer id={chartId} onClose={() => setChartId(null)} />}
+      {chartId && (
+        <LiveChartDrawer
+          id={chartId}
+          onClose={() => { setChartId(null); load(); }}
+        />
+      )}
     </div>
+  );
+}
+
+/* ── Watching — the triage lanes ─────────────────────────────────────────────
+   Two lanes, one job: separate what you want in front of you TODAY from what
+   you'll get back to. Neither is a call on direction — the read below is still
+   the only thing that scores. Rows here survive the stale-open sweep and keep
+   their note, so coming back a week later doesn't mean starting cold. */
+
+const LANES = [
+  { key: "now", label: "Now", icon: <Zap size={12} strokeWidth={2} />, note: "immediate — read these first" },
+  { key: "later", label: "Later", icon: <Clock size={12} strokeWidth={2} />, note: "parked — come back to these" },
+] as const;
+
+function WatchingSection({ rows, onChanged, onChart }: {
+  rows: PendingRow[]; onChanged: () => void; onChart: (id: string) => void;
+}) {
+  const hits = rows.filter((r) => r.alertHitAt != null);
+  // Touched levels float to the top of their lane — that is the one thing here
+  // that changed on its own since you last looked.
+  const order = (a: PendingRow, b: PendingRow) =>
+    (b.alertHitAt ? 1 : 0) - (a.alertHitAt ? 1 : 0);
+  return (
+    <>
+      <SectionHeader
+        icon={<Star size={13} strokeWidth={2} />}
+        title="Watching"
+        count={rows.length}
+        note="your triage · protected from the sweep · alerts fire in the nightly digest"
+        right={
+          hits.length > 0 ? (
+            <span style={{
+              ...mono, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10.5,
+              padding: "4px 10px", borderRadius: 999,
+              border: "1px solid var(--accent)", color: "var(--accent)",
+            }}>
+              <BellRing size={12} strokeWidth={2} />
+              {hits.length} level{hits.length === 1 ? "" : "s"} touched
+            </span>
+          ) : undefined
+        }
+      />
+      {LANES.map((lane) => {
+        const laneRows = rows.filter((r) => r.watch === lane.key).sort(order);
+        if (!laneRows.length) return null;
+        return (
+          <div key={lane.key} style={{ marginBottom: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 9px" }}>
+              <span style={{
+                ...mono, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10,
+                letterSpacing: "0.08em", textTransform: "uppercase",
+                color: lane.key === "now" ? "var(--accent)" : "var(--text-2)",
+              }}>
+                {lane.icon} {lane.label} · {laneRows.length}
+              </span>
+              <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>{lane.note}</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))", gap: 12 }}>
+              {laneRows.map((row) => (
+                <CandidateCard
+                  key={row.id}
+                  row={row}
+                  onLocked={onChanged}
+                  onChart={onChart}
+                  onWatchChange={onChanged}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </>
   );
 }
 

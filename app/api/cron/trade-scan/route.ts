@@ -32,7 +32,8 @@ import { runScan, persistScan, type MarketScan } from "@/lib/screener/scan";
 // Sentinel thrown to skip the retired trend lane without logging an error.
 const SKIP_TREND = Symbol("trend-lane-retired");
 import { evaluateOutcomes } from "@/lib/screener/outcomes";
-import { runWyckoffScan, backfillOutcomes, type Candidate } from "@/lib/wyckoff/scan";
+import { runWyckoffScan, backfillOutcomes, type Candidate, type WatchAlert } from "@/lib/wyckoff/scan";
+import { instrumentName } from "@/lib/wyckoff/basket";
 import { sendTelegramMessage } from "@/lib/telegram";
 
 // ── Trend lane kill-switch ────────────────────────────────────────────────────
@@ -125,9 +126,13 @@ export async function runTradeScanJob(req: Request) {
   let wyckoff: Record<string, unknown> | null = null;
   let wyckoffError: string | null = null;
   let wyckoffSection = "";
+  let watchSection = "";
   try {
     const res = await runWyckoffScan();
     wyckoffSection = wyckoffDigest(res.candidates, res.latestBarDate, res.scanned, res.rangesFound);
+    // Watchlist goes FIRST in the message: it is the short, personally-filtered
+    // lane. If only one section gets read on a phone, it should be this one.
+    watchSection = watchlistDigest(res.alerts);
     // Counts only in the job log — candidates carry no verdict anyway, but the
     // ops payload doesn't need to repeat the digest.
     wyckoff = {
@@ -135,6 +140,7 @@ export async function runTradeScanJob(req: Request) {
       rangesFound: res.rangesFound,
       persisted: res.persisted,
       freshCount: res.candidates.length,
+      alertsFired: res.alerts.length,
       latestBarDate: res.latestBarDate,
       errors: res.errors,
     };
@@ -157,7 +163,7 @@ export async function runTradeScanJob(req: Request) {
   // ── The digest (Wyckoff-only while the trend lane is retired) ──────────────
   let telegramSent = false;
   try {
-    await sendTelegramMessage([trendSection, wyckoffSection].filter(Boolean).join("\n\n"));
+    await sendTelegramMessage([trendSection, watchSection, wyckoffSection].filter(Boolean).join("\n\n"));
     telegramSent = true;
   } catch (e) {
     console.error("[trade-scan] telegram send failed:", e);
@@ -274,6 +280,31 @@ function wyckoffLine(c: Candidate): string {
   const stop = c.stoppingAction ? " · stopping action" : "";
   const state = c.status === "open" ? "OPEN — still inside" : `broke out ${c.breakoutDate}`;
   return `*${c.instrument}* — box ${box} · ${c.barsInRange} bars · ${ctx} · ${test}${stop} · ${state}`;
+}
+
+// ── Watchlist lane ───────────────────────────────────────────────────────────
+// Only ranges YOU tagged, and only when a level you drew was actually traded
+// through. Silence here means nothing you flagged moved — no "0 alerts" line,
+// because a watchlist that pings on quiet days stops being a watchlist.
+function watchlistDigest(alerts: WatchAlert[]): string {
+  if (!alerts.length) return "";
+  const now = alerts.filter((a) => a.watch === "now").length;
+  const head =
+    `*Watchlist — ${alerts.length} level${alerts.length > 1 ? "s" : ""} reached*` +
+    (now ? ` (${now} on your NOW list)` : "");
+  return `${head}\n${alerts.map(watchAlertLine).join("\n")}\n→ open /wyckoff to read them`;
+}
+
+function watchAlertLine(a: WatchAlert): string {
+  const digits = a.rangeHi < 10 ? 4 : 2;
+  const name = instrumentName(a.instrument);
+  const label = name && name !== a.instrument ? `*${a.instrument}* (${name})` : `*${a.instrument}*`;
+  const note = a.note ? ` — _${a.note}_` : "";
+  const verb = a.via === "gap" ? "gapped through" : "touched";
+  return (
+    `${a.watch === "now" ? "NOW" : "later"} · ${label} ${verb} ${a.level.toFixed(digits)} ` +
+    `on ${a.barDate} · close ${a.close.toFixed(digits)}${note}`
+  );
 }
 
 function wyckoffDigest(

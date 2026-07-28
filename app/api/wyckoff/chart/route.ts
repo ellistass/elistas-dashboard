@@ -37,6 +37,7 @@ export async function GET(req: NextRequest) {
       terminalTest: true, stoppingAction: true, barsInRange: true, status: true,
       rangeStartDate: true, breakoutDate: true, outcome: true,
       traderVerdict: true, traderReadAt: true,
+      watch: true, watchNote: true, alertPrice: true, alertHitAt: true,
     },
   });
   if (!row) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
@@ -79,6 +80,14 @@ export async function GET(req: NextRequest) {
     status: row.status,
     breakoutDate: row.breakoutDate ? row.breakoutDate.toISOString().slice(0, 10) : null,
     traderVerdict: row.traderVerdict,
+    // Triage state travels with the chart so the alert level can be drawn,
+    // moved and cleared without leaving the drawer.
+    id: row.id,
+    watch: row.watch,
+    watchNote: row.watchNote,
+    alertPrice: row.alertPrice,
+    alertHitAt: row.alertHitAt,
+    resolved: row.outcome != null,
     ...chart,
   });
 }

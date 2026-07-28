@@ -422,6 +422,19 @@ model ScannerCandidate {
   traderEntry    Float?                        // optional committed entry price
   traderStop     Float?                        // optional committed stop price
   traderReadAt   DateTime?                     // when the read was locked
+
+  // -- Triage & watchlist (mutable, and deliberately NOT part of the read) ----
+  // A tag is not a verdict: it says "keep this in front of me", never accum or
+  // distrib. Editable and reversible at any time. The benchmark reads
+  // traderVerdict only, so nothing in this block can move the score.
+  watch          String?                       // "now" | "later" | null (untriaged)
+  watchNote      String?                       // why you flagged it - your own context
+  watchAt        DateTime?                     // when it was last (re)tagged
+  alertPrice     Float?                        // level set by clicking the chart
+  alertSetAt     DateTime?                     // arm time - only bars AFTER this day can fire
+  alertHitAt     DateTime?                     // stamped by the scan when a bar touched it
+  alertHitDate   DateTime?                     // the bar date that did the touching
+
   barsInRange    Int
   rangeStartDate DateTime                      // date of bar `start` — stable dedupe key
   breakoutDate   DateTime?                     // date of bar `end`; null while status = "open"
@@ -431,5 +444,6 @@ model ScannerCandidate {
   @@unique([instrument, rangeStartDate])
   @@index([instrument, scanDate])
   @@index([outcome, status])
+  @@index([watch])
   @@map("scanner_candidates")
 }

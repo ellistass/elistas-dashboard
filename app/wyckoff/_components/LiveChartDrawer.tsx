@@ -5,18 +5,29 @@
 // can start on the dashboard (TradingView remains the confirmation source —
 // the footer names the exact symbol to pull up).
 //
+// It is also where an alert level is set: arm "Set alert", click the price you
+// care about, and the level is drawn on the chart and armed server-side. The
+// nightly scan checks it against that day's bar — no intraday polling, and no
+// need to remember the number yourself.
+//
 // THE WALL, client side: this component renders ONLY market data and facts the
 // trader payload already discloses. No engine verdict, no effort numbers, no
 // running ratio — grep this file: those fields don't exist here. Post-mortem
 // internals belong to ReviewDrawer, which the API restricts to resolved rows.
 
 import { useEffect, useState } from "react";
-import { X, AlertTriangle, ExternalLink } from "lucide-react";
+import { X, AlertTriangle, ExternalLink, Bell, BellRing, Crosshair } from "lucide-react";
 
 interface Bar { o: number; h: number; l: number; c: number; v: number; date: string }
 
 interface LiveChart {
+  id: string;
   instrument: string;
+  watch: string | null;
+  watchNote: string | null;
+  alertPrice: number | null;
+  alertHitAt: string | null;
+  resolved: boolean;
   suspectVolume: boolean;
   rangeLo: number;
   rangeHi: number;
@@ -44,6 +55,31 @@ import { instrumentInfo, tradingViewSymbol } from "@/lib/wyckoff/basket";
 export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const [data, setData] = useState<LiveChart | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [alert, setAlert] = useState<number | null>(null);
+  const [arming, setArming] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [alertErr, setAlertErr] = useState<string | null>(null);
+
+  // Writes the level and arms it. Only bars AFTER today can trigger it, so
+  // setting a level at a price already trading today won't ping tonight.
+  async function saveAlert(price: number | null) {
+    setSaving(true);
+    setAlertErr(null);
+    try {
+      const res = await fetch("/api/wyckoff/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, alertPrice: price }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? `failed (${res.status})`);
+      setAlert(price);
+    } catch (e) {
+      setAlertErr(e instanceof Error ? e.message : String(e));
+    }
+    setSaving(false);
+    setArming(false);
+  }
 
   useEffect(() => {
     let alive = true;
@@ -54,6 +90,7 @@ export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: 
         if (!alive) return;
         if (!res.ok) throw new Error(j.error ?? `failed (${res.status})`);
         setData(j);
+        setAlert(j.alertPrice ?? null);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
       }
@@ -62,10 +99,16 @@ export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: 
   }, [id]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Esc backs out of arming first — closing the whole drawer on a stray Esc
+      // mid-placement would be the wrong kind of surprise.
+      if (arming) { setArming(false); return; }
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, arming]);
 
   return (
     <>
@@ -98,7 +141,47 @@ export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: 
 
         {data && (
           <>
-            <LiveChartSvg data={data} />
+            {/* ── Alert level control ── */}
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", marginBottom: 10 }}>
+              {alert != null ? (
+                <>
+                  <span style={{
+                    ...mono, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11,
+                    padding: "5px 11px", borderRadius: 999,
+                    border: `1px solid ${data.alertHitAt ? "var(--accent)" : "var(--border-strong)"}`,
+                    color: data.alertHitAt ? "var(--accent)" : "var(--text-1)",
+                  }}>
+                    {data.alertHitAt ? <BellRing size={12} strokeWidth={2} /> : <Bell size={12} strokeWidth={2} />}
+                    alert {alert.toFixed(data.rangeHi < 10 ? 4 : 2)}
+                    {data.alertHitAt && " · already touched"}
+                  </span>
+                  <SmallBtn onClick={() => setArming(true)} disabled={saving} active={arming}>
+                    <Crosshair size={11} strokeWidth={2} /> {arming ? "click a price…" : "Move"}
+                  </SmallBtn>
+                  <SmallBtn onClick={() => saveAlert(null)} disabled={saving}>
+                    <X size={11} strokeWidth={2} /> Clear
+                  </SmallBtn>
+                </>
+              ) : (
+                <SmallBtn onClick={() => setArming((v) => !v)} disabled={saving || data.resolved} active={arming}>
+                  <Crosshair size={11} strokeWidth={2} />
+                  {arming ? "click a price on the chart…" : "Set alert level"}
+                </SmallBtn>
+              )}
+              <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
+                {arming
+                  ? "click the price you want flagged · snaps to the box edges · Esc to cancel"
+                  : "checked once a day against the close bar — reported in the 21:15 digest"}
+              </span>
+              {alertErr && <span style={{ ...mono, fontSize: 10.5, color: "var(--red)" }}>{alertErr}</span>}
+            </div>
+
+            <LiveChartSvg
+              data={data}
+              alert={alert}
+              arming={arming}
+              onPick={(p) => saveAlert(p)}
+            />
             <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
               <span style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>
                 <span style={{ color: "var(--text-3)" }}>confirm on TradingView: </span>
@@ -129,7 +212,31 @@ export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: 
 
 /* ── Chart: full reveal, crosshair with OHLC + volume. No engine anything. ── */
 
-function LiveChartSvg({ data }: { data: LiveChart }) {
+function SmallBtn({ children, onClick, disabled, active }: {
+  children: React.ReactNode; onClick: () => void; disabled?: boolean; active?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        fontFamily: "'DM Mono', monospace",
+        display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5,
+        padding: "5px 11px", borderRadius: 999, cursor: disabled ? "default" : "pointer",
+        border: `1px solid ${active ? "var(--accent)" : "var(--border-strong)"}`,
+        background: active ? "var(--accent-dim, transparent)" : "transparent",
+        color: active ? "var(--accent)" : "var(--text-1)",
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function LiveChartSvg({ data, alert, arming, onPick }: {
+  data: LiveChart; alert: number | null; arming: boolean; onPick: (price: number) => void;
+}) {
   const W = 900, PH = 300, VH = 90, GAP = 14, PAD = 44;
   const H = PH + GAP + VH;
   const { bars, rangeLo, rangeHi, rangeStartIdx, breakoutIdx, springIdx, upthrustIdx } = data;
@@ -147,6 +254,7 @@ function LiveChartSvg({ data }: { data: LiveChart }) {
   const digits = rangeHi < 10 ? 4 : 2;
 
   const [hover, setHover] = useState<number | null>(null);
+  const [ghost, setGhost] = useState<number | null>(null); // level under the cursor while arming
   const toIndex = (e: React.PointerEvent<SVGSVGElement>): number | null => {
     const rect = e.currentTarget.getBoundingClientRect();
     const xv = ((e.clientX - rect.left) / rect.width) * W;
@@ -155,14 +263,39 @@ function LiveChartSvg({ data }: { data: LiveChart }) {
   };
   const hb = hover != null ? bars[hover] : null;
 
+  // Inverse of y(): screen position back to a price, with a 7px magnet on the
+  // two levels that actually matter in a range so "the top of the box" is one
+  // click rather than a pixel-hunt.
+  const toPrice = (e: React.PointerEvent<SVGSVGElement>): number | null => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const yv = ((e.clientY - rect.top) / rect.height) * H;
+    if (yv < 4 || yv > PH + 4) return null; // price pane only, not the volume strip
+    const raw = pMin + (1 - (yv - 8) / (PH - 16)) * pSpan;
+    for (const edge of [rangeHi, rangeLo]) {
+      if (Math.abs(y(edge) - yv) <= 7) return edge;
+    }
+    const step = pSpan / 4000;
+    return Math.round(raw / step) * step;
+  };
+
   return (
     <div className="card" style={{ padding: 10, position: "relative" }}>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         style={{ width: "100%", display: "block", touchAction: "none", cursor: "crosshair" }}
-        onPointerMove={(e) => setHover(toIndex(e))}
-        onPointerDown={(e) => setHover(toIndex(e))}
-        onPointerLeave={() => setHover(null)}
+        onPointerMove={(e) => {
+          setHover(toIndex(e));
+          if (arming) setGhost(toPrice(e));
+        }}
+        onPointerDown={(e) => {
+          if (arming) {
+            const p = toPrice(e);
+            if (p != null && p > 0) onPick(p);
+            return;
+          }
+          setHover(toIndex(e));
+        }}
+        onPointerLeave={() => { setHover(null); setGhost(null); }}
       >
         {[rangeHi, rangeLo].map((p, i) => (
           <text key={i} x={4} y={y(p) + 3} fontSize={9} fill="var(--text-3)" fontFamily="'DM Mono', monospace">
@@ -192,6 +325,24 @@ function LiveChartSvg({ data }: { data: LiveChart }) {
         )}
         {breakoutIdx != null && (
           <ChartMarker x={x(breakoutIdx)} y={y(bars[breakoutIdx].h) - 6} label="B" title="breakout" />
+        )}
+        {/* Armed alert level — drawn across the whole price pane so it reads as
+            a standing instruction, not a marker tied to one bar. */}
+        {alert != null && alert >= pMin && alert <= pMax && (
+          <g pointerEvents="none">
+            <line x1={PAD - 6} y1={y(alert)} x2={W - 6} y2={y(alert)} stroke="var(--accent)" strokeWidth={1.1} strokeDasharray="6 4" opacity={0.9} />
+            <text x={W - 8} y={y(alert) - 4} fontSize={9} fill="var(--accent)" textAnchor="end" fontFamily="'DM Mono', monospace">
+              alert {alert.toFixed(digits)}
+            </text>
+          </g>
+        )}
+        {arming && ghost != null && (
+          <g pointerEvents="none">
+            <line x1={PAD - 6} y1={y(ghost)} x2={W - 6} y2={y(ghost)} stroke="var(--accent)" strokeWidth={0.9} opacity={0.45} />
+            <text x={W - 8} y={y(ghost) - 4} fontSize={9} fill="var(--accent)" textAnchor="end" fontFamily="'DM Mono', monospace" opacity={0.8}>
+              {ghost.toFixed(digits)}
+            </text>
+          </g>
         )}
         {hover != null && hb && (
           <g pointerEvents="none">
