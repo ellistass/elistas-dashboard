@@ -75,8 +75,8 @@ export default function WyckoffPage() {
   const [search, setSearch] = useState("");
   const [period, setPeriod] = useState("all"); // breakout-date window
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { spinner?: boolean }) => {
+    if (opts?.spinner) setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/wyckoff", { cache: "no-store" });
@@ -92,10 +92,10 @@ export default function WyckoffPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-    setLoading(false);
+    if (opts?.spinner) setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load({ spinner: true }); }, [load]);
 
   async function runScanNow() {
     if (scanning) return;
@@ -160,6 +160,7 @@ export default function WyckoffPage() {
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
           <button
+            type="button"
             onClick={runScanNow}
             disabled={scanning}
             style={{
@@ -266,7 +267,7 @@ export default function WyckoffPage() {
                   </select>
                   <div className="seg">
                     {REVIEW_FILTERS.map((f) => (
-                      <button key={f} className={reviewFilter === f ? "on" : ""} onClick={() => setReviewFilter(f)}>
+                      <button key={f} type="button" className={reviewFilter === f ? "on" : ""} onClick={() => setReviewFilter(f)}>
                         {(f === "learnable" ? "Learnable" : f === "failures" ? "Failures" : f === "successes" ? "Successes" : "Everything") +
                           ` ${tabCounts[f]}`}
                       </button>
@@ -301,7 +302,8 @@ export default function WyckoffPage() {
       {chartId && (
         <LiveChartDrawer
           id={chartId}
-          onClose={() => { setChartId(null); load(); }}
+          onClose={() => setChartId(null)}
+          onChanged={load}
         />
       )}
     </div>
@@ -473,6 +475,7 @@ function ResolvedTable({ rows, onReview }: { rows: ResolvedRow[]; onReview: (id:
               <td style={{ ...td, color: "var(--text-3)" }}>{r.loggedBlind ? "✓" : "seed"}</td>
               <td style={{ padding: "8px 13px" }}>
                 <button
+                  type="button"
                   onClick={() => onReview(r.id)}
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px",

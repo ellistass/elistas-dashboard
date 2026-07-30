@@ -95,7 +95,7 @@ export default function ReviewDrawer({ id, onClose }: { id: string; onClose: () 
               broke out {data.breakoutDate} · resolved {data.outcome.toUpperCase()}
             </span>
           )}
-          <button onClick={onClose} aria-label="Close" style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-2)", cursor: "pointer", display: "flex" }}>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-2)", cursor: "pointer", display: "flex" }}>
             <X size={18} strokeWidth={2} />
           </button>
         </div>
@@ -119,13 +119,13 @@ export default function ReviewDrawer({ id, onClose }: { id: string; onClose: () 
 
             {/* Controls */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 16px", flexWrap: "wrap" }}>
-              <button onClick={step} style={btnStyle(true)}>
+              <button type="button" onClick={step} style={btnStyle(true)}>
                 <ChevronRight size={13} strokeWidth={2} /> Step
               </button>
-              <button onClick={() => setVisible(data.bars.length)} style={btnStyle(false)}>
+              <button type="button" onClick={() => setVisible(data.bars.length)} style={btnStyle(false)}>
                 <FastForward size={13} strokeWidth={2} /> Reveal all
               </button>
-              <button onClick={() => setVisible(data.rangeStartIdx)} style={btnStyle(false)}>
+              <button type="button" onClick={() => setVisible(data.rangeStartIdx)} style={btnStyle(false)}>
                 <RotateCcw size={13} strokeWidth={2} /> Restart
               </button>
               <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>

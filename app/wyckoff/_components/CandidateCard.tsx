@@ -168,6 +168,7 @@ export default function CandidateCard({
           </span>
         )}
         <button
+          type="button"
           onClick={() => onChart(row.id)}
           title="Read the chart here (daily bars + volume) — and click a price to set an alert level"
           style={{
@@ -251,6 +252,7 @@ export default function CandidateCard({
           onClick={() => saveWatch({ watch: row.watch === "later" ? null : "later" })}
         />
         <button
+          type="button"
           onClick={() => setNoteOpen((v) => !v)}
           title={row.watchNote ? row.watchNote : "Note to self — why does this one matter?"
           }
@@ -278,6 +280,7 @@ export default function CandidateCard({
             {px(row.alertPrice, row.rangeHi)}
             {hit && ` · hit ${day(row.alertHitDate)}`}
             <button
+              type="button"
               onClick={() => saveWatch({ alertPrice: null })}
               aria-label="Clear alert"
               style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "inherit", display: "flex" }}
@@ -287,6 +290,7 @@ export default function CandidateCard({
           </span>
         ) : (
           <button
+            type="button"
             onClick={() => onChart(row.id)}
             title="Open the chart and click a price to set an alert level"
             style={{
@@ -313,6 +317,7 @@ export default function CandidateCard({
             style={{ ...inputStyle, width: "auto", flex: 1 }}
           />
           <button
+            type="button"
             onClick={() => { saveWatch({ note }); setNoteOpen(false); }}
             style={{
               padding: "7px 12px", borderRadius: 8, border: "1px solid var(--border-strong)",
@@ -374,7 +379,7 @@ export default function CandidateCard({
           <>
             <div className="seg" style={{ display: "flex", marginBottom: 8 }}>
               {(["accum", "distrib", "pass"] as const).map((v) => (
-                <button key={v} className={verdict === v ? "on" : ""} style={{ flex: 1 }} onClick={() => setVerdict(v)}>
+                <button key={v} type="button" className={verdict === v ? "on" : ""} style={{ flex: 1 }} onClick={() => setVerdict(v)}>
                   {verdictLabel(v)}
                 </button>
               ))}
@@ -383,6 +388,7 @@ export default function CandidateCard({
               <input value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="entry" inputMode="decimal" style={inputStyle} />
               <input value={stop} onChange={(e) => setStop(e.target.value)} placeholder="stop" inputMode="decimal" style={inputStyle} />
               <button
+                type="button"
                 onClick={lockRead}
                 disabled={!verdict || busy}
                 style={{
@@ -413,6 +419,7 @@ function TriageButton({ active, busy, icon, label, title, onClick }: {
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={busy}
       title={title}

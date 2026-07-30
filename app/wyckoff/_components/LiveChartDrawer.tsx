@@ -52,7 +52,15 @@ const fmtVol = (v: number) =>
 // of truth (lib/wyckoff/basket) for feed symbol, CFD/spot, and inversion.
 import { instrumentInfo, tradingViewSymbol } from "@/lib/wyckoff/basket";
 
-export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: () => void }) {
+export default function LiveChartDrawer({
+  id,
+  onClose,
+  onChanged,
+}: {
+  id: string;
+  onClose: () => void;
+  onChanged?: () => void;
+}) {
   const [data, setData] = useState<LiveChart | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [alert, setAlert] = useState<number | null>(null);
@@ -74,6 +82,7 @@ export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: 
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `failed (${res.status})`);
       setAlert(price);
+      onChanged?.();
     } catch (e) {
       setAlertErr(e instanceof Error ? e.message : String(e));
     }
@@ -121,7 +130,7 @@ export default function LiveChartDrawer({ id, onClose }: { id: string; onClose: 
               {data.status === "open" ? "OPEN — decision live" : `broke out ${data.breakoutDate}`}
             </span>
           )}
-          <button onClick={onClose} aria-label="Close" style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-2)", cursor: "pointer", display: "flex" }}>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-2)", cursor: "pointer", display: "flex" }}>
             <X size={18} strokeWidth={2} />
           </button>
         </div>
@@ -217,6 +226,7 @@ function SmallBtn({ children, onClick, disabled, active }: {
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       style={{
