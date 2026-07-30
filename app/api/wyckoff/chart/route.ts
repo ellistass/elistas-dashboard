@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
       id: true, instrument: true, rangeLo: true, rangeHi: true, contextPct: true,
       terminalTest: true, stoppingAction: true, barsInRange: true, status: true,
       rangeStartDate: true, breakoutDate: true, outcome: true,
-      traderVerdict: true, traderReadAt: true,
+      traderVerdict: true, traderReadAt: true, fresh: true, loggedBlind: true,
       watch: true, watchNote: true, alertPrice: true, alertHitAt: true,
     },
   });
@@ -67,6 +67,11 @@ export async function GET(req: NextRequest) {
       { status: 409 },
     );
   }
+  const brokenCutoff = new Date(Date.now() - 7 * 86_400_000);
+  const readable =
+    row.loggedBlind !== false &&
+    ((row.status === "open" && row.fresh === true) ||
+      (row.status === "broken" && row.breakoutDate != null && row.breakoutDate >= brokenCutoff));
 
   return NextResponse.json({
     ok: true,
@@ -80,6 +85,8 @@ export async function GET(req: NextRequest) {
     status: row.status,
     breakoutDate: row.breakoutDate ? row.breakoutDate.toISOString().slice(0, 10) : null,
     traderVerdict: row.traderVerdict,
+    traderReadAt: row.traderReadAt ? row.traderReadAt.toISOString() : null,
+    readable,
     // Triage state travels with the chart so the alert level can be drawn,
     // moved and cleared without leaving the drawer.
     id: row.id,

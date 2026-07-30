@@ -16,7 +16,7 @@
 // internals belong to ReviewDrawer, which the API restricts to resolved rows.
 
 import { useEffect, useState } from "react";
-import { X, AlertTriangle, ExternalLink, Bell, BellRing, Crosshair } from "lucide-react";
+import { X, AlertTriangle, ExternalLink, Bell, BellRing, Crosshair, Lock, ShieldCheck } from "lucide-react";
 
 interface Bar { o: number; h: number; l: number; c: number; v: number; date: string }
 
@@ -37,6 +37,8 @@ interface LiveChart {
   status: "open" | "broken";
   breakoutDate: string | null;
   traderVerdict: string | null;
+  traderReadAt: string | null;
+  readable: boolean;
   bars: Bar[];
   rangeStartIdx: number;
   breakoutIdx: number | null;
@@ -47,6 +49,9 @@ interface LiveChart {
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const fmtVol = (v: number) =>
   v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : v.toFixed(0);
+const verdictLabel = (v: string) => (v === "accum" ? "ACCUM" : v === "distrib" ? "DISTRIB" : "PASS");
+const verdictColor = (v: string) => v === "accum" ? "var(--green)" : v === "distrib" ? "var(--red)" : "var(--text-3)";
+const day = (iso: string | null | undefined) => (iso ? iso.slice(0, 10) : "—");
 
 // TradingView + execute mapping come from the instrument config — one source
 // of truth (lib/wyckoff/basket) for feed symbol, CFD/spot, and inversion.
@@ -67,6 +72,9 @@ export default function LiveChartDrawer({
   const [arming, setArming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [alertErr, setAlertErr] = useState<string | null>(null);
+  const [verdict, setVerdict] = useState<"accum" | "distrib" | "pass" | null>(null);
+  const [readBusy, setReadBusy] = useState(false);
+  const [readErr, setReadErr] = useState<string | null>(null);
 
   // Writes the level and arms it. Only bars AFTER today can trigger it, so
   // setting a level at a price already trading today won't ping tonight.
@@ -88,6 +96,27 @@ export default function LiveChartDrawer({
     }
     setSaving(false);
     setArming(false);
+  }
+
+  async function lockRead() {
+    if (!verdict || !data || readBusy) return;
+    setReadBusy(true);
+    setReadErr(null);
+    try {
+      const res = await fetch("/api/wyckoff/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, verdict }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? `failed (${res.status})`);
+      const readAt = j.locked?.readAt ?? new Date().toISOString();
+      setData({ ...data, traderVerdict: verdict, traderReadAt: readAt, readable: false });
+      onChanged?.();
+    } catch (e) {
+      setReadErr(e instanceof Error ? e.message : String(e));
+    }
+    setReadBusy(false);
   }
 
   useEffect(() => {
@@ -150,6 +179,15 @@ export default function LiveChartDrawer({
 
         {data && (
           <>
+            <ReadControl
+              data={data}
+              verdict={verdict}
+              busy={readBusy}
+              error={readErr}
+              onVerdict={setVerdict}
+              onLock={lockRead}
+            />
+
             {/* ── Alert level control ── */}
             <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", marginBottom: 10 }}>
               {alert != null ? (
@@ -209,7 +247,7 @@ export default function LiveChartDrawer({
                 <ExternalLink size={11} strokeWidth={2} style={{ marginLeft: 5, verticalAlign: "-1px", color: "var(--text-3)" }} />
               </span>
               <span style={{ ...mono, fontSize: 10, color: "var(--text-3)", marginLeft: "auto" }}>
-                daily bars · data through {data.bars[data.bars.length - 1]?.date} · lock your read on the card
+                daily bars · data through {data.bars[data.bars.length - 1]?.date}
               </span>
             </div>
           </>
@@ -220,6 +258,74 @@ export default function LiveChartDrawer({
 }
 
 /* ── Chart: full reveal, crosshair with OHLC + volume. No engine anything. ── */
+
+function ReadControl({
+  data,
+  verdict,
+  busy,
+  error,
+  onVerdict,
+  onLock,
+}: {
+  data: LiveChart;
+  verdict: "accum" | "distrib" | "pass" | null;
+  busy: boolean;
+  error: string | null;
+  onVerdict: (v: "accum" | "distrib" | "pass") => void;
+  onLock: () => void;
+}) {
+  if (data.traderVerdict) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", marginBottom: 10 }}>
+        <span style={{
+          ...mono, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11,
+          padding: "5px 11px", borderRadius: 999, border: "1px solid var(--border-strong)",
+          color: verdictColor(data.traderVerdict),
+        }}>
+          <ShieldCheck size={12} strokeWidth={2} />
+          {verdictLabel(data.traderVerdict)} · locked {day(data.traderReadAt)}
+        </span>
+      </div>
+    );
+  }
+
+  if (!data.readable || data.resolved) {
+    return (
+      <p style={{ ...mono, fontSize: 10.5, color: "var(--text-3)", margin: "0 0 10px", lineHeight: 1.5 }}>
+        decision point passed — watching only. A read logged now would not be blind.
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", marginBottom: 10 }}>
+      <div className="seg" style={{ display: "inline-flex" }}>
+        {(["accum", "distrib", "pass"] as const).map((v) => (
+          <button key={v} type="button" className={verdict === v ? "on" : ""} onClick={() => onVerdict(v)}>
+            {verdictLabel(v)}
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={onLock}
+        disabled={!verdict || busy}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 13px",
+          borderRadius: 8, border: "none", background: verdict ? "var(--accent)" : "var(--border-subtle)",
+          color: verdict ? "var(--accent-on)" : "var(--text-3)", fontSize: 12, fontWeight: 600,
+          cursor: verdict && !busy ? "pointer" : "default", opacity: busy ? 0.6 : 1,
+          fontFamily: "'Sora', sans-serif",
+        }}
+      >
+        <Lock size={12} strokeWidth={2} />
+        {busy ? "Locking..." : "Lock read"}
+      </button>
+      <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>one shot · blind · immutable</span>
+      {error && <span style={{ ...mono, fontSize: 10.5, color: "var(--red)" }}>{error}</span>}
+    </div>
+  );
+}
 
 function SmallBtn({ children, onClick, disabled, active }: {
   children: React.ReactNode; onClick: () => void; disabled?: boolean; active?: boolean;
@@ -264,7 +370,15 @@ function LiveChartSvg({ data, alert, arming, onPick }: {
   const digits = rangeHi < 10 ? 4 : 2;
 
   const [hover, setHover] = useState<number | null>(null);
+  const [hoverPos, setHoverPos] = useState<{ xPct: number; yPct: number } | null>(null);
   const [ghost, setGhost] = useState<number | null>(null); // level under the cursor while arming
+  const toPoint = (e: React.PointerEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return {
+      xPct: Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100)),
+      yPct: Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100)),
+    };
+  };
   const toIndex = (e: React.PointerEvent<SVGSVGElement>): number | null => {
     const rect = e.currentTarget.getBoundingClientRect();
     const xv = ((e.clientX - rect.left) / rect.width) * W;
@@ -295,9 +409,11 @@ function LiveChartSvg({ data, alert, arming, onPick }: {
         style={{ width: "100%", display: "block", touchAction: "none", cursor: "crosshair" }}
         onPointerMove={(e) => {
           setHover(toIndex(e));
+          setHoverPos(toPoint(e));
           if (arming) setGhost(toPrice(e));
         }}
         onPointerDown={(e) => {
+          setHoverPos(toPoint(e));
           if (arming) {
             const p = toPrice(e);
             if (p != null && p > 0) onPick(p);
@@ -305,7 +421,7 @@ function LiveChartSvg({ data, alert, arming, onPick }: {
           }
           setHover(toIndex(e));
         }}
-        onPointerLeave={() => { setHover(null); setGhost(null); }}
+        onPointerLeave={() => { setHover(null); setHoverPos(null); setGhost(null); }}
       >
         {[rangeHi, rangeLo].map((p, i) => (
           <text key={i} x={4} y={y(p) + 3} fontSize={9} fill="var(--text-3)" fontFamily="'DM Mono', monospace">
@@ -367,13 +483,13 @@ function LiveChartSvg({ data, alert, arming, onPick }: {
         )}
       </svg>
 
-      {hover != null && hb && (
+      {hover != null && hb && hoverPos && (
         <div
           style={{
-            position: "absolute", top: 14, pointerEvents: "none", zIndex: 5,
-            ...(x(hover) / W < 0.58
-              ? { left: `calc(${(x(hover) / W) * 100}% + 14px)` }
-              : { right: `calc(${100 - (x(hover) / W) * 100}% + 14px)` }),
+            position: "absolute", pointerEvents: "none", zIndex: 5,
+            left: `${hoverPos.xPct}%`,
+            top: `${hoverPos.yPct}%`,
+            transform: `translate(${hoverPos.xPct < 58 ? "14px" : "calc(-100% - 14px)"}, ${hoverPos.yPct < 58 ? "14px" : "calc(-100% - 14px)"})`,
             background: "var(--bg-elevated, var(--bg-card-raised, #14161d))",
             border: "1px solid var(--border-strong)", borderRadius: 9,
             padding: "8px 11px", boxShadow: "0 6px 22px rgba(0,0,0,0.45)",
