@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                              ElistasJournal.mq4 |
 //|                              Auto-log MT4 trades to the dashboard|
-//|                                                          v2.00  |
+//|                                                          v2.10  |
 //|  WHY v2                                                          |
 //|  ------                                                          |
 //|  v1 hung the terminal: OnInit swept the whole account history    |
@@ -30,6 +30,18 @@
 //|    balance updates the moment a trade settles.                   |
 //|  • Periodic "balance" heartbeat keeps equity live between trades.|
 //|                                                                  |
+//|  NEW in v2.10 — closes could go missing, permanently             |
+//|  ------------                                                    |
+//|  • A ticket that left MODE_TRADES but had not landed in          |
+//|    MODE_HISTORY yet was dropped from tracking anyway, so its      |
+//|    close event was never built and never retried. It is now kept  |
+//|    and retried for CloseRetryTicks ticks before giving up.        |
+//|  • Reconciliation was one-directional: OnInit enqueued opens the  |
+//|    server was missing, but never closes. A trade the server still |
+//|    thinks is open while MT4 has it in history is now detected at  |
+//|    OnInit and its close re-sent — so reattaching the EA repairs   |
+//|    anything that slipped through.                                 |
+//|                                                                  |
 //|  SETUP (unchanged)                                               |
 //|  -----                                                           |
 //|  • Tools → Options → Expert Advisors → Allow WebRequest for:     |
@@ -51,12 +63,16 @@ input bool    ForceFullResweep   = false;   // true once to re-enqueue everythin
 input int     PollMillis         = 2000;    // tick frequency
 input int     BatchSize          = 25;      // max events per POST
 input int     BalanceHeartbeatSec = 300;    // push balance/equity every N seconds (0 = off)
+input int     CloseRetryTicks    = 5;       // ticks to keep retrying a close the broker hasn't filed yet
 input bool    VerboseLog         = false;
 
 //--- Open-position snapshot (parallel arrays)
 int      knownOpenTickets[];
 double   knownOpenSL[];
 double   knownOpenTP[];
+// Per-ticket count of ticks where the order had left the open book but was not
+// selectable from history yet. Bounded retry — see DetectOpensAndCloses.
+int      knownCloseMiss[];
 
 //--- Event queue — each entry is one complete event JSON object (no brackets)
 string   eventQueue[];
@@ -132,7 +148,9 @@ int OnInit()
       Print("[ElistasJournal] syncMode=realtime-only — history catchup skipped.");
 
    // Positions open in MT4 that the server doesn't know about → enqueue opens.
+   // Trades the server still thinks are open that MT4 has closed → enqueue closes.
    if(serverOk) ReconcileOpensAgainstServer(openServer);
+   if(serverOk) ReconcileClosesAgainstServer(openServer);
 
    // First balance heartbeat so the dashboard shows live equity immediately.
    EnqueueBalanceEvent();
@@ -186,6 +204,7 @@ void DetectOpensAndCloses()
       AppendInt(knownOpenTickets, t);
       AppendDouble(knownOpenSL, curSL[c]);
       AppendDouble(knownOpenTP, curTP[c]);
+      AppendInt(knownCloseMiss, 0);
       if(SendScreenshots) EnqueueScreenshot(t, "entry");
    }
 
@@ -194,14 +213,36 @@ void DetectOpensAndCloses()
    {
       int t = knownOpenTickets[k];
       if(ContainsInt(curTickets, t)) continue;
+
+      // The order has left the open book. Usually it is already selectable from
+      // history and we build the close immediately. But on the tick where the
+      // broker has not filed it yet, OrderSelect fails — and every version
+      // before 2.10 removed the ticket from tracking regardless, so that close
+      // was never enqueued and never retried. The trade then sat "Open" on the
+      // dashboard forever. Keep it and try again next tick instead.
       if(OrderSelect(t, SELECT_BY_TICKET, MODE_HISTORY))
       {
          EnqueueCloseEvent(t, "realtime");
          if(SendScreenshots) EnqueueScreenshot(t, "close");
       }
+      else
+      {
+         knownCloseMiss[k] = knownCloseMiss[k] + 1;
+         if(knownCloseMiss[k] < CloseRetryTicks)
+         {
+            if(VerboseLog)
+               Print("[ElistasJournal] #", t, " left the book but is not in history yet — retry ",
+                     knownCloseMiss[k], "/", CloseRetryTicks);
+            continue;   // still tracked; next tick tries again
+         }
+         Print("[ElistasJournal] WARNING: #", t, " never appeared in history after ",
+               CloseRetryTicks, " ticks — dropping it. Reattach the EA and OnInit ",
+               "reconciliation will recover the close.");
+      }
       RemoveAt(knownOpenTickets, k);
       RemoveAtDouble(knownOpenSL, k);
       RemoveAtDouble(knownOpenTP, k);
+      RemoveAt(knownCloseMiss, k);
    }
 }
 
@@ -321,6 +362,33 @@ void ReconcileOpensAgainstServer(const int &openTicketsOnServer[])
       queued++;
    }
    if(queued > 0) Print("[ElistasJournal] Reconcile — queued ", queued, " open events the server was missing.");
+}
+
+// The other direction, and the one that was missing: the server says these
+// tickets are still Open, but MT4 does not have them in the open book. If the
+// terminal has them in history they closed while we were not watching (EA off,
+// terminal down, a post that never landed, or the pre-2.10 drop above) — and
+// nothing else in the system would ever notice. Re-send the close.
+//
+// Runs once per OnInit, so reattaching the EA is the manual repair button.
+void ReconcileClosesAgainstServer(const int &openTicketsOnServer[])
+{
+   int queued = 0;
+   int total = ArraySize(openTicketsOnServer);
+   for(int i = 0; i < total; i++)
+   {
+      int ticket = openTicketsOnServer[i];
+      if(ContainsInt(knownOpenTickets, ticket)) continue;          // genuinely still open
+      if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_HISTORY)) continue;  // unknown to this terminal
+      int type = OrderType();
+      if(type != OP_BUY && type != OP_SELL) continue;
+      if(OrderCloseTime() == 0) continue;                          // selected but not actually closed
+      EnqueueCloseEvent(ticket, "reconcile");
+      queued++;
+   }
+   if(queued > 0)
+      Print("[ElistasJournal] Reconcile — queued ", queued,
+            " CLOSE events for trades the server still had open.");
 }
 
 //+------------------------------------------------------------------+
@@ -640,6 +708,7 @@ void RebuildOpenSnapshot()
    ArrayResize(knownOpenTickets, 0);
    ArrayResize(knownOpenSL, 0);
    ArrayResize(knownOpenTP, 0);
+   ArrayResize(knownCloseMiss, 0);
    int total = OrdersTotal();
    for(int i = 0; i < total; i++)
    {
@@ -649,6 +718,7 @@ void RebuildOpenSnapshot()
       AppendInt(knownOpenTickets, OrderTicket());
       AppendDouble(knownOpenSL, OrderStopLoss());
       AppendDouble(knownOpenTP, OrderTakeProfit());
+      AppendInt(knownCloseMiss, 0);
    }
 }
 

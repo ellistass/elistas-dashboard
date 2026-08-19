@@ -262,7 +262,12 @@ export async function POST(req: NextRequest) {
         // If the trader moved SL to BE or trailed it, `existing.slPrice` has changed —
         // using it here would produce nonsense R values (BE-moved trades hit infinity/0).
         // Fall back to `slPrice` only for legacy rows logged before initialSlPrice existed.
-        const slForR = existing.initialSlPrice ?? existing.slPrice
+        //
+        // `||`, NOT `??`: a position opened with no stop arrives with slPrice 0,
+        // which freezes initialSlPrice at 0. `??` only falls back on null, so it
+        // would keep that zero, R would be null, and the trade would never close
+        // (see the outcome cascade below).
+        const slForR = existing.initialSlPrice || existing.slPrice
         const r =
           existing.entryPrice && slForR && e.closePrice && existing.direction
             ? resultR({
@@ -273,8 +278,40 @@ export async function POST(req: NextRequest) {
                 symbol: existing.instrument || existing.pair,
               })
             : null
-        const outcome =
-          r === null ? 'Open' : r >= 0.1 ? 'Win' : r <= -0.1 ? 'Loss' : 'BE'
+
+        // A close event means the position IS closed — outcome may never fall
+        // back to 'Open'. Every consumer in this app (dashboard, active trades,
+        // alerts, news-warning cron, scoring) filters on `outcome === 'Open'`
+        // and NONE of them look at closeTimeUtc, so a row parked at 'Open' here
+        // is stuck open forever while carrying a close price. That was the bug.
+        //
+        // R is the preferred classifier. When it can't be computed — no stop at
+        // fill, unfilled placeholder (entryPrice 0), or entry === SL — fall
+        // through to realised money, then to raw price direction, then BE.
+        const netCcy =
+          (Number.isFinite(e.profitCcy) ? e.profitCcy : 0) +
+          (Number.isFinite(e.commission) ? e.commission : 0) +
+          (Number.isFinite(e.swap) ? e.swap : 0)
+        const priceDelta =
+          existing.entryPrice && e.closePrice && existing.direction
+            ? existing.direction === 'Long'
+              ? e.closePrice - existing.entryPrice
+              : existing.entryPrice - e.closePrice
+            : 0
+        let classifier: 'R' | 'money' | 'price' | 'none' = 'R'
+        let outcome: string
+        if (r !== null) {
+          outcome = r >= 0.1 ? 'Win' : r <= -0.1 ? 'Loss' : 'BE'
+        } else if (Number.isFinite(e.profitCcy) && Math.abs(netCcy) >= 0.01) {
+          classifier = 'money'
+          outcome = netCcy > 0 ? 'Win' : 'Loss'
+        } else if (priceDelta !== 0) {
+          classifier = 'price'
+          outcome = priceDelta > 0 ? 'Win' : 'Loss'
+        } else {
+          classifier = 'none'
+          outcome = 'BE'
+        }
 
         await (db.trade.update as any)({
           where: { id: existing.id },
@@ -288,7 +325,17 @@ export async function POST(req: NextRequest) {
             outcome,
           },
         })
-        results.push({ ticket: e.ticket, ok: true, tradeId: existing.id, action: 'close', outcome, resultR: r })
+        results.push({
+          ticket: e.ticket,
+          ok: true,
+          tradeId: existing.id,
+          action: 'close',
+          outcome,
+          resultR: r,
+          // Surfaced so a run of `classifier: 'money'` is visible in the EA log —
+          // it means those trades were opened without a stop and carry no R.
+          classifier,
+        })
       } else if (e.event === 'modify') {
         const existing = await (db.trade.findFirst as any)({
           where: { accountId: account.id, ticket: e.ticket },
