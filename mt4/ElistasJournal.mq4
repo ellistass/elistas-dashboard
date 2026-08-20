@@ -64,6 +64,7 @@ input int     PollMillis         = 2000;    // tick frequency
 input int     BatchSize          = 25;      // max events per POST
 input int     BalanceHeartbeatSec = 300;    // push balance/equity every N seconds (0 = off)
 input int     CloseRetryTicks    = 5;       // ticks to keep retrying a close the broker hasn't filed yet
+input int     MaxReconcileCloses = 200;     // cap on close events OnInit reconciliation may enqueue
 input bool    VerboseLog         = false;
 
 //--- Open-position snapshot (parallel arrays)
@@ -89,6 +90,13 @@ datetime lastBalancePost = 0;
 double   lastPostedEquity = -1;
 string   accountBroker   = "";
 
+//--- Single-instance lock. Every instance watches the WHOLE account, so a
+//--- second copy on another chart duplicates every event — and if it carries a
+//--- stale or default ApiKey it fills the Experts log with 401s that look like
+//--- the account itself is broken. One instance per account, enforced here.
+bool     haveLock = false;
+string   lockKey  = "";
+
 //+------------------------------------------------------------------+
 //| Init — ONE http call (state fetch), everything else enqueued     |
 //+------------------------------------------------------------------+
@@ -96,6 +104,34 @@ int OnInit()
 {
    accountBroker = AccountCompany();
    Print("[ElistasJournal v2] Starting for MT4 account ", AccountNumber(), " (", accountBroker, ")");
+
+   // Guard 1 — an unconfigured copy must not sit there retrying 401s forever.
+   if(StringLen(ApiKey) < 16 || ApiKey == "REPLACE_WITH_ACCOUNT_API_KEY")
+   {
+      Print("[ElistasJournal] ApiKey is not set on this chart (length ", StringLen(ApiKey),
+            ") — this instance is DORMANT. Paste the account key from ",
+            "Dashboard > Accounts > API key, or remove the EA from this chart.");
+      return(INIT_SUCCEEDED);   // no timer → never posts, never logs 401s
+   }
+
+   // Guard 2 — one instance per account, per terminal. The lock stores the
+   // owning ChartID; a stale lock from a crashed terminal is detected because
+   // ChartSymbol() returns "" for a chart that no longer exists.
+   lockKey = "ElistasJournal_Lock_" + IntegerToString(AccountNumber());
+   if(GlobalVariableCheck(lockKey))
+   {
+      long owner = (long)GlobalVariableGet(lockKey);
+      if(owner != ChartID() && StringLen(ChartSymbol(owner)) > 0)
+      {
+         Print("[ElistasJournal] Already running for account ", AccountNumber(),
+               " on the ", ChartSymbol(owner), " chart — this instance is DORMANT. ",
+               "One instance watches the whole account; extra copies only duplicate ",
+               "events. Remove the EA from this chart.");
+         return(INIT_SUCCEEDED);
+      }
+   }
+   GlobalVariableSet(lockKey, (double)ChartID());
+   haveLock = true;
 
    RebuildOpenSnapshot();
 
@@ -159,7 +195,14 @@ int OnInit()
    return(INIT_SUCCEEDED);
 }
 
-void OnDeinit(const int reason) { EventKillTimer(); }
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+   // Release the lock only if this instance owns it, so removing a dormant
+   // copy can't free the lock out from under the instance that is working.
+   if(haveLock && StringLen(lockKey) > 0) GlobalVariableDel(lockKey);
+   haveLock = false;
+}
 
 //+------------------------------------------------------------------+
 //| Timer tick: detect (cheap, no HTTP) → flush (bounded HTTP)       |
@@ -371,9 +414,21 @@ void ReconcileOpensAgainstServer(const int &openTicketsOnServer[])
 // nothing else in the system would ever notice. Re-send the close.
 //
 // Runs once per OnInit, so reattaching the EA is the manual repair button.
+//
+// Every operation here is LOCAL (OrderSelect against the terminal's own pools)
+// and the loop only ENQUEUES — no WebRequest, in keeping with the v2 rule that
+// OnInit makes exactly one HTTP call. MaxReconcileCloses bounds the work so a
+// server holding hundreds of stale opens can't turn startup into a long loop;
+// the remainder is picked up on the next attach.
+//
+// NOTE: OrderSelect can only find tickets the terminal has actually loaded. If
+// Account History is set to a short window, old closes are invisible here —
+// right-click the Account History tab and choose All History before relying on
+// this to repair anything older than that window.
 void ReconcileClosesAgainstServer(const int &openTicketsOnServer[])
 {
    int queued = 0;
+   int skippedForCap = 0;
    int total = ArraySize(openTicketsOnServer);
    for(int i = 0; i < total; i++)
    {
@@ -383,12 +438,16 @@ void ReconcileClosesAgainstServer(const int &openTicketsOnServer[])
       int type = OrderType();
       if(type != OP_BUY && type != OP_SELL) continue;
       if(OrderCloseTime() == 0) continue;                          // selected but not actually closed
+      if(queued >= MaxReconcileCloses) { skippedForCap++; continue; }
       EnqueueCloseEvent(ticket, "reconcile");
       queued++;
    }
    if(queued > 0)
       Print("[ElistasJournal] Reconcile — queued ", queued,
             " CLOSE events for trades the server still had open.");
+   if(skippedForCap > 0)
+      Print("[ElistasJournal] Reconcile — ", skippedForCap, " more stale opens left for the ",
+            "next attach (MaxReconcileCloses=", MaxReconcileCloses, ").");
 }
 
 //+------------------------------------------------------------------+
@@ -497,21 +556,44 @@ void FlushEventQueue()
    }
    body = body + "]}";
 
-   int code = PostJson("/api/trades/mt4", body);
+   string response = "";
+   int code = PostJson("/api/trades/mt4", body, response);
    if(code == 200)
    {
       // Drop the sent events off the front
       for(int j = 0; j < n - count; j++) eventQueue[j] = eventQueue[j + count];
       ArrayResize(eventQueue, n - count);
       failStreak = 0;
-      if(VerboseLog || n - count > 0)
-         Print("[ElistasJournal] Flushed ", count, " events, ", (n - count), " still queued.");
+      // ALWAYS log a landed batch. Before 2.10 a flush that emptied the queue
+      // printed nothing at all, so a working sync and a silently broken one
+      // looked identical in the Experts tab.
+      // Count inside the results array ONLY. The API wraps everything in
+      // {"ok":true,"results":[...]}, so scanning the whole body counts that
+      // envelope as an extra success and reports one more than was sent.
+      string results = response;
+      int resAt = StringFind(response, "\"results\"");
+      if(resAt >= 0) results = StringSubstr(response, resAt);
+      int okCount   = CountOccurrences(results, "\"ok\":true");
+      int failCount = CountOccurrences(results, "\"ok\":false");
+      Print("[ElistasJournal] Flushed ", count, " events — server accepted ", okCount,
+            ", rejected ", failCount, ". ", (n - count), " still queued.");
+      // A rejected event is the interesting case: "No open trade with this
+      // ticket" means the close arrived for a trade the server never had.
+      if(failCount > 0)
+         Print("[ElistasJournal] Rejected detail: ", StringSubstr(response, 0, 400));
    }
    else
    {
       failStreak++;
       backoffTicks = (int)MathMin(30, MathPow(2, failStreak));
       Print("[ElistasJournal] Batch POST failed (code=", code, ") — retrying in ", backoffTicks, " ticks. Queue=", n);
+      if(code == 401)
+         Print("[ElistasJournal] 401 means THIS chart's ApiKey input was rejected. ",
+               "Each chart runs its own EA instance with its own ApiKey — fix it here, ",
+               "or remove the EA from this chart. One instance per account is enough: ",
+               "every instance watches the whole account, so extras just duplicate work.");
+      else if(StringLen(response) > 0)
+         Print("[ElistasJournal] Server said: ", StringSubstr(response, 0, 400));
    }
 }
 
@@ -597,7 +679,7 @@ void PostScreenshot(int ticket, string phase)
 //+------------------------------------------------------------------+
 //| HTTP + server-state helpers                                      |
 //+------------------------------------------------------------------+
-int PostJson(string path, string jsonBody)
+int PostJson(string path, string jsonBody, string &response)
 {
    string url     = ApiBase + path;
    string headers = "Authorization: Bearer " + ApiKey + "\r\n"
@@ -605,14 +687,39 @@ int PostJson(string path, string jsonBody)
    uchar  bodyB[]; StringToCharArray(jsonBody, bodyB, 0, StringLen(jsonBody), CP_UTF8);
    char   result[]; string resultHeaders;
 
+   response = "";
    ResetLastError();
    int code = WebRequest("POST", url, headers, 5000, bodyB, result, resultHeaders);
    if(code == -1)
       Print("[ElistasJournal] WebRequest error ", GetLastError(),
             " — add '", ApiBase, "' to Allowed URLs in Options.");
-   else if(VerboseLog)
-      Print("[ElistasJournal] ", path, " status=", code);
+   else
+   {
+      // The per-event results the API returns were being thrown away, which is
+      // why a close that the server rejected looked exactly like one that
+      // worked. Keep the body so the caller can report what actually happened.
+      if(ArraySize(result) > 0)
+         response = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+      if(VerboseLog)
+         Print("[ElistasJournal] ", path, " status=", code);
+   }
    return(code);
+}
+
+// Cheap substring count — enough to tally "ok":true / "ok":false in a response
+// without dragging a JSON parser into the EA.
+int CountOccurrences(string haystack, string needle)
+{
+   int count = 0, from = 0, nlen = StringLen(needle);
+   if(nlen == 0) return(0);
+   while(true)
+   {
+      int at = StringFind(haystack, needle, from);
+      if(at < 0) break;
+      count++;
+      from = at + nlen;
+   }
+   return(count);
 }
 
 bool FetchServerState(int &highestTicket, int &openTickets[], string &syncMode)
@@ -628,6 +735,10 @@ bool FetchServerState(int &highestTicket, int &openTickets[], string &syncMode)
    if(code != 200)
    {
       Print("[ElistasJournal] /state fetch failed — code=", code, " err=", GetLastError());
+      if(code == 401)
+         Print("[ElistasJournal] 401 = this chart's ApiKey is wrong or the account is ",
+               "inactive on the dashboard. Reconciliation is SKIPPED when this fails, so ",
+               "stranded trades will not be repaired until the key is fixed.");
       return(false);
    }
 
