@@ -27,8 +27,58 @@ export type Timeframe = "D" | "W" | "M";
 export const TIMEFRAME_LABEL: Record<Timeframe, string> = {
   D: "daily",
   W: "weekly",
-  M: "monthly",
+  M: "context",
 };
+
+/** What each timeframe is actually FOR here.
+ *
+ *  The scanner detects ranges of 15-90 DAILY bars. That is ~8 weekly bars and
+ *  ~2 monthly bars — so monthly physically cannot render the range as a shape.
+ *  It is kept for the one question it answers well (where does this range sit
+ *  in the multi-year picture) and labelled "context" rather than pretending to
+ *  show structure. */
+export const TIMEFRAME_PURPOSE: Record<Timeframe, string> = {
+  D: "bars as scanned — the range as the engine sees it",
+  W: "the range plus the trend that built it",
+  M: "where this sits in the multi-year picture — too coarse to show the range itself",
+};
+
+/** How many bars belong ON SCREEN per timeframe.
+ *
+ *  Nothing windowed before this: charts rendered every bar the fetch returned,
+ *  so a 5y daily pull meant ~1250 candles in 850px, and rolling that up to
+ *  monthly left 60 bars stretched across the same width with canyons between
+ *  them. Bar count — and therefore spacing — was a side effect of the fetch
+ *  range rather than a decision. */
+export const BARS_IN_VIEW: Record<Timeframe, number> = { D: 180, W: 130, M: 90 };
+
+/** Widest a single bar's slot may get. Without a ceiling, a short series
+ *  inflates each candle to fill the width and the chart reads as a bar chart of
+ *  six things rather than a tape. */
+export const MAX_BAR_PITCH = 16;
+
+/**
+ * The slice to draw: the tail of the series, widened when necessary so the
+ * range and its lead-in stay on screen. A window that cropped the range out
+ * would be worse than no windowing at all.
+ */
+export function viewWindow(
+  total: number,
+  tf: Timeframe,
+  mustIncludeFrom?: number | null,
+): { from: number; to: number } {
+  const want = BARS_IN_VIEW[tf];
+  if (total <= want) return { from: 0, to: total };
+
+  let from = Math.max(0, total - want);
+  if (mustIncludeFrom != null && mustIncludeFrom >= 0) {
+    // Keep a little air before the range start so the context leading into it
+    // is visible rather than clipped flush against the left edge.
+    const withAir = Math.max(0, mustIncludeFrom - Math.round(want * 0.15));
+    from = Math.min(from, withAir);
+  }
+  return { from, to: total };
+}
 
 /** ISO week key (YYYY-Www), Monday-anchored.
  *

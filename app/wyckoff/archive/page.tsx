@@ -19,6 +19,7 @@ import { useWyckoff, type ResolvedRow } from "../_components/WyckoffData";
 import { GradeChip } from "../_components/desk";
 import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "../_components/ui";
 import { summariseLeads } from "@/lib/wyckoff/timing";
+import { isLearnableCase } from "@/lib/wyckoff/learnable";
 import { SUSPECT_VOLUME, instrumentName } from "@/lib/wyckoff/basket";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
@@ -32,11 +33,6 @@ const verdictLabel = (v: string) =>
   v === "accum" ? "ACCUM" : v === "distrib" ? "DISTRIB" : v === "pass" ? "PASS" : "NEUTRAL";
 const verdictHits = (v: string, outcome: string) =>
   v === "accum" ? outcome === "up" : v === "distrib" ? outcome === "down" : outcome === "chop";
-
-const isLearnable = (r: ResolvedRow) =>
-  (r.engineVerdict === "accum" || r.engineVerdict === "distrib") &&
-  (r.outcome === "up" || r.outcome === "down") &&
-  !SUSPECT_VOLUME.has(r.instrument);
 
 const FILTERS = ["learnable", "failures", "successes", "everything"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -84,9 +80,9 @@ export default function ArchivePage() {
 
   const matches = (r: ResolvedRow, f: Filter) =>
     f === "everything" ? true :
-    f === "learnable" ? isLearnable(r) :
-    f === "failures" ? isLearnable(r) && !verdictHits(r.engineVerdict, r.outcome) :
-    isLearnable(r) && verdictHits(r.engineVerdict, r.outcome);
+    f === "learnable" ? isLearnableCase(r) :
+    f === "failures" ? isLearnableCase(r) && !verdictHits(r.engineVerdict, r.outcome) :
+    isLearnableCase(r) && verdictHits(r.engineVerdict, r.outcome);
 
   const counts = Object.fromEntries(
     FILTERS.map((f) => [f, monthRows.filter((r) => matches(r, f)).length]),

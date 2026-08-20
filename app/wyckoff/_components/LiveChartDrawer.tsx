@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from "react";
 import { volumeView, isPlottableTag } from "@/lib/chart/volume";
-import { aggregateBars, indexForDate, TIMEFRAME_LABEL, type Timeframe } from "@/lib/chart/timeframe";
+import { aggregateBars, indexForDate, viewWindow, TIMEFRAME_LABEL, TIMEFRAME_PURPOSE, MAX_BAR_PITCH, type Timeframe } from "@/lib/chart/timeframe";
 import { describePace, type PaceRead } from "@/lib/wyckoff/pace";
 import { X, AlertTriangle, ExternalLink, Bell, BellRing, Crosshair, Lock, ShieldCheck } from "lucide-react";
 
@@ -258,9 +258,7 @@ export default function LiveChartDrawer({
                 ))}
               </div>
               <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
-                {tf === "D"
-                  ? "daily bars as scanned"
-                  : "rolled up from the daily series — markers keep their place"}
+                {TIMEFRAME_PURPOSE[tf]}
               </span>
             </div>
 
@@ -426,19 +424,34 @@ function LiveChartSvg({ data, tf, alert, arming, showEffort, onPick }: {
   // this, switching to weekly silently moves the range box and the markers to
   // whatever happens to sit at the old index.
   const dailyBars = data.bars;
-  const bars = tf === "D" ? dailyBars : aggregateBars(dailyBars, tf);
+  const allBars = tf === "D" ? dailyBars : aggregateBars(dailyBars, tf);
   const dateAt = (i: number | null | undefined): string | null =>
     i != null && i >= 0 && dailyBars[i] ? dailyBars[i].date : null;
   const reloc = (i: number | null | undefined): number | null => {
     if (i == null || i < 0) return null;
     if (tf === "D") return i;
-    const j = indexForDate(bars, tf, dateAt(i));
+    const j = indexForDate(allBars, tf, dateAt(i));
     return j < 0 ? null : j;
   };
-  const rangeStartIdx = Math.max(0, reloc(data.rangeStartIdx) ?? 0);
-  const breakoutIdx = reloc(data.breakoutIdx);
-  const springIdx = reloc(data.springIdx);
-  const upthrustIdx = reloc(data.upthrustIdx);
+  const fullRangeStart = Math.max(0, reloc(data.rangeStartIdx) ?? 0);
+
+  // Draw a WINDOW, not the whole fetch. Before this the chart rendered every
+  // bar Yahoo returned, so bar count — and therefore spacing — was a side
+  // effect of the fetch range: 5y of daily is ~1250 candles in 850px, and the
+  // same series rolled up left ~60 monthly bars stretched across that width.
+  // The window sits at the tail but widens to keep the range on screen.
+  const win = viewWindow(allBars.length, tf, fullRangeStart);
+  const bars = allBars.slice(win.from, win.to);
+  const shift = (i: number | null): number | null => {
+    if (i == null) return null;
+    const j = i - win.from;
+    return j < 0 || j >= bars.length ? null : j;
+  };
+
+  const rangeStartIdx = Math.max(0, shift(fullRangeStart) ?? 0);
+  const breakoutIdx = shift(reloc(data.breakoutIdx));
+  const springIdx = shift(reloc(data.springIdx));
+  const upthrustIdx = shift(reloc(data.upthrustIdx));
   const n = bars.length;
   const pMin = Math.min(...bars.map((b) => b.l), rangeLo);
   const pMax = Math.max(...bars.map((b) => b.h), rangeHi);
@@ -450,9 +463,14 @@ function LiveChartSvg({ data, tf, alert, arming, showEffort, onPick }: {
   // confidently.
   const vol = volumeView(bars, { trusted: !data.suspectVolume });
   const vMax = vol.maxV;
-  const xw = (W - PAD - 8) / n;
+  // Cap the slot width, then right-align. Uncapped, a short series inflates
+  // every candle to fill the width and the tape reads as a bar chart of six
+  // things. Right-aligned because the newest bar belongs at the right edge —
+  // that is where the eye goes looking for it.
+  const xw = Math.min((W - PAD - 8) / n, MAX_BAR_PITCH);
   const cw = Math.max(1.5, Math.min(9, xw * 0.62));
-  const x = (i: number) => PAD + i * xw + xw / 2;
+  const rightEdge = W - 8;
+  const x = (i: number) => rightEdge - (n - 1 - i) * xw - xw / 2;
   const y = (p: number) => 8 + (1 - (p - pMin) / pSpan) * (PH - 16);
   const vy = (v: number) => PH + GAP + (1 - v / vMax) * VH;
   const boxEnd = breakoutIdx ?? n - 1;
@@ -471,7 +489,7 @@ function LiveChartSvg({ data, tf, alert, arming, showEffort, onPick }: {
   const toIndex = (e: React.PointerEvent<SVGSVGElement>): number | null => {
     const rect = e.currentTarget.getBoundingClientRect();
     const xv = ((e.clientX - rect.left) / rect.width) * W;
-    const i = Math.round((xv - PAD - xw / 2) / xw);
+    const i = Math.round(n - 1 - (rightEdge - xv - xw / 2) / xw);
     return i >= 0 && i < n ? i : null;
   };
   const hb = hover != null ? bars[hover] : null;

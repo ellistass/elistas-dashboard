@@ -22,6 +22,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { computeScoreboard, type BenchmarkRow } from "@/lib/wyckoff/benchmark";
+import { summarizeLearnable } from "@/lib/wyckoff/learnable";
 
 // Fields safe to show BEFORE resolution. engineVerdict is deliberately absent.
 const PENDING_SELECT = {
@@ -210,6 +211,7 @@ export async function GET() {
       trackedOpen,
       awaitingBackfill,
       passRate: { total: readsTotal, pass: readsPass },
+      learnable: summarizeLearnable(allResolved),
       score: computeScoreboard(allResolved),
     });
   } catch (e: any) {

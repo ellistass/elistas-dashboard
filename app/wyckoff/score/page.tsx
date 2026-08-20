@@ -11,18 +11,20 @@
 // setup before or after its trigger printed. They are reported separately —
 // a scanner can be generous on one and useless on the other.
 
-import { TrendingUp, Timer } from "lucide-react";
+import { GraduationCap, TrendingUp, Timer } from "lucide-react";
 import ScoreStrip from "../_components/ScoreStrip";
 import { useWyckoff } from "../_components/WyckoffData";
+import { summarizeLearnable } from "@/lib/wyckoff/learnable";
 import { summariseLeads } from "@/lib/wyckoff/timing";
 import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "../_components/ui";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 
 export default function ScorePage() {
-  const { score, passRate, resolved, loading, error } = useWyckoff();
+  const { score, passRate, learnable, resolved, loading, error } = useWyckoff();
   if (loading) return <LoadingCard what="benchmark" />;
 
+  const learnableStats = learnable ?? summarizeLearnable(resolved);
   const toBreakout = summariseLeads(resolved.map((r) => r.leadToBreakout ?? null));
   const toTest = summariseLeads(resolved.map((r) => r.leadToTest ?? null));
 
@@ -40,6 +42,13 @@ export default function ScorePage() {
 
       <SectionHeader icon={<TrendingUp size={13} strokeWidth={2} />} title="You vs the engine" note="blind sample only" />
       {score ? <ScoreStrip score={score} passRate={passRate} /> : <EmptyState small text="No resolved reads yet." />}
+
+      <SectionHeader
+        icon={<GraduationCap size={13} strokeWidth={2} />}
+        title="Learnable cases"
+        note="trusted volume · engine made a direction call · market resolved directionally"
+      />
+      <LearnablePanel stats={learnableStats} />
 
       <SectionHeader
         icon={<Timer size={13} strokeWidth={2} />}
@@ -91,6 +100,63 @@ export default function ScorePage() {
         </p>
       </div>
     </>
+  );
+}
+
+function LearnablePanel({ stats }: {
+  stats: { total: number; successes: number; failures: number; accum: number; distrib: number };
+}) {
+  const hitRate = stats.total ? Math.round((stats.successes / stats.total) * 100) : null;
+  return (
+    <div className="card" style={{ display: "flex", flexWrap: "wrap", gap: 0, padding: 0, marginBottom: 26, overflow: "hidden" }}>
+      <LearnableCell
+        label="Learnable"
+        value={String(stats.total)}
+        detail="clean resolved training cases"
+      />
+      <LearnableCell
+        label="Engine hit rate"
+        value={hitRate == null ? "—" : `${hitRate}%`}
+        detail={stats.total ? `${stats.successes} of ${stats.total}` : "waiting for resolved cases"}
+        accent
+        bordered
+      />
+      <LearnableCell
+        label="Failures to review"
+        value={String(stats.failures)}
+        detail="highest-signal replay set"
+        warn={stats.failures > 0}
+        bordered
+      />
+      <LearnableCell
+        label="Call mix"
+        value={`${stats.accum}/${stats.distrib}`}
+        detail="accum / distrib"
+        bordered
+      />
+      <div style={{ flexBasis: "100%", padding: "0 20px 12px" }}>
+        <span style={{ ...mono, fontSize: 9.5, color: "var(--text-3)" }}>
+          all time · excludes neutral calls, chop outcomes, and suspect-volume markets
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function LearnableCell({ label, value, detail, accent, bordered, warn }: {
+  label: string; value: string; detail: string; accent?: boolean; bordered?: boolean; warn?: boolean;
+}) {
+  return (
+    <div style={{ flex: "1 1 170px", padding: "15px 20px", borderLeft: bordered ? "1px solid var(--border-subtle)" : undefined }}>
+      <p className="kicker" style={{ margin: "0 0 5px" }}>{label}</p>
+      <p style={{
+        ...mono, margin: 0, fontSize: 22, lineHeight: 1, fontWeight: 500,
+        color: warn ? "var(--amber)" : accent ? "var(--accent)" : "var(--text-1)",
+      }}>
+        {value}
+      </p>
+      <p style={{ ...mono, margin: "6px 0 0", fontSize: 9.5, color: "var(--text-3)" }}>{detail}</p>
+    </div>
   );
 }
 

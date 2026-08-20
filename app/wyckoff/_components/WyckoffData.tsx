@@ -12,6 +12,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { PendingRow } from "./CandidateCard";
 import type { Scoreboard } from "./ScoreStrip";
+import type { LearnableStats } from "@/lib/wyckoff/learnable";
 
 export interface ResolvedRow extends PendingRow {
   outcome: string;
@@ -28,6 +29,7 @@ interface WyckoffState {
   resolved: ResolvedRow[];
   score: Scoreboard | null;
   passRate: { total: number; pass: number } | null;
+  learnable: LearnableStats | null;
   trackedOpen: number;
   awaitingBackfill: number;
   loading: boolean;
@@ -55,6 +57,7 @@ export function WyckoffProvider({ children }: { children: React.ReactNode }) {
   const [resolved, setResolved] = useState<ResolvedRow[]>([]);
   const [score, setScore] = useState<Scoreboard | null>(null);
   const [passRate, setPassRate] = useState<{ total: number; pass: number } | null>(null);
+  const [learnable, setLearnable] = useState<LearnableStats | null>(null);
   const [trackedOpen, setTrackedOpen] = useState(0);
   const [awaitingBackfill, setAwaitingBackfill] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -74,6 +77,7 @@ export function WyckoffProvider({ children }: { children: React.ReactNode }) {
       setResolved(j.resolved ?? []);
       setScore(j.score ?? null);
       setPassRate(j.passRate ?? null);
+      setLearnable(j.learnable ?? null);
       setTrackedOpen(j.trackedOpen ?? 0);
       setAwaitingBackfill(j.awaitingBackfill ?? 0);
       setLastScanAt(j.lastScanAt ?? null);
@@ -109,6 +113,7 @@ export function WyckoffProvider({ children }: { children: React.ReactNode }) {
     <Ctx.Provider
       value={{
         pending, watching, resolved, score, passRate,
+        learnable,
         trackedOpen, awaitingBackfill, loading, error,
         scanning, scanNote, lastScanAt, reload, runScan,
       }}

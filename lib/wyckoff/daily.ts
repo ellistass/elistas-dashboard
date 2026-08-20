@@ -32,7 +32,26 @@ interface YahooChartResponse {
 const YAHOO_HOSTS = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// In-process cache. One instrument commonly has several candidates, and a
+// drawer gets opened, closed and reopened while reading — all of which hit the
+// same series. Serverless means this only survives inside a warm instance,
+// which is exactly the window where the repeats happen.
+//
+// TTL is 10 minutes: these are DAILY bars, so nothing changes intraday except
+// the still-forming last bar, and a ten-minute-old view of a forming bar is not
+// a decision anyone loses money on.
+const barCache = new Map<string, { at: number; bars: Bar[] }>();
+const BAR_TTL_MS = 10 * 60 * 1000;
+
+export function clearBarCache(): void {
+  barCache.clear();
+}
+
 export async function fetchDailyBars(yahooSymbol: string, range = "2y"): Promise<Bar[]> {
+  const cacheKey = `${yahooSymbol}|${range}`;
+  const hit = barCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < BAR_TTL_MS) return hit.bars;
+
   const get = (host: string) =>
     axios.get<YahooChartResponse>(
       `https://${host}/v8/finance/chart/${encodeURIComponent(yahooSymbol)}`,
@@ -77,5 +96,7 @@ export async function fetchDailyBars(yahooSymbol: string, range = "2y"): Promise
     });
   }
   // cleanBars drops zero-volume bars (holidays / bad prints) per spec §1.
-  return cleanBars(bars);
+  const cleaned = cleanBars(bars);
+  barCache.set(cacheKey, { at: Date.now(), bars: cleaned });
+  return cleaned;
 }

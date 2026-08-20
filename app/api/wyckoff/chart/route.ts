@@ -51,7 +51,9 @@ export async function GET(req: NextRequest) {
 
   let chart;
   try {
-    const bars = await fetchDailyBars(inst.yahoo, "2y");
+    // 5y, matching the review drawer: weekly needs the depth, and the cache
+    // in daily.ts means the extra history costs nothing on repeat opens.
+    const bars = await fetchDailyBars(inst.yahoo, "5y");
     chart = buildLiveChart(
       bars,
       row.rangeStartDate.toISOString().slice(0, 10),
