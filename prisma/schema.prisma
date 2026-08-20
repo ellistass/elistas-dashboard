@@ -81,6 +81,12 @@ model Trade {
   ticket             Int?             // MT4 broker ticket number — unique within an account
   source             String           @default("manual")  // "manual" | "mt4" | "mt4-catchup" | "claude-idea" | "user-discretionary"
   ideaId             String?          // FK back to IdeaOutcome — set when trade was opened from an idea card
+  // Wyckoff read provenance. Mirrors the ideaId pattern: set automatically when
+  // an EA fill matches a read you had already locked (see lib/wyckoff/link.ts).
+  candidateId        String?          // FK to ScannerCandidate — the read this trade came from
+  readAdherence      String?          // aligned | contradicted | traded-a-pass
+  entryDriftR        Float?           // how far the fill sat from the entry you committed to, in R
+  stopWidenedR       Float?           // how much wider the actual stop was than the planned one, in R
   lotSize            Float?           // MT4 contract size (e.g. 0.10)
   commission         Float?           // broker commission in account currency
   swap               Float?           // overnight swap charges
@@ -92,6 +98,7 @@ model Trade {
   modifications      TradeModification[]
   @@unique([accountId, ticket])
   @@index([source, date])
+  @@index([candidateId])
 }
 
 // Per-trade audit log of SL/TP modifications. The EA diffs each open ticket's
@@ -435,6 +442,34 @@ model ScannerCandidate {
   alertHitAt     DateTime?                     // stamped by the scan when a bar touched it
   alertHitDate   DateTime?                     // the bar date that did the touching
 
+  // -- Structural quality grade (NEVER a direction call - see lib/wyckoff/grade.ts)
+  // Built only from facts the trader payload already discloses plus the
+  // boundary-touch counts detection was computing and throwing away.
+  grade           String?                      // A | B | C | D
+  gradeScore      Float?                       // 0..100 weighted score
+  gradeFactors    Json?                        // { test, boundaries, context, maturity }
+  gradeNotes      String[]                     // short reasons rendered as chips
+  touchesHi       Int?
+  touchesLo       Int?
+
+  // Compact bar window for the card thumbnail, written at scan time because the
+  // scanner already holds the series. Fetching per card at render time would
+  // mean one Yahoo call per candidate on every page load.
+  // Format: [o,h,l,c,v,"YYYY-MM-DD"][] — tuples, not objects, to keep the JSON
+  // small enough to ship with every row.
+  sparkBars       Json?
+
+  // -- Timing: was the scanner early or late?
+  // surfacedBarDate is the DATA date when the range first reached a decision
+  // point, not the wall clock - a scan that runs late must not make the
+  // scanner look late. Written once, never updated.
+  surfacedAt      DateTime?
+  surfacedBarDate DateTime?
+  surfacedReason  String?                      // test-printed | pressing-boundary | just-broke-out
+  testBarDate     DateTime?                    // bar the spring/upthrust printed on
+  leadToBreakout  Int?                         // bars surfaced -> breakout (backfilled)
+  leadToTest      Int?                         // bars surfaced -> terminal test (backfilled)
+
   barsInRange    Int
   rangeStartDate DateTime                      // date of bar `start` — stable dedupe key
   breakoutDate   DateTime?                     // date of bar `end`; null while status = "open"
@@ -445,5 +480,6 @@ model ScannerCandidate {
   @@index([instrument, scanDate])
   @@index([outcome, status])
   @@index([watch])
+  @@index([grade, fresh])
   @@map("scanner_candidates")
 }

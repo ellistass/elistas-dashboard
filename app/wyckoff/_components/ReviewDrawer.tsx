@@ -9,6 +9,7 @@
 // where the engine's verdict tipped.
 
 import { useCallback, useEffect, useState } from "react";
+import { volumeView, isPlottableTag } from "@/lib/chart/volume";
 import { X, ChevronRight, FastForward, RotateCcw, AlertTriangle } from "lucide-react";
 
 interface Bar { o: number; h: number; l: number; c: number; v: number; date: string }
@@ -164,7 +165,13 @@ function ReplayChart({ data, visible }: { data: ReviewData; visible: number }) {
   const lows = bars.map((b) => b.l), highs = bars.map((b) => b.h);
   const pMin = Math.min(...lows, rangeLo), pMax = Math.max(...highs, rangeHi);
   const pSpan = Math.max(pMax - pMin, 1e-9);
-  const vMax = Math.max(...bars.map((b) => b.v), 1);
+  // Volume pane: clipped ceiling + effort shading. On instruments whose feed we
+  // do not trust, `trusted:false` renders volume flat and grey and suppresses
+  // the MA and effort marks entirely — brightening a bar READS as information,
+  // and doing that on a feed we have called unreliable would be a lie told
+  // confidently.
+  const vol = volumeView(bars, { trusted: !data.suspectVolume });
+  const vMax = vol.maxV;
   const xw = (W - PAD - 8) / n;
   const cw = Math.max(1.5, Math.min(9, xw * 0.62));
   const x = (i: number) => PAD + i * xw + xw / 2;
@@ -218,8 +225,59 @@ function ReplayChart({ data, visible }: { data: ReviewData; visible: number }) {
             <g key={i} opacity={inCtx ? 0.55 : 1}>
               <line x1={x(i)} y1={y(b.h)} x2={x(i)} y2={y(b.l)} stroke={col} strokeWidth={1} />
               <rect x={x(i) - cw / 2} y={bodyTop} width={cw} height={bodyH} fill={col} />
-              <rect x={x(i) - cw / 2} y={vy(b.v)} width={cw} height={PH + GAP + VH - vy(b.v)} fill={col} opacity={0.45} />
+              {/* Volume as EFFORT: opacity from the ratio to the 20-bar mean,
+                  so a large print glows against a dim tape instead of being
+                  judged by height against whatever the tallest bar happens to
+                  be. Colour still carries direction. */}
+              <rect
+                x={x(i) - cw / 2}
+                y={vy(Math.min(b.v, vol.maxV))}
+                width={cw}
+                height={PH + GAP + VH - vy(Math.min(b.v, vol.maxV))}
+                fill={col}
+                opacity={vol.alphaAt(i)}
+              />
+              {/* A clipped bar is taller than shown — say so rather than
+                  quietly presenting a shortened bar as the whole story. */}
+              {vol.clipped(b.v) && (
+                <rect x={x(i) - cw / 2} y={PH + GAP} width={cw} height={2} fill="var(--amber)" />
+              )}
             </g>
+          );
+        })}
+        {/* ── Volume MA + effort marks ─────────────────────────────────────
+            The reference line is what makes "big volume" mean anything: without
+            it the eye compares each bar to the tallest one on screen, which
+            changes every time the window moves. Suppressed on untrusted feeds. */}
+        {vol.trusted && shown.length > 2 && (
+          <>
+            <polyline
+              fill="none"
+              stroke="var(--amber)"
+              strokeWidth={1.2}
+              opacity={0.7}
+              points={shown.map((_, i) => `${x(i)},${vy(Math.min(vol.ma[i], vol.maxV))}`).join(" ")}
+            />
+            <text x={PAD + 4} y={PH + GAP + 9} fontSize={8.5} fill="var(--amber)" opacity={0.65} fontFamily="'DM Mono', monospace">
+              vol MA{vol.maN}
+            </text>
+          </>
+        )}
+        {true && vol.trusted && shown.map((_, i) => {
+          const er = vol.effortAt(i);
+          if (!er || !isPlottableTag(er.tag)) return null;
+          // ABSORB = heavy effort with no result, someone eating the flow.
+          // CLIMAX = heavy effort with a wide result.
+          return (
+            <circle
+              key={`er${i}`}
+              cx={x(i)}
+              cy={PH + GAP - 4}
+              r={2.2}
+              fill={er.tag === "CLIMAX" ? "var(--amber)" : "var(--green)"}
+            >
+              <title>{`${er.tag} — ${er.desc} (vol ${er.vr.toFixed(2)}x, spread ${er.sr.toFixed(2)}x)`}</title>
+            </circle>
           );
         })}
         {/* markers appear as the replay reaches them */}

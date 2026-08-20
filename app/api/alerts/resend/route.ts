@@ -20,6 +20,25 @@ function currentSessionName(): string {
   return "Off-hours";
 }
 
+function toScoringItems(input: unknown, scores: unknown) {
+  const sourceScores = Array.isArray(scores) ? scores : [];
+  const lookup = (cur: string) =>
+    sourceScores.find((s: any) => s?.currency === cur || s?.cur === cur) as any;
+
+  return normalizeRanking(input, sourceScores).map((item) => {
+    const src = lookup(item.cur) ?? {};
+    return {
+      cur: item.cur,
+      score: item.score,
+      fundamental: Number(src.fundamental ?? 0),
+      pricePerf: Number(src.pricePerf ?? src.price ?? 0),
+      stdDev: Number(src.stdDev ?? src.stddev ?? 0),
+      tag: item.tag ?? src.tag ?? "",
+      notes: item.notes ?? src.notes ?? [],
+    };
+  });
+}
+
 export async function POST() {
   try {
     // Find the most recently sent alert
@@ -40,13 +59,22 @@ export async function POST() {
     // normalize defensively so Telegram message renders currency codes either way.
     const fa: any = (alert as any).fullAnalysis ?? {};
     const sourceScores = fa.scores ?? fa.allScores ?? [];
+    const allScores = (Array.isArray(sourceScores) ? sourceScores : []).map((s: any) => ({
+      cur: s.cur ?? s.currency ?? "",
+      score: Number(s.score ?? s.total ?? 0),
+      fundamental: Number(s.fundamental ?? 0),
+      pricePerf: Number(s.pricePerf ?? s.price ?? 0),
+      stdDev: Number(s.stdDev ?? s.stddev ?? 0),
+      tag: s.tag ?? "",
+      notes: s.notes ?? [],
+    }));
     const result = {
-      top3:               normalizeRanking(alert.top3, sourceScores),
-      bottom3:            normalizeRanking(alert.bottom3, sourceScores),
+      top3:               toScoringItems(alert.top3, sourceScores),
+      bottom3:            toScoringItems(alert.bottom3, sourceScores),
       pairs9:             alert.pairs9  as any[],
       ideas:              (alert as any).ideas ?? (alert.pairs9 as any[]) ?? [],
       priority1:          alert.priority1 as any,
-      allScores:          sourceScores as any[],
+      allScores,
       divergenceWarnings: fa.divergenceWarnings ?? [] as string[],
       generatedAt:        alert.createdAt,
       scoringModel:       (alert as any).scoringModel ?? "claude-ai",

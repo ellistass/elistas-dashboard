@@ -16,6 +16,7 @@
 // internals belong to ReviewDrawer, which the API restricts to resolved rows.
 
 import { useEffect, useState } from "react";
+import { volumeView, isPlottableTag } from "@/lib/chart/volume";
 import { X, AlertTriangle, ExternalLink, Bell, BellRing, Crosshair, Lock, ShieldCheck } from "lucide-react";
 
 interface Bar { o: number; h: number; l: number; c: number; v: number; date: string }
@@ -75,6 +76,12 @@ export default function LiveChartDrawer({
   const [verdict, setVerdict] = useState<"accum" | "distrib" | "pass" | null>(null);
   const [readBusy, setReadBusy] = useState(false);
   const [readErr, setReadErr] = useState<string | null>(null);
+  // Effort marks are an AID, not a leak: ABSORB/CLIMAX use only bars already on
+  // screen, no lookahead. But "blind" only means something if the aid set is
+  // constant across reads, so they default OFF on the live chart and stay a
+  // deliberate choice. (Persisting which aids were on at lock time is the next
+  // step if the benchmark is ever to segment aided from unaided reads.)
+  const [showEffort, setShowEffort] = useState(false);
 
   // Writes the level and arms it. Only bars AFTER today can trigger it, so
   // setting a level at a price already trading today won't ping tonight.
@@ -215,6 +222,11 @@ export default function LiveChartDrawer({
                   {arming ? "click a price on the chart…" : "Set alert level"}
                 </SmallBtn>
               )}
+              {!data.suspectVolume && (
+                <SmallBtn onClick={() => setShowEffort((v) => !v)} active={showEffort}>
+                  effort marks {showEffort ? "on" : "off"}
+                </SmallBtn>
+              )}
               <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
                 {arming
                   ? "click the price you want flagged · snaps to the box edges · Esc to cancel"
@@ -227,6 +239,7 @@ export default function LiveChartDrawer({
               data={data}
               alert={alert}
               arming={arming}
+              showEffort={showEffort}
               onPick={(p) => saveAlert(p)}
             />
             <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
@@ -350,8 +363,9 @@ function SmallBtn({ children, onClick, disabled, active }: {
   );
 }
 
-function LiveChartSvg({ data, alert, arming, onPick }: {
-  data: LiveChart; alert: number | null; arming: boolean; onPick: (price: number) => void;
+function LiveChartSvg({ data, alert, arming, showEffort, onPick }: {
+  data: LiveChart; alert: number | null; arming: boolean; showEffort: boolean;
+  onPick: (price: number) => void;
 }) {
   const W = 900, PH = 300, VH = 90, GAP = 14, PAD = 44;
   const H = PH + GAP + VH;
@@ -360,7 +374,13 @@ function LiveChartSvg({ data, alert, arming, onPick }: {
   const pMin = Math.min(...bars.map((b) => b.l), rangeLo);
   const pMax = Math.max(...bars.map((b) => b.h), rangeHi);
   const pSpan = Math.max(pMax - pMin, 1e-9);
-  const vMax = Math.max(...bars.map((b) => b.v), 1);
+  // Volume pane: clipped ceiling + effort shading. On instruments whose feed we
+  // do not trust, `trusted:false` renders volume flat and grey and suppresses
+  // the MA and effort marks entirely — brightening a bar READS as information,
+  // and doing that on a feed we have called unreliable would be a lie told
+  // confidently.
+  const vol = volumeView(bars, { trusted: !data.suspectVolume });
+  const vMax = vol.maxV;
   const xw = (W - PAD - 8) / n;
   const cw = Math.max(1.5, Math.min(9, xw * 0.62));
   const x = (i: number) => PAD + i * xw + xw / 2;
@@ -439,7 +459,23 @@ function LiveChartSvg({ data, alert, arming, onPick }: {
             <g key={i} opacity={i < rangeStartIdx ? 0.55 : 1}>
               <line x1={x(i)} y1={y(b.h)} x2={x(i)} y2={y(b.l)} stroke={col} strokeWidth={1} />
               <rect x={x(i) - cw / 2} y={bodyTop} width={cw} height={bodyH} fill={col} />
-              <rect x={x(i) - cw / 2} y={vy(b.v)} width={cw} height={PH + GAP + VH - vy(b.v)} fill={col} opacity={0.45} />
+              {/* Volume as EFFORT: opacity from the ratio to the 20-bar mean,
+                  so a large print glows against a dim tape instead of being
+                  judged by height against whatever the tallest bar happens to
+                  be. Colour still carries direction. */}
+              <rect
+                x={x(i) - cw / 2}
+                y={vy(Math.min(b.v, vol.maxV))}
+                width={cw}
+                height={PH + GAP + VH - vy(Math.min(b.v, vol.maxV))}
+                fill={col}
+                opacity={vol.alphaAt(i)}
+              />
+              {/* A clipped bar is taller than shown — say so rather than
+                  quietly presenting a shortened bar as the whole story. */}
+              {vol.clipped(b.v) && (
+                <rect x={x(i) - cw / 2} y={PH + GAP} width={cw} height={2} fill="var(--amber)" />
+              )}
             </g>
           );
         })}
@@ -452,6 +488,41 @@ function LiveChartSvg({ data, alert, arming, onPick }: {
         {breakoutIdx != null && (
           <ChartMarker x={x(breakoutIdx)} y={y(bars[breakoutIdx].h) - 6} label="B" title="breakout" />
         )}
+        {/* ── Volume MA + effort marks ─────────────────────────────────────
+            The reference line is what makes "big volume" mean anything: without
+            it the eye compares each bar to the tallest one on screen, which
+            changes every time the window moves. Suppressed on untrusted feeds. */}
+        {vol.trusted && bars.length > 2 && (
+          <>
+            <polyline
+              fill="none"
+              stroke="var(--amber)"
+              strokeWidth={1.2}
+              opacity={0.7}
+              points={bars.map((_, i) => `${x(i)},${vy(Math.min(vol.ma[i], vol.maxV))}`).join(" ")}
+            />
+            <text x={PAD + 4} y={PH + GAP + 9} fontSize={8.5} fill="var(--amber)" opacity={0.65} fontFamily="'DM Mono', monospace">
+              vol MA{vol.maN}
+            </text>
+          </>
+        )}
+        {showEffort && vol.trusted && bars.map((_, i) => {
+          const er = vol.effortAt(i);
+          if (!er || !isPlottableTag(er.tag)) return null;
+          // ABSORB = heavy effort with no result, someone eating the flow.
+          // CLIMAX = heavy effort with a wide result.
+          return (
+            <circle
+              key={`er${i}`}
+              cx={x(i)}
+              cy={PH + GAP - 4}
+              r={2.2}
+              fill={er.tag === "CLIMAX" ? "var(--amber)" : "var(--green)"}
+            >
+              <title>{`${er.tag} — ${er.desc} (vol ${er.vr.toFixed(2)}x, spread ${er.sr.toFixed(2)}x)`}</title>
+            </circle>
+          );
+        })}
         {/* Armed alert level — drawn across the whole price pane so it reads as
             a standing instruction, not a marker tied to one bar. */}
         {alert != null && alert >= pMin && alert <= pMax && (

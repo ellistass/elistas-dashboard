@@ -52,7 +52,7 @@ export async function GET(req: Request) {
   return NextResponse.json(await runTradeScanJob(req));
 }
 
-export async function runTradeScanJob(req: Request) {
+async function runTradeScanJob(req: Request) {
   const { searchParams } = new URL(req.url);
   const isMondayUtc = new Date().getUTCDay() === 1;
   const wantDigest = searchParams.get("digest") === "1" || isMondayUtc;

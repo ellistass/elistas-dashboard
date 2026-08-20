@@ -26,11 +26,14 @@ import {
   engineVerdict,
   outcome,
   outcomeReady,
-  isFresh,
+  freshReason,
   type Bar,
   type DetectedRange,
   type TerminalTest,
+  type FreshReason,
 } from "./engine";
+import { gradeRange, packFactors, type RangeGrade } from "./grade";
+import { computeTiming } from "./timing";
 
 // §10 — the shape returned to the trader. No verdict. No direction. No entry.
 export interface Candidate {
@@ -84,6 +87,10 @@ interface AnalyzedRange {
   verdict: string; // LOGGED, never surfaced
   loggedBlind: boolean; // true when the outcome was NOT yet determinable at log time
   fresh: boolean; // at a decision point NOW (§10 filter) — drives payload AND page
+  reason: FreshReason | null; // WHY it is at a decision point
+  sparkBars: Array<Array<number | string>>; // compact window for the card chart
+  grade: RangeGrade; // structural quality — never a direction call
+  testBarDate: string | null; // date of the terminal-test bar, for lead-time math
 }
 
 function analyze(instrument: string, bars: Bar[], range: DetectedRange): AnalyzedRange {
@@ -104,6 +111,20 @@ function analyze(instrument: string, bars: Bar[], range: DetectedRange): Analyze
     breakoutDate: status === "broken" ? bars[end].date : null,
     lastBarDate: bars[bars.length - 1].date,
   };
+  // Thumbnail window: a little context before the range, then everything to
+  // the right edge, capped so the JSON stays small. Dates are kept so the card
+  // can locate the range box by date rather than by a stored index that would
+  // drift the moment the series shifts.
+  const SPARK_MAX = 70;
+  const SPARK_CONTEXT = 8;
+  const sparkFrom = Math.max(0, Math.min(start - SPARK_CONTEXT, bars.length - SPARK_MAX));
+  const sparkBars = bars
+    .slice(Math.max(0, sparkFrom), bars.length)
+    .slice(-SPARK_MAX)
+    .map((b) => [round6(b.o), round6(b.h), round6(b.l), round6(b.c), Math.round(b.v), b.date]);
+
+  const reason = freshReason(bars, range, springIdx, upthrustIdx);
+  const testIdx = Math.max(springIdx ?? -1, upthrustIdx ?? -1);
   return {
     range,
     candidate,
@@ -112,7 +133,24 @@ function analyze(instrument: string, bars: Bar[], range: DetectedRange): Analyze
     // outcome visible in the data at log time — flag them so the strict
     // you-vs-engine benchmark can filter to genuinely blind verdicts.
     loggedBlind: status === "open" || !outcomeReady(bars.length, end),
-    fresh: isFresh(bars, range, springIdx, upthrustIdx),
+    fresh: reason != null,
+    reason,
+    sparkBars,
+    testBarDate: testIdx >= 0 ? bars[testIdx].date : null,
+    // Structural quality only — see the blind-integrity note in grade.ts.
+    grade: gradeRange({
+      bars,
+      start,
+      end,
+      lo,
+      hi,
+      touchesHi: range.touchesHi,
+      touchesLo: range.touchesLo,
+      springIdx,
+      upthrustIdx,
+      terminalTest: candidate.terminalTest,
+      contextPct: candidate.contextPct,
+    }),
   };
 }
 
@@ -124,7 +162,10 @@ async function persistRange(a: AnalyzedRange): Promise<boolean> {
   };
   const existing = await (db as any).scannerCandidate.findUnique({
     where: { instrument_rangeStartDate: key },
-    select: { id: true, status: true, outcome: true },
+    // surfacedAt comes back so the first-surfaced stamp is written exactly
+    // once — every later scan must leave it alone or the lead-time measurement
+    // silently becomes "bars from the most recent scan", which is always ~0.
+    select: { id: true, status: true, outcome: true, surfacedAt: true },
   });
 
   // Frozen: once broken out (verdict locked) or outcome recorded, never touch.
@@ -142,11 +183,39 @@ async function persistRange(a: AnalyzedRange): Promise<boolean> {
     loggedBlind: a.loggedBlind,
     fresh: a.fresh, // refreshed on every scan while the row is still open
     breakoutDate: a.candidate.breakoutDate ? toUtcDate(a.candidate.breakoutDate) : null,
+    // Quality grade — recomputed every scan while the range is still forming,
+    // because a range that gets another boundary touch genuinely improves.
+    grade: a.grade.grade,
+    gradeScore: a.grade.score,
+    gradeFactors: packFactors(a.grade.factors),
+    gradeNotes: a.grade.notes,
+    touchesHi: a.range.touchesHi,
+    touchesLo: a.range.touchesLo,
+    surfacedReason: a.reason,
+    testBarDate: a.testBarDate ? toUtcDate(a.testBarDate) : null,
+    sparkBars: a.sparkBars,
   };
+
+  // First-surfaced stamp: written the first time this range reaches a decision
+  // point and never again. surfacedBarDate is the DATA date, not the wall clock
+  // — a scan that runs late must not make the scanner look late.
+  const stamp =
+    a.fresh && !existing?.surfacedAt
+      ? {
+          surfacedAt: new Date(),
+          surfacedBarDate: toUtcDate(a.candidate.lastBarDate),
+        }
+      : {};
+
   if (existing) {
-    await (db as any).scannerCandidate.update({ where: { id: existing.id }, data });
+    await (db as any).scannerCandidate.update({
+      where: { id: existing.id },
+      data: { ...data, ...stamp },
+    });
   } else {
-    await (db as any).scannerCandidate.create({ data: { ...key, ...data, outcome: null } });
+    await (db as any).scannerCandidate.create({
+      data: { ...key, ...data, ...stamp, outcome: null },
+    });
   }
   return true;
 }
@@ -343,9 +412,17 @@ export async function backfillOutcomes(): Promise<BackfillResult> {
     rangeLo: number;
     rangeHi: number;
     breakoutDate: Date;
+    surfacedBarDate: Date | null;
+    testBarDate: Date | null;
   }> = await (db as any).scannerCandidate.findMany({
     where: { outcome: null, status: "broken", breakoutDate: { not: null, lte: cutoff } },
-    select: { id: true, instrument: true, rangeLo: true, rangeHi: true, breakoutDate: true },
+    select: {
+      id: true, instrument: true, rangeLo: true, rangeHi: true, breakoutDate: true,
+      // Needed to compute lead time at the same moment the outcome lands — the
+      // bars are already fetched here, so doing it anywhere else would mean a
+      // second round trip to Yahoo for data we are already holding.
+      surfacedBarDate: true, testBarDate: true,
+    },
   });
 
   const result: BackfillResult = { checked: pending.length, updated: 0, notReady: 0, errors: [] };
@@ -385,9 +462,19 @@ export async function backfillOutcomes(): Promise<BackfillResult> {
         continue;
       }
       const o = outcome(bars, end, row.rangeLo, row.rangeHi);
+      // Lead time in TRADING days, measured from the data date the range first
+      // reached a decision point. Null for rows that surfaced before timing
+      // tracking existed — there is no honest way to invent that date.
+      const iso = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+      const { leadToBreakout, leadToTest } = computeTiming({
+        bars,
+        surfacedBarDate: iso(row.surfacedBarDate),
+        breakoutDate: iso(row.breakoutDate),
+        testBarDate: iso(row.testBarDate),
+      });
       await (db as any).scannerCandidate.update({
         where: { id: row.id },
-        data: { outcome: o, outcomeAt: new Date() },
+        data: { outcome: o, outcomeAt: new Date(), leadToBreakout, leadToTest },
       });
       result.updated++;
     }

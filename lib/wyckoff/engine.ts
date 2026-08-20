@@ -37,6 +37,11 @@ export interface DetectedRange {
   lo: number;
   hi: number;
   status: RangeStatus;
+  /** Bars whose high reached the ceiling zone. Detection has always counted
+   *  these to decide validity (>= 2 per side) and then discarded them; the
+   *  quality grade scores how far past that minimum a range got. */
+  touchesHi: number;
+  touchesLo: number;
 }
 
 /** Drop unusable bars before any processing (spec §1). */
@@ -98,12 +103,12 @@ export function detectRanges(bars: Bar[]): DetectedRange[] {
       // Broke out (bar `e`'s close crossed a boundary) or hit MAXLEN (forced
       // close, spec behaviour). Either way the range is complete.
       void brokeOut;
-      ranges.push({ start: i, end: e, lo, hi, status: "broken" });
+      ranges.push({ start: i, end: e, lo, hi, status: "broken", touchesHi, touchesLo });
       i = e + 1; // jump past this range
     } else if (longEnough && touched && e === n) {
       // Ran off the right edge of the data with price still inside the band:
       // the range is STILL OPEN — no breakout bar exists yet.
-      ranges.push({ start: i, end: e, lo, hi, status: "open" });
+      ranges.push({ start: i, end: e, lo, hi, status: "open", touchesHi, touchesLo });
       i = e + 1; // (ends the loop; e === n)
     } else {
       i += 1;
@@ -233,12 +238,19 @@ export function outcomeReady(barCount: number, end: number): boolean {
 //           or price pressing a boundary) — the pre-breakout read.
 //   Case 2: broke out within the last FRESH_BREAKOUT_BARS bars — the
 //           break-and-retest read.
-export function isFresh(
+/** WHY a range is at a decision point. Persisted with the candidate so the desk
+ *  can say what put each card in front of you — and so "the scanner surfaces
+ *  everything at the breakout" becomes a measurable claim rather than a
+ *  suspicion. Not a verdict: it describes what the scanner saw, never what it
+ *  concluded. */
+export type FreshReason = "test-printed" | "pressing-boundary" | "just-broke-out";
+
+export function freshReason(
   bars: Bar[],
   range: DetectedRange,
   springIdx: number | null,
   upthrustIdx: number | null,
-): boolean {
+): FreshReason | null {
   const lastIdx = bars.length - 1;
   const barsSinceBreakout = lastIdx - range.end;
 
@@ -247,14 +259,26 @@ export function isFresh(
   if (stillOpen) {
     const testIdx = Math.max(springIdx ?? -1, upthrustIdx ?? -1);
     const testJustPrinted = testIdx >= 0 && testIdx >= range.end - CFG.FRESH_TEST_BARS;
-    if (testJustPrinted || pressingBoundary(bars, range)) return true;
+    // Test first: when both are true, the test is the more specific reason and
+    // the one worth measuring lead time against.
+    if (testJustPrinted) return "test-printed";
+    if (pressingBoundary(bars, range)) return "pressing-boundary";
   }
 
   // Case 2: just broke out
   if (range.status === "broken" && barsSinceBreakout >= 0 && barsSinceBreakout <= CFG.FRESH_BREAKOUT_BARS) {
-    return true;
+    return "just-broke-out";
   }
-  return false;
+  return null;
+}
+
+export function isFresh(
+  bars: Bar[],
+  range: DetectedRange,
+  springIdx: number | null,
+  upthrustIdx: number | null,
+): boolean {
+  return freshReason(bars, range, springIdx, upthrustIdx) != null;
 }
 
 /** Last bar's high/low within the tolerance zone of a boundary. */

@@ -1,508 +1,123 @@
 "use client";
-// app/wyckoff/page.tsx — Wyckoff reading desk + scorekeeper (v2 design).
+// app/wyckoff/page.tsx — THE DESK. One job: what needs deciding today.
 //
-// Composition (top to bottom):
-//   1. Header — title, data state, Run scan.
-//   2. ScoreStrip — the you-vs-engine benchmark as one unit + pass-rate meter.
-//   3. Watching — the ranges you triaged, pinned above the desk so a decision
-//      you cared about can't quietly scroll away.
-//   4. Reading desk — fresh candidates as a card grid (read in seconds, lock).
-//   4. Resolved archive — filterable reveal table + Review replay.
+// Everything that is not a live decision has moved to its own route. What is
+// left is a ranked grid you can empty. The ranking is the point:
 //
-// The blind rules all live server-side; this page is presentation only.
+//   1. touched alerts   — the only thing here that changed on its own
+//   2. urgency band     — test just printed > pressing the edge > already broke
+//   3. structural grade — quality within the band
+//
+// C and D grades stay, dimmed. Hiding them would mean trusting a grader with
+// no track record; dimming lets you audit what it demoted for free.
 
-import { useCallback, useEffect, useState } from "react";
-import { Frame, Lock, Eye, RefreshCw, PlaySquare, AlertTriangle, Inbox, Star, Zap, Clock, BellRing } from "lucide-react";
-import ReviewDrawer from "./_components/ReviewDrawer";
+import { useState } from "react";
+import { Lock } from "lucide-react";
+import CandidateCard from "./_components/CandidateCard";
 import LiveChartDrawer from "./_components/LiveChartDrawer";
-import ScoreStrip, { type Scoreboard } from "./_components/ScoreStrip";
-import CandidateCard, { type PendingRow } from "./_components/CandidateCard";
-import { SUSPECT_VOLUME, instrumentInfo, instrumentName } from "@/lib/wyckoff/basket";
-
-/* ── Types ──────────────────────────────────────────────────────────────── */
-
-interface ResolvedRow extends PendingRow {
-  outcome: string;
-  outcomeAt: string | null;
-  engineVerdict: string;
-  loggedBlind: boolean;
-}
-
-/* ── Helpers ────────────────────────────────────────────────────────────── */
+import { useWyckoff } from "./_components/WyckoffData";
+import { rankCandidates, isDimmed, daysSinceSurfaced } from "./_components/desk";
+import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "./_components/ui";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
-const day = (iso: string | null) => (iso ? iso.slice(0, 10) : "—");
-const px = (v: number, hi: number) => v.toFixed(hi < 10 ? 4 : 2);
-const boxFmt = (r: { rangeLo: number; rangeHi: number }) => `${px(r.rangeLo, r.rangeHi)}–${px(r.rangeHi, r.rangeHi)}`;
-const ctxFmt = (v: number | null) => (v == null ? "n/a" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
 
-const VERDICT_COLOR: Record<string, string> = {
-  accum: "var(--green)", distrib: "var(--red)", pass: "var(--text-3)", neutral: "var(--text-3)",
-};
-const OUTCOME_COLOR: Record<string, string> = { up: "var(--green)", down: "var(--red)", chop: "var(--text-3)" };
-const verdictLabel = (v: string) =>
-  v === "accum" ? "ACCUM" : v === "distrib" ? "DISTRIB" : v === "pass" ? "PASS" : "NEUTRAL";
-const verdictHits = (v: string, outcome: string) =>
-  v === "accum" ? outcome === "up" : v === "distrib" ? outcome === "down" : outcome === "chop";
-
-/* Review learnable-set filter (addendum §2): engine committed a direction, the
-   market resolved directionally, and the volume is trustworthy. */
-const isLearnable = (r: { engineVerdict: string; outcome: string; instrument: string }) =>
-  (r.engineVerdict === "accum" || r.engineVerdict === "distrib") &&
-  (r.outcome === "up" || r.outcome === "down") &&
-  !SUSPECT_VOLUME.has(r.instrument);
-
-const REVIEW_FILTERS = ["learnable", "failures", "successes", "everything"] as const;
-type ReviewFilter = (typeof REVIEW_FILTERS)[number];
-
-/* ── Page ───────────────────────────────────────────────────────────────── */
-
-export default function WyckoffPage() {
-  const [pending, setPending] = useState<PendingRow[]>([]);
-  const [watching, setWatching] = useState<PendingRow[]>([]);
-  const [resolved, setResolved] = useState<ResolvedRow[]>([]);
-  const [score, setScore] = useState<Scoreboard | null>(null);
-  const [passRate, setPassRate] = useState<{ total: number; pass: number } | null>(null);
-  const [trackedOpen, setTrackedOpen] = useState(0);
-  const [awaitingBackfill, setAwaitingBackfill] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [scanning, setScanning] = useState(false);
-  const [scanNote, setScanNote] = useState<string | null>(null);
-  const [reviewId, setReviewId] = useState<string | null>(null);
+export default function DeskPage() {
+  const { pending, watching, trackedOpen, awaitingBackfill, loading, error, reload } = useWyckoff();
   const [chartId, setChartId] = useState<string | null>(null);
-  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("learnable");
-  const [search, setSearch] = useState("");
-  const [period, setPeriod] = useState("all"); // breakout-date window
 
-  const load = useCallback(async (opts?: { spinner?: boolean }) => {
-    if (opts?.spinner) setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/wyckoff", { cache: "no-store" });
-      const j = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(j?.error ?? `load failed (${res.status})`);
-      setPending(j.pending);
-      setWatching(j.watching ?? []);
-      setResolved(j.resolved);
-      setScore(j.score);
-      setPassRate(j.passRate ?? null);
-      setTrackedOpen(j.trackedOpen ?? 0);
-      setAwaitingBackfill(j.awaitingBackfill ?? 0);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-    if (opts?.spinner) setLoading(false);
-  }, []);
+  const ranked = rankCandidates(pending);
+  const live = ranked.filter((r) => !isDimmed(r));
+  const marginal = ranked.filter(isDimmed);
 
-  useEffect(() => { load({ spinner: true }); }, [load]);
+  // A setup that surfaced over a week ago and is still sitting here has been
+  // decaying in front of you. Worth saying out loud — this is exactly the
+  // "I saw it at the test and then it went without me" case.
+  const ageing = ranked.filter((r) => (daysSinceSurfaced(r) ?? 0) >= 7).length;
 
-  async function runScanNow() {
-    if (scanning) return;
-    setScanning(true);
-    setScanNote(null);
-    try {
-      const res = await fetch("/api/wyckoff", { method: "POST" });
-      const j = await res.json().catch(() => null);
-      if (!res.ok || !j?.ok) throw new Error(j?.error ?? `scan failed (${res.status})`);
-      setScanNote(
-        `scanned ${j.scanned} · ${j.rangesFound} ranges · ${j.freshCount} fresh · ` +
-        `${j.backfill?.updated ?? 0} outcomes resolved · ${j.staleRemoved ?? 0} stale opens swept · ` +
-        `data through ${j.latestBarDate ?? "?"}`,
-      );
-      await load();
-    } catch (e) {
-      setScanNote(e instanceof Error ? e.message : String(e));
-    }
-    setScanning(false);
-  }
-
-  // Per-tab counts computed up front — an empty tab must read as a DATA fact
-  // ("engine has 0 successes yet"), never as a possibly-broken page.
-  const matches = (r: ResolvedRow, f: ReviewFilter) =>
-    f === "everything" ? true :
-    f === "learnable" ? isLearnable(r) :
-    f === "failures" ? isLearnable(r) && !verdictHits(r.engineVerdict, r.outcome) :
-    isLearnable(r) && verdictHits(r.engineVerdict, r.outcome);
-  const tabCounts = Object.fromEntries(
-    REVIEW_FILTERS.map((f) => [f, resolved.filter((r) => matches(r, f)).length]),
-  ) as Record<ReviewFilter, number>;
-  const q = search.trim().toUpperCase();
-  const inPeriod = (r: ResolvedRow): boolean => {
-    if (period === "all" || !r.breakoutDate) return period === "all";
-    const d = r.breakoutDate.slice(0, 10);
-    if (period === "30d" || period === "90d") {
-      const days = period === "30d" ? 30 : 90;
-      return new Date(`${d}T00:00:00Z`).getTime() >= Date.now() - days * 86_400_000;
-    }
-    return d.startsWith(period); // "2026" | "2025" | "2024"
-  };
-  const filteredResolved = resolved.filter(
-    (r) => matches(r, reviewFilter) && inPeriod(r) && (!q || r.instrument.toUpperCase().includes(q)),
-  );
+  if (loading) return <LoadingCard what="candidates" />;
 
   return (
-    <div style={{ maxWidth: 1180, margin: "0 auto" }}>
-      {/* ── 1 · Header ── */}
-      <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 18, flexWrap: "wrap", marginBottom: 22 }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 6 }}>
-            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: "-0.02em" }}>Wyckoff ranges</h1>
-            <span style={{ ...mono, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-3)", paddingTop: 6 }}>
-              <Frame size={13} strokeWidth={2} />
-              {pending.length} to read · {watching.length} watching · {resolved.length} resolved
+    <>
+      {error && <ErrorCard message={error} />}
+
+      <SectionHeader
+        icon={<Lock size={13} strokeWidth={2} />}
+        title="At a decision point"
+        count={pending.length}
+        note="blind · reads lock on submit · ranked by urgency, then grade"
+      />
+
+      {(trackedOpen > 0 || awaitingBackfill > 0 || ageing > 0) && (
+        <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", margin: "0 0 12px", lineHeight: 1.6 }}>
+          {ageing > 0 && (
+            <span style={{ color: "var(--amber)" }}>
+              {ageing} setup{ageing === 1 ? " has" : "s have"} been here a week or more — decide or park {ageing === 1 ? "it" : "them"}.{" "}
             </span>
-          </div>
-          <p style={{ margin: 0, fontSize: 13, color: "var(--text-label)", fontWeight: 300, maxWidth: 620 }}>
-            Read the chart, lock your call before the range resolves. The engine&apos;s verdict stays
-            sealed server-side until the outcome exists — then both reads are revealed together.
-          </p>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-          <button
-            type="button"
-            onClick={runScanNow}
-            disabled={scanning}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 15px",
-              borderRadius: 9, border: "none", background: "var(--accent)", color: "var(--accent-on)",
-              fontSize: 13, fontWeight: 600, cursor: scanning ? "default" : "pointer",
-              boxShadow: "0 0 20px rgba(58,212,236,0.26)", opacity: scanning ? 0.6 : 1,
-              fontFamily: "'Sora', sans-serif",
-            }}
-          >
-            <RefreshCw size={15} strokeWidth={2} style={scanning ? { animation: "spin 1s linear infinite" } : undefined} />
-            {scanning ? "Scanning… (~1 min)" : "Run scan"}
-          </button>
-          {scanNote && (
-            <span style={{ ...mono, fontSize: 10, color: "var(--text-3)", maxWidth: 340, textAlign: "right" }}>{scanNote}</span>
           )}
-        </div>
-      </header>
-
-      {/* ── 2 · Benchmark ── */}
-      {score && <ScoreStrip score={score} passRate={passRate} />}
-
-      {error && (
-        <div className="card" style={{ padding: 16, marginBottom: 14, border: "1px solid var(--red-border)" }}>
-          <span style={{ ...mono, fontSize: 12, color: "var(--red)" }}>{error}</span>
-        </div>
+          silently tracking {trackedOpen} open range{trackedOpen === 1 ? "" : "s"} mid-box · {awaitingBackfill} older
+          breakout{awaitingBackfill === 1 ? "" : "s"} awaiting backfill — not readable (that read wouldn&apos;t be blind)
+        </p>
       )}
 
-      {loading ? (
-        <div className="card" style={{ padding: 48, textAlign: "center" }}>
-          <p style={{ ...mono, fontSize: 12, color: "var(--text-3)", margin: 0 }}>Loading candidates…</p>
-        </div>
+      {pending.length === 0 ? (
+        <EmptyState
+          text={
+            watching.length > 0
+              ? "Desk clear — everything at a decision point is triaged into Watching. A quiet day is the normal state; the daily scan repopulates this after each close."
+              : "No candidates at a decision point — a quiet day is the normal state. The daily scan repopulates this after each close."
+          }
+        />
       ) : (
         <>
-          {/* ── 3 · Watching — your triage, pinned ── */}
-          {watching.length > 0 && (
-            <WatchingSection rows={watching} onChanged={load} onChart={setChartId} />
-          )}
+          <Grid rows={live} onChart={setChartId} onChanged={reload} />
 
-          {/* ── 4 · Reading desk ── */}
-          <SectionHeader
-            icon={<Lock size={13} strokeWidth={2} />}
-            title="At a decision point"
-            count={pending.length}
-            note="blind · fresh candidates only · reads lock on submit"
-          />
-          {(trackedOpen > 0 || awaitingBackfill > 0) && (
-            <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", margin: "0 0 12px" }}>
-              silently tracking {trackedOpen} open range{trackedOpen === 1 ? "" : "s"} mid-box · {awaitingBackfill} older
-              breakout{awaitingBackfill === 1 ? "" : "s"} awaiting backfill — not readable (that read wouldn&apos;t be blind)
-            </p>
-          )}
-          {pending.length === 0 ? (
-            <EmptyState
-              text={
-                watching.length > 0
-                  ? "Desk clear — everything at a decision point is triaged above. A quiet day is the normal state; the daily scan repopulates this after each close."
-                  : "No candidates at a decision point — a quiet day is the normal state. The daily scan repopulates this after each close."
-              }
-            />
-          ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))", gap: 12, marginBottom: 30 }}>
-              {pending.map((row) => (
-                <CandidateCard key={row.id} row={row} onLocked={load} onChart={setChartId} onWatchChange={load} />
-              ))}
-            </div>
-          )}
-
-          {/* ── 5 · Resolved archive ── */}
-          <SectionHeader
-            icon={<Eye size={13} strokeWidth={2} />}
-            title="Resolved — revealed"
-            count={filteredResolved.length}
-            total={resolved.length}
-            note="your read vs engine vs what price did"
-            right={
-              resolved.length > 0 ? (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="filter instrument…"
-                    style={{
-                      ...mono, fontSize: 11, width: 130, padding: "7px 10px",
-                      borderRadius: 8, border: "1px solid var(--border)",
-                      background: "transparent", color: "var(--text-1)", outline: "none",
-                    }}
-                  />
-                  <select
-                    value={period}
-                    onChange={(e) => setPeriod(e.target.value)}
-                    style={{
-                      ...mono, fontSize: 11, padding: "7px 9px", borderRadius: 8,
-                      border: "1px solid var(--border)", background: "var(--bg-card, transparent)",
-                      color: "var(--text-1)", outline: "none", cursor: "pointer",
-                    }}
-                  >
-                    <option value="all">all time</option>
-                    <option value="30d">broke out ≤ 30d</option>
-                    <option value="90d">broke out ≤ 90d</option>
-                    <option value="2026">2026</option>
-                    <option value="2025">2025</option>
-                    <option value="2024">2024</option>
-                  </select>
-                  <div className="seg">
-                    {REVIEW_FILTERS.map((f) => (
-                      <button key={f} type="button" className={reviewFilter === f ? "on" : ""} onClick={() => setReviewFilter(f)}>
-                        {(f === "learnable" ? "Learnable" : f === "failures" ? "Failures" : f === "successes" ? "Successes" : "Everything") +
-                          ` ${tabCounts[f]}`}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : undefined
-            }
-          />
-          {resolved.length === 0 ? (
-            <EmptyState text="Nothing resolved yet — outcomes backfill 12 trading days after each breakout." />
-          ) : filteredResolved.length === 0 ? (
-            <EmptyState
-              small
-              text={
-                q
-                  ? `No ${reviewFilter} cases match "${search.trim()}".`
-                  : reviewFilter === "successes"
-                    ? `Engine successes: 0 of ${tabCounts.learnable} learnable cases so far — the engine's directional calls haven't landed yet. That's a data fact, not a bug; it IS the benchmark. See Everything (${tabCounts.everything}) for the full archive.`
-                    : reviewFilter === "failures"
-                      ? `Engine failures: 0 of ${tabCounts.learnable} learnable cases so far. See Everything (${tabCounts.everything}) for the full archive.`
-                      : `Learnable is empty: of ${tabCounts.everything} resolved cases, none has BOTH a decisive engine call (accum/distrib, not neutral) AND a directional outcome (up/down, not chop) on trusted volume. Neutral verdicts and chop resolutions are excluded by design — they teach nothing. Open Everything (${tabCounts.everything}) to browse the full archive.`
-              }
-            />
-          ) : (
-            <ResolvedTable rows={filteredResolved} onReview={setReviewId} />
+          {marginal.length > 0 && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, margin: "22px 0 11px" }}>
+                <span style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)" }}>
+                  Marginal · {marginal.length}
+                </span>
+                <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
+                  C and D grades — thin edges, no live test, or not much of a cause. Still readable.
+                </span>
+                <div style={{ flex: 1, height: 1, background: "var(--border-subtle)" }} />
+              </div>
+              <Grid rows={marginal} onChart={setChartId} onChanged={reload} dim />
+            </>
           )}
         </>
       )}
 
-      {reviewId && <ReviewDrawer id={reviewId} onClose={() => setReviewId(null)} />}
       {chartId && (
-        <LiveChartDrawer
-          id={chartId}
-          onClose={() => setChartId(null)}
-          onChanged={load}
-        />
+        <LiveChartDrawer id={chartId} onClose={() => setChartId(null)} onChanged={reload} />
       )}
-    </div>
-  );
-}
-
-/* ── Watching — the triage lanes ─────────────────────────────────────────────
-   Two lanes, one job: separate what you want in front of you TODAY from what
-   you'll get back to. Neither is a call on direction — the read below is still
-   the only thing that scores. Rows here survive the stale-open sweep and keep
-   their note, so coming back a week later doesn't mean starting cold. */
-
-const LANES = [
-  { key: "now", label: "Now", icon: <Zap size={12} strokeWidth={2} />, note: "immediate — read these first" },
-  { key: "later", label: "Later", icon: <Clock size={12} strokeWidth={2} />, note: "parked — come back to these" },
-] as const;
-
-function WatchingSection({ rows, onChanged, onChart }: {
-  rows: PendingRow[]; onChanged: () => void; onChart: (id: string) => void;
-}) {
-  const hits = rows.filter((r) => r.alertHitAt != null);
-  // Touched levels float to the top of their lane — that is the one thing here
-  // that changed on its own since you last looked.
-  const order = (a: PendingRow, b: PendingRow) =>
-    (b.alertHitAt ? 1 : 0) - (a.alertHitAt ? 1 : 0);
-  return (
-    <>
-      <SectionHeader
-        icon={<Star size={13} strokeWidth={2} />}
-        title="Watching"
-        count={rows.length}
-        note="your triage · protected from the sweep · alerts fire in the nightly digest"
-        right={
-          hits.length > 0 ? (
-            <span style={{
-              ...mono, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10.5,
-              padding: "4px 10px", borderRadius: 999,
-              border: "1px solid var(--accent)", color: "var(--accent)",
-            }}>
-              <BellRing size={12} strokeWidth={2} />
-              {hits.length} level{hits.length === 1 ? "" : "s"} touched
-            </span>
-          ) : undefined
-        }
-      />
-      {LANES.map((lane) => {
-        const laneRows = rows.filter((r) => r.watch === lane.key).sort(order);
-        if (!laneRows.length) return null;
-        return (
-          <div key={lane.key} style={{ marginBottom: 18 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 9px" }}>
-              <span style={{
-                ...mono, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10,
-                letterSpacing: "0.08em", textTransform: "uppercase",
-                color: lane.key === "now" ? "var(--accent)" : "var(--text-2)",
-              }}>
-                {lane.icon} {lane.label} · {laneRows.length}
-              </span>
-              <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>{lane.note}</span>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))", gap: 12 }}>
-              {laneRows.map((row) => (
-                <CandidateCard
-                  key={row.id}
-                  row={row}
-                  onLocked={onChanged}
-                  onChart={onChart}
-                  onWatchChange={onChanged}
-                />
-              ))}
-            </div>
-          </div>
-        );
-      })}
     </>
   );
 }
 
-/* ── Section header — one consistent pattern ────────────────────────────── */
-
-function SectionHeader({ icon, title, count, total, note, right }: {
-  icon: React.ReactNode; title: string; count: number; total?: number; note: string; right?: React.ReactNode;
+function Grid({ rows, onChart, onChanged, dim }: {
+  rows: Array<React.ComponentProps<typeof CandidateCard>["row"]>;
+  onChart: (id: string) => void;
+  onChanged: () => void;
+  dim?: boolean;
 }) {
+  if (rows.length === 0) return null;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 12px", flexWrap: "wrap" }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 14.5, fontWeight: 600, color: "var(--text-1)" }}>
-        {icon} {title}
-      </span>
-      <span style={{ ...mono, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: "1px solid var(--border-strong)", color: "var(--text-2)" }}>
-        {total != null && total !== count ? `${count} of ${total}` : count}
-      </span>
-      <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>{note}</span>
-      {right && <div style={{ marginLeft: "auto" }}>{right}</div>}
+    <div
+      style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))",
+        gap: 12, marginBottom: 24, opacity: dim ? 0.62 : 1,
+      }}
+    >
+      {rows.map((row) => (
+        <CandidateCard
+          key={row.id}
+          row={row}
+          onLocked={onChanged}
+          onChart={onChart}
+          onWatchChange={onChanged}
+        />
+      ))}
     </div>
-  );
-}
-
-function EmptyState({ text, small }: { text: string; small?: boolean }) {
-  return (
-    <div className="card" style={{ padding: small ? 26 : 40, textAlign: "center", marginBottom: 30 }}>
-      <Inbox size={18} strokeWidth={1.6} style={{ color: "var(--text-3)", marginBottom: 8 }} />
-      <p style={{ fontSize: 12.5, color: "var(--text-3)", margin: 0, maxWidth: 460, marginInline: "auto", lineHeight: 1.5 }}>{text}</p>
-    </div>
-  );
-}
-
-/* ── Resolved table — the reveal ────────────────────────────────────────── */
-
-function ResolvedTable({ rows, onReview }: { rows: ResolvedRow[]; onReview: (id: string) => void }) {
-  const th: React.CSSProperties = {
-    ...mono, textAlign: "left", fontSize: 9.5, letterSpacing: "0.12em", textTransform: "uppercase",
-    color: "var(--text-3)", fontWeight: 500, padding: "10px 13px", borderBottom: "1px solid var(--border-subtle)",
-    whiteSpace: "nowrap",
-  };
-  const td: React.CSSProperties = { ...mono, padding: "10px 13px", color: "var(--text-2)", whiteSpace: "nowrap" };
-  return (
-    <div className="card" style={{ padding: 0, overflowX: "auto", marginBottom: 30 }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-        <thead>
-          <tr>
-            <th style={th}>Instrument</th>
-            <th style={th}>Box</th>
-            <th style={{ ...th, textAlign: "right" }}>Bars</th>
-            <th style={{ ...th, textAlign: "right" }}>Context</th>
-            <th style={th}>Test</th>
-            <th style={th}>Broke out</th>
-            <th style={th}>Outcome</th>
-            <th style={th}>Your read</th>
-            <th style={th}>Engine</th>
-            <th style={th}>Blind</th>
-            <th style={th} />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr
-              key={r.id}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-card-2, var(--border-subtle))")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              style={{ borderBottom: "1px solid var(--border-faint, var(--border-subtle))", transition: "background 0.1s" }}
-            >
-              <td style={{ ...td, color: "var(--text-1)", fontWeight: 500 }}>
-                {r.instrument}
-                {SUSPECT_VOLUME.has(r.instrument) && (
-                  <AlertTriangle size={11} strokeWidth={2} style={{ color: "var(--amber)", marginLeft: 5, verticalAlign: "-1px" }} aria-label="Yahoo volume unreliable" />
-                )}
-                {(() => {
-                  const name = instrumentName(r.instrument);
-                  const cfd = instrumentInfo(r.instrument)?.executeSymbol;
-                  const extra = [
-                    name !== r.instrument ? name : null,
-                    cfd && cfd !== r.instrument ? cfd : null,
-                  ].filter(Boolean).join(" · ");
-                  return extra ? (
-                    <span style={{ ...mono, fontSize: 9.5, color: "var(--text-3)", fontWeight: 400, marginLeft: 6 }}>
-                      {extra}
-                    </span>
-                  ) : null;
-                })()}
-              </td>
-              <td style={td}>{boxFmt(r)}</td>
-              <td style={{ ...td, textAlign: "right" }}>{r.barsInRange}</td>
-              <td style={{ ...td, textAlign: "right" }}>{ctxFmt(r.contextPct)}</td>
-              <td style={td}>{r.terminalTest}</td>
-              <td style={td}>{day(r.breakoutDate)}</td>
-              <td style={{ ...td, color: OUTCOME_COLOR[r.outcome] ?? "var(--text-2)", fontWeight: 500 }}>{r.outcome.toUpperCase()}</td>
-              <VerdictCell verdict={r.traderVerdict} outcome={r.outcome} />
-              <VerdictCell verdict={r.engineVerdict} outcome={r.outcome} />
-              <td style={{ ...td, color: "var(--text-3)" }}>{r.loggedBlind ? "✓" : "seed"}</td>
-              <td style={{ padding: "8px 13px" }}>
-                <button
-                  type="button"
-                  onClick={() => onReview(r.id)}
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px",
-                    borderRadius: 7, cursor: "pointer", fontSize: 11, fontWeight: 600,
-                    fontFamily: "'Sora', sans-serif", background: "transparent",
-                    color: "var(--text-1)", border: "1px solid var(--border-strong)",
-                  }}
-                >
-                  <PlaySquare size={12} strokeWidth={2} />
-                  Review
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function VerdictCell({ verdict, outcome }: { verdict: string | null; outcome: string }) {
-  if (!verdict) return <td style={{ ...mono, padding: "10px 13px", color: "var(--text-3)" }}>—</td>;
-  const hit = verdictHits(verdict, outcome);
-  return (
-    <td style={{ ...mono, padding: "10px 13px", color: VERDICT_COLOR[verdict] ?? "var(--text-2)", whiteSpace: "nowrap" }}>
-      {verdictLabel(verdict)}{" "}
-      <span style={{ color: hit ? "var(--green)" : "var(--red)" }}>{hit ? "✓" : "✗"}</span>
-    </td>
   );
 }

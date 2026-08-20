@@ -12,6 +12,7 @@
 // upsert rather than duplicate — the EA can safely re-send during catchup.
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { matchReadToTrade, planDrift } from '@/lib/wyckoff/link'
 import {
   directionFromOrderType,
   normaliseSymbol,
@@ -86,6 +87,69 @@ async function getAccountByBearer(req: NextRequest) {
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null
   if (!token) return null
   return db.account.findFirst({ where: { apiKey: token, isActive: true } })
+}
+
+/**
+ * Did this fill come from a Wyckoff read you had already locked?
+ *
+ * There is no button — you lock the read on /wyckoff, place the order in MT4,
+ * and the EA's open event lands here. We look for a read you committed to on
+ * the same instrument, in the right direction, inside a two-week window, and
+ * stamp the trade with it. That is what finally connects "was my read right"
+ * to "did I make money", and exposes the case nobody wants to look at: trading
+ * against your own locked call.
+ *
+ * Returns {} when nothing matches confidently. A missing link costs a row of
+ * analysis; a WRONG link silently corrupts the adherence numbers this exists
+ * to produce — so it fails open, never guesses.
+ */
+async function wyckoffReadLink(params: {
+  brokerSymbol: string
+  direction: 'Long' | 'Short'
+  openedAt: Date
+  plannedFrom?: { entryPrice: number | null; slPrice: number | null }
+}) {
+  try {
+    const reads = await (db as any).scannerCandidate.findMany({
+      where: {
+        traderVerdict: { not: null },
+        outcome: null,
+        traderReadAt: { not: null, gte: new Date(Date.now() - 14 * 86_400_000) },
+      },
+      select: {
+        id: true, instrument: true, traderVerdict: true, traderReadAt: true,
+        traderEntry: true, traderStop: true,
+      },
+      take: 200,
+    })
+    if (!reads.length) return {}
+
+    const hit = matchReadToTrade(reads, {
+      brokerSymbol: params.brokerSymbol,
+      direction: params.direction,
+      openedAt: params.openedAt,
+    })
+    if (!hit) return {}
+
+    const read = reads.find((r: any) => r.id === hit.candidateId)
+    const drift = planDrift({
+      plannedEntry: read?.traderEntry ?? null,
+      plannedStop: read?.traderStop ?? null,
+      actualEntry: params.plannedFrom?.entryPrice ?? null,
+      actualStop: params.plannedFrom?.slPrice ?? null,
+    })
+    return {
+      candidateId: hit.candidateId,
+      readAdherence: hit.adherence,
+      entryDriftR: drift.entryDriftR ?? undefined,
+      stopWidenedR: drift.stopWidenedR ?? undefined,
+      _reason: hit.reason,
+    }
+  } catch {
+    // Linking is an enhancement. If the columns are not pushed yet, or the
+    // lookup fails, the trade must still be logged — never lose a fill over it.
+    return {}
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -212,12 +276,28 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // Only realtime fills are candidates for a read link — a catchup sweep
+        // replaying months of history would hand old trades to recent reads.
+        const link =
+          e.source === 'catchup'
+            ? {}
+            : await wyckoffReadLink({
+                brokerSymbol: e.symbol,
+                direction,
+                openedAt: openDate,
+                plannedFrom: { entryPrice: e.entryPrice, slPrice: e.slPrice },
+              })
+        const { _reason, ...linkData } = link as any
+
         const trade = await (db.trade.upsert as any)({
           where: { accountId_ticket: { accountId: account.id, ticket: e.ticket } },
           create: {
             accountId: account.id,
             ticket: e.ticket,
-            source: e.source === 'catchup' ? 'mt4-catchup' : 'mt4',
+            ...linkData,
+            source: linkData.candidateId
+              ? 'wyckoff-read'
+              : e.source === 'catchup' ? 'mt4-catchup' : 'mt4',
             date: openDate,
             openTimeUtc: openDate,
             pair,
@@ -246,7 +326,10 @@ export async function POST(req: NextRequest) {
             lotSize: e.lotSize,
           },
         })
-        results.push({ ticket: e.ticket, ok: true, tradeId: trade.id, action: 'open' })
+        results.push({
+          ticket: e.ticket, ok: true, tradeId: trade.id, action: 'open',
+          ...(linkData.candidateId && { linkedRead: linkData.readAdherence, why: _reason }),
+        })
       } else if (e.event === 'close') {
         if (Number.isFinite(e.accountBalance as number)) latestBalance = e.accountBalance as number
         if (Number.isFinite(e.accountEquity as number)) latestEquity = e.accountEquity as number

@@ -20,6 +20,9 @@ import {
   Zap, Clock, X, BellRing, Bell, StickyNote,
 } from "lucide-react";
 import { SUSPECT_VOLUME, instrumentInfo, executeCall, instrumentName } from "@/lib/wyckoff/basket";
+import { GradeChip, ReasonChip } from "./desk";
+import TradedStrip, { type LinkedTrade } from "./TradedStrip";
+import CardChart, { type SparkBar } from "./CardChart";
 
 export interface PendingRow {
   id: string;
@@ -46,6 +49,21 @@ export interface PendingRow {
   alertHitAt?: string | null;
   alertHitDate?: string | null;
   readable?: boolean;
+  // Structural grade + timing, added with the desk redesign. All optional:
+  // rows scanned before grading existed carry nulls and must still render.
+  grade?: string | null;
+  gradeScore?: number | null;
+  gradeNotes?: string[] | null;
+  touchesHi?: number | null;
+  touchesLo?: number | null;
+  surfacedAt?: string | null;
+  surfacedBarDate?: string | null;
+  surfacedReason?: string | null;
+  testBarDate?: string | null;
+  // Trades auto-linked to this read by the EA open handler (lib/wyckoff/link.ts).
+  trades?: LinkedTrade[] | null;
+  // Compact bar window written at scan time for the card thumbnail.
+  sparkBars?: SparkBar[] | null;
 }
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
@@ -193,31 +211,42 @@ export default function CandidateCard({
         </span>
       </div>
 
-      {/* ── Range rail ── */}
-      <div style={{ padding: "14px 16px 0" }}>
-        <div style={{ position: "relative", height: 6, borderRadius: 3, background: "var(--bg-inset, var(--border-subtle))" }}>
-          <div style={{ position: "absolute", left: 0, top: -3, bottom: -3, width: 2, borderRadius: 1, background: "var(--text-3)" }} />
-          <div style={{ position: "absolute", right: 0, top: -3, bottom: -3, width: 2, borderRadius: 1, background: "var(--text-3)" }} />
-          {/* Alert level plotted on the rail — where it sits relative to the box
-              is the fastest possible answer to "what am I waiting for?" */}
-          {row.alertPrice != null && (() => {
-            const span = row.rangeHi - row.rangeLo || 1;
-            const pct = Math.max(0, Math.min(1, (row.alertPrice - row.rangeLo) / span));
-            return (
-              <div
-                title={`alert ${px(row.alertPrice, row.rangeHi)}`}
-                style={{
-                  position: "absolute", left: `${pct * 100}%`, top: -5, bottom: -5, width: 2,
-                  marginLeft: -1, borderRadius: 1, background: hit ? "var(--accent)" : "var(--text-2)",
-                }}
-              />
-            );
-          })()}
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
-          <span style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>{px(row.rangeLo, row.rangeHi)}</span>
+      {/* ── Grade + why this card is in front of you ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", padding: "9px 16px 0" }}>
+        <GradeChip
+          grade={row.grade}
+          score={row.gradeScore}
+          title={row.gradeNotes?.length ? row.gradeNotes.join(" · ") : undefined}
+        />
+        <ReasonChip reason={row.surfacedReason} />
+        {row.surfacedBarDate && (
+          <span
+            title="when this range first reached a decision point"
+            style={{ ...mono, fontSize: 9.5, color: "var(--text-3)", marginLeft: "auto" }}
+          >
+            surfaced {day(row.surfacedBarDate)}
+          </span>
+        )}
+      </div>
+
+      {/* ── The tape ──
+          Replaces the old range rail. That rail was a one-line abstraction of
+          exactly this — box edges and an alert tick — drawn because there was
+          no chart. Now there is one, and triage happens by eye. */}
+      <div style={{ padding: "10px 12px 0" }}>
+        <CardChart
+          bars={row.sparkBars}
+          rangeLo={row.rangeLo}
+          rangeHi={row.rangeHi}
+          rangeStartDate={row.rangeStartDate}
+          breakoutDate={row.breakoutDate}
+          alertPrice={row.alertPrice}
+          suspectVolume={suspect}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
+          <span style={{ ...mono, fontSize: 10.5, color: "var(--text-2)" }}>{px(row.rangeLo, row.rangeHi)}</span>
           <span style={{ ...mono, fontSize: 9.5, color: "var(--text-3)", alignSelf: "center" }}>{row.barsInRange} bars</span>
-          <span style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>{px(row.rangeHi, row.rangeHi)}</span>
+          <span style={{ ...mono, fontSize: 10.5, color: "var(--text-2)" }}>{px(row.rangeHi, row.rangeHi)}</span>
         </div>
       </div>
 
@@ -408,6 +437,8 @@ export default function CandidateCard({
         )}
         {err && <p style={{ ...mono, fontSize: 10.5, color: "var(--red)", margin: "7px 0 0" }}>{err}</p>}
       </div>
+
+      <TradedStrip trades={row.trades} />
     </div>
   );
 }

@@ -10,7 +10,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { pipSize } from '@/lib/mt4'
-import { runTradeScanJob } from '@/app/api/cron/trade-scan/route'
 
 export const dynamic = 'force-dynamic'
 // The trade-scan job now runs THREE lanes (trend sweep + Wyckoff range scan
@@ -41,7 +40,16 @@ export async function GET(req: NextRequest) {
   let tradeScanError: string | null = null
 
   try {
-    tradeScan = await runTradeScanJob(req)
+    const tradeScanUrl = new URL('/api/cron/trade-scan', req.url)
+    tradeScanUrl.search = req.nextUrl.search
+    const res = await fetch(tradeScanUrl, {
+      headers: { authorization: auth },
+      cache: 'no-store',
+    })
+    tradeScan = await res.json().catch(() => null)
+    if (!res.ok) {
+      throw new Error((tradeScan as any)?.error ?? `trade scan failed (${res.status})`)
+    }
   } catch (err) {
     console.error('[idea-outcomes] trade scan failed:', err)
     tradeScanError = err instanceof Error ? err.message : String(err)

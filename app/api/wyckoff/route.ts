@@ -45,6 +45,19 @@ const PENDING_SELECT = {
   // Triage is trader-side data — safe before resolution, and the whole point
   // is that it survives the range falling out of the fresh list.
   fresh: true,
+  // Structural grade + timing. Safe before resolution: the grade is built only
+  // from facts already in this select (terminal test, context, bars) plus the
+  // boundary-touch counts, and never from engineVerdict. See lib/wyckoff/grade.ts.
+  grade: true,
+  gradeScore: true,
+  gradeNotes: true,
+  touchesHi: true,
+  touchesLo: true,
+  surfacedAt: true,
+  surfacedBarDate: true,
+  surfacedReason: true,
+  testBarDate: true,
+  sparkBars: true,
   watch: true,
   watchNote: true,
   watchAt: true,
@@ -63,6 +76,45 @@ function isReadable(r: { status: string; fresh: boolean; breakoutDate: Date | nu
     (r.status === "open" && r.fresh === true) ||
     (r.status === "broken" && r.breakoutDate != null && new Date(r.breakoutDate) >= brokenWindow())
   );
+}
+
+/**
+ * Attach the trade you actually took to the read it came from.
+ *
+ * Trade.candidateId is a plain column rather than a declared Prisma relation,
+ * so there is no `include` to lean on — one query for every id on the page,
+ * then a map. Cheap, and it keeps ScannerCandidate free of a back-relation it
+ * does not otherwise need.
+ *
+ * Safe before resolution: this returns YOUR OWN trade, not anything the engine
+ * knows. Nothing here touches engineVerdict.
+ */
+async function attachTrades<T extends { id: string }>(rows: T[]): Promise<T[]> {
+  if (!rows.length) return rows
+  try {
+    const trades = await (db as any).trade.findMany({
+      where: { candidateId: { in: rows.map((r) => r.id) } },
+      select: {
+        id: true, candidateId: true, ticket: true, pair: true, direction: true,
+        entryPrice: true, slPrice: true, outcome: true, resultR: true,
+        profitCcy: true, openTimeUtc: true, closeTimeUtc: true,
+        readAdherence: true, entryDriftR: true, stopWidenedR: true,
+        ruleViolations: true, behaviorFlags: true,
+      },
+      orderBy: { openTimeUtc: 'asc' },
+    })
+    if (!trades.length) return rows
+    const byCandidate = new Map<string, any[]>()
+    for (const t of trades) {
+      const list = byCandidate.get(t.candidateId) ?? []
+      list.push(t)
+      byCandidate.set(t.candidateId, list)
+    }
+    return rows.map((r) => ({ ...r, trades: byCandidate.get(r.id) ?? [] }))
+  } catch {
+    // Columns not pushed yet — the page must still render.
+    return rows
+  }
 }
 
 export async function GET() {
@@ -145,10 +197,16 @@ export async function GET() {
       where: { traderVerdict: "pass", loggedBlind: true },
     });
 
+    // Freshness readout for the header strip. max(updatedAt) is when the
+    // scanner last wrote anything — if that is days old, the desk is showing a
+    // stale market and the trader needs to know before reading a chart.
+    const lastWrite = await (db as any).scannerCandidate.aggregate({ _max: { updatedAt: true } });
+
     return NextResponse.json({
-      pending,
-      watching,
-      resolved,
+      lastScanAt: lastWrite?._max?.updatedAt ?? null,
+      pending: await attachTrades(pending),
+      watching: await attachTrades(watching),
+      resolved: await attachTrades(resolved),
       trackedOpen,
       awaitingBackfill,
       passRate: { total: readsTotal, pass: readsPass },
