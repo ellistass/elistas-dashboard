@@ -95,6 +95,17 @@ if (process.env.NEXTAUTH_SECRET && process.env.NEXTAUTH_SECRET.length < 32) {
 const missingWarnings = warnings.filter(isMissingOrPlaceholder)
 
 if (missing.length || invalid.length) {
+  if (process.env.VERCEL_ENV && process.env.VERCEL_ENV !== 'production') {
+    console.warn(`Production preflight skipped for ${process.env.VERCEL_ENV} deployment.`)
+    if (missing.length) {
+      console.warn(`Missing or placeholder production env vars: ${missing.join(', ')}`)
+    }
+    if (invalid.length) {
+      console.warn(`Invalid production env vars: ${invalid.join('; ')}`)
+    }
+    process.exit(0)
+  }
+
   console.error('\nProduction preflight failed.')
   if (missing.length) {
     console.error(`Missing or placeholder env vars: ${missing.join(', ')}`)
