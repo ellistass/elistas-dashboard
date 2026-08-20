@@ -240,6 +240,8 @@ export default function CandidateCard({
           rangeHi={row.rangeHi}
           rangeStartDate={row.rangeStartDate}
           breakoutDate={row.breakoutDate}
+          surfacedBarDate={row.surfacedBarDate}
+          testBarDate={row.testBarDate}
           alertPrice={row.alertPrice}
           suspectVolume={suspect}
         />

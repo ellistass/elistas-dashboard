@@ -17,6 +17,8 @@
 
 import { useEffect, useState } from "react";
 import { volumeView, isPlottableTag } from "@/lib/chart/volume";
+import { aggregateBars, indexForDate, TIMEFRAME_LABEL, type Timeframe } from "@/lib/chart/timeframe";
+import { describePace, type PaceRead } from "@/lib/wyckoff/pace";
 import { X, AlertTriangle, ExternalLink, Bell, BellRing, Crosshair, Lock, ShieldCheck } from "lucide-react";
 
 interface Bar { o: number; h: number; l: number; c: number; v: number; date: string }
@@ -45,6 +47,11 @@ interface LiveChart {
   breakoutIdx: number | null;
   springIdx: number | null;
   upthrustIdx: number | null;
+  /** Pace WITHOUT the directional lean — the API strips it for live rows. */
+  pace?: Omit<PaceRead, "lean"> | null;
+  surfacedBarDate: string | null;
+  surfacedReason: string | null;
+  testBarDate: string | null;
 }
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
@@ -74,6 +81,7 @@ export default function LiveChartDrawer({
   const [saving, setSaving] = useState(false);
   const [alertErr, setAlertErr] = useState<string | null>(null);
   const [verdict, setVerdict] = useState<"accum" | "distrib" | "pass" | null>(null);
+  const [tf, setTf] = useState<Timeframe>("D");
   const [readBusy, setReadBusy] = useState(false);
   const [readErr, setReadErr] = useState<string | null>(null);
   // Effort marks are an AID, not a leak: ABSORB/CLIMAX use only bars already on
@@ -235,13 +243,54 @@ export default function LiveChartDrawer({
               {alertErr && <span style={{ ...mono, fontSize: 10.5, color: "var(--red)" }}>{alertErr}</span>}
             </div>
 
+            {/* Timeframe. Weekly and monthly are derived from the daily
+                series already loaded — first open, max high, min low, last
+                close, summed volume — so switching costs nothing and works on
+                every case, including ones resolved months ago. Intraday is a
+                different problem: a daily bar cannot be split, so it would need
+                its own fetch and could never exist for older cases. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 9 }}>
+              <div className="seg" style={{ display: "inline-flex" }}>
+                {(["D", "W", "M"] as const).map((t) => (
+                  <button key={t} type="button" className={tf === t ? "on" : ""} onClick={() => setTf(t)}>
+                    {TIMEFRAME_LABEL[t]}
+                  </button>
+                ))}
+              </div>
+              <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
+                {tf === "D"
+                  ? "daily bars as scanned"
+                  : "rolled up from the daily series — markers keep their place"}
+              </span>
+            </div>
+
             <LiveChartSvg
               data={data}
+              tf={tf}
               alert={alert}
               arming={arming}
               showEffort={showEffort}
               onPick={(p) => saveAlert(p)}
             />
+            {/* Pace — effort and result in TIME. Stated as an asymmetry, never
+                as a direction: naming a side here would hand over a verdict
+                before you have read the chart. Most useful precisely when this
+                instrument's volume feed is one of the unreliable ones. */}
+            {data.pace?.ratio != null && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                <span style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)" }}>
+                  pace
+                </span>
+                <span style={{ ...mono, fontSize: 11, color: "var(--text-1)" }}>
+                  {describePace({ ...data.pace, lean: null })}
+                </span>
+                <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
+                  bars per point — up {data.pace.upBarsPerUnit?.toPrecision(3)} · down {data.pace.dnBarsPerUnit?.toPrecision(3)}
+                  {data.suspectVolume && " · time still works where this feed's volume does not"}
+                </span>
+              </div>
+            )}
+
             <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
               <span style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>
                 <span style={{ color: "var(--text-3)" }}>confirm on TradingView: </span>
@@ -363,13 +412,33 @@ function SmallBtn({ children, onClick, disabled, active }: {
   );
 }
 
-function LiveChartSvg({ data, alert, arming, showEffort, onPick }: {
-  data: LiveChart; alert: number | null; arming: boolean; showEffort: boolean;
+function LiveChartSvg({ data, tf, alert, arming, showEffort, onPick }: {
+  data: LiveChart; tf: Timeframe; alert: number | null; arming: boolean; showEffort: boolean;
   onPick: (price: number) => void;
 }) {
   const W = 900, PH = 300, VH = 90, GAP = 14, PAD = 44;
   const H = PH + GAP + VH;
-  const { bars, rangeLo, rangeHi, rangeStartIdx, breakoutIdx, springIdx, upthrustIdx } = data;
+  const { rangeLo, rangeHi } = data;
+
+  // Every index the API sends (range start, breakout, spring, upthrust) points
+  // into the DAILY series. Rolling up invalidates all of them, so they are
+  // converted to dates first and re-located in the aggregated series. Without
+  // this, switching to weekly silently moves the range box and the markers to
+  // whatever happens to sit at the old index.
+  const dailyBars = data.bars;
+  const bars = tf === "D" ? dailyBars : aggregateBars(dailyBars, tf);
+  const dateAt = (i: number | null | undefined): string | null =>
+    i != null && i >= 0 && dailyBars[i] ? dailyBars[i].date : null;
+  const reloc = (i: number | null | undefined): number | null => {
+    if (i == null || i < 0) return null;
+    if (tf === "D") return i;
+    const j = indexForDate(bars, tf, dateAt(i));
+    return j < 0 ? null : j;
+  };
+  const rangeStartIdx = Math.max(0, reloc(data.rangeStartIdx) ?? 0);
+  const breakoutIdx = reloc(data.breakoutIdx);
+  const springIdx = reloc(data.springIdx);
+  const upthrustIdx = reloc(data.upthrustIdx);
   const n = bars.length;
   const pMin = Math.min(...bars.map((b) => b.l), rangeLo);
   const pMax = Math.max(...bars.map((b) => b.h), rangeHi);
@@ -450,6 +519,33 @@ function LiveChartSvg({ data, alert, arming, showEffort, onPick }: {
         ))}
         <line x1={x(rangeStartIdx)} y1={y(rangeHi)} x2={x(boxEnd)} y2={y(rangeHi)} stroke="var(--accent)" strokeWidth={1} strokeDasharray="4 3" opacity={0.7} />
         <line x1={x(rangeStartIdx)} y1={y(rangeLo)} x2={x(boxEnd)} y2={y(rangeLo)} stroke="var(--accent)" strokeWidth={1} strokeDasharray="4 3" opacity={0.7} />
+
+        {/* ── Where the scanner spoke ──
+            The bar this landed on your desk. The distance from this line to
+            the breakout is the warning you actually got. Drawn rather than
+            tabulated, because "was it early or late" is a question the eye
+            answers faster than a column of numbers does. Amber when the marker
+            sits at or past the breakout: reading it then was never a live
+            decision. */}
+        {(() => {
+          if (!data.surfacedBarDate) return null;
+          const key = data.surfacedBarDate.slice(0, 10);
+          const si = bars.findIndex((b) => b.date.slice(0, 10) === key);
+          if (si < 0) return null;
+          const late = breakoutIdx != null && si >= breakoutIdx;
+          const col = late ? "var(--amber)" : "var(--accent)";
+          const lead = breakoutIdx != null ? breakoutIdx - si : null;
+          return (
+            <g pointerEvents="none">
+              <line x1={x(si)} y1={0} x2={x(si)} y2={PH + GAP + VH} stroke={col} strokeWidth={1} strokeDasharray="3 3" opacity={0.75} />
+              <polygon points={`${x(si) - 4},0 ${x(si) + 4},0 ${x(si)},6`} fill={col} />
+              <text x={x(si) + 6} y={11} fontSize={9} fill={col} fontFamily="'DM Mono', monospace">
+                {late ? "surfaced — already broke out" : lead != null ? `surfaced · ${lead} bars before the break` : "surfaced"}
+              </text>
+            </g>
+          );
+        })()}
+
         {bars.map((b, i) => {
           const up = b.c >= b.o;
           const col = up ? "var(--green)" : "var(--red)";

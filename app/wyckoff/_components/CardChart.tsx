@@ -32,6 +32,8 @@ export default function CardChart({
   rangeHi,
   rangeStartDate,
   breakoutDate,
+  surfacedBarDate,
+  testBarDate,
   alertPrice,
   suspectVolume,
 }: {
@@ -40,6 +42,10 @@ export default function CardChart({
   rangeHi: number;
   rangeStartDate?: string | null;
   breakoutDate?: string | null;
+  /** The bar on which the scanner first put this in front of you. */
+  surfacedBarDate?: string | null;
+  /** The bar the spring or upthrust printed on. */
+  testBarDate?: string | null;
   alertPrice?: number | null;
   suspectVolume?: boolean;
 }) {
@@ -129,6 +135,33 @@ export default function CardChart({
           points={bars.map((_, i) => `${x(i)},${vy(vol.ma[i])}`).join(" ")}
         />
       )}
+
+      {/* ── Where the scanner spoke ──
+          The whole early-or-late question, answered by eye. The line marks the
+          bar this landed on your desk; the gap between it and the breakout IS
+          the warning you got. A marker sitting on top of the breakout means
+          reading it was never a live decision. */}
+      {(() => {
+        const si = dateIdx(surfacedBarDate);
+        if (si < 0) return null;
+        const late = boxEnd >= 0 && si >= boxEnd;
+        const col = late ? "var(--amber)" : "var(--accent)";
+        return (
+          <g>
+            <line x1={x(si)} y1={0} x2={x(si)} y2={PH} stroke={col} strokeWidth={0.9} strokeDasharray="2 2" opacity={0.85} />
+            <polygon points={`${x(si) - 3},0 ${x(si) + 3},0 ${x(si)},4.5`} fill={col} />
+          </g>
+        );
+      })()}
+
+      {/* The terminal test — the classic trigger. Seeing it next to the
+          surfaced marker shows whether you met the setup before or after its
+          own signal printed. */}
+      {(() => {
+        const ti = dateIdx(testBarDate);
+        if (ti < 0) return null;
+        return <circle cx={x(ti)} cy={PH - 3} r={2} fill="var(--text-1)" opacity={0.75} />;
+      })()}
 
       {alertPrice != null && alertPrice >= pMin && alertPrice <= pMax && (
         <line x1={0} y1={y(alertPrice)} x2={W} y2={y(alertPrice)} stroke="var(--accent)" strokeWidth={0.8} strokeDasharray="1 3" />

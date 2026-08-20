@@ -21,6 +21,7 @@ import { db } from "@/lib/db";
 import { BASKET } from "@/lib/wyckoff/basket";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { buildReview, SUSPECT_VOLUME } from "@/lib/wyckoff/review";
+import { paceRead, paceAgreesWith } from "@/lib/wyckoff/pace";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -69,8 +70,19 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // Effort/result measured in TIME rather than volume. Included in full here —
+  // lean and all — because this route serves resolved cases only, so a
+  // directional inference cannot contaminate a live read.
+  //
+  // Worth the most on instruments where SUSPECT_VOLUME makes the engine's
+  // volume-based verdict unreliable: pace needs only price and time, so it is
+  // the better witness exactly where the engine is weakest.
+  const pace = paceRead(comp.bars as any, comp.rangeStartIdx, comp.breakoutIdx);
+
   return NextResponse.json({
     ok: true,
+    pace,
+    paceAgrees: paceAgreesWith(pace, row.engineVerdict),
     instrument: row.instrument,
     suspectVolume: SUSPECT_VOLUME.has(row.instrument),
     rangeLo: row.rangeLo,

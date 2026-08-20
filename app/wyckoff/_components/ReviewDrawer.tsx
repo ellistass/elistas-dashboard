@@ -37,6 +37,11 @@ interface ReviewData {
   dnEffortPerPoint: number | null;
   ratio: number | null;
   runningRatio: (number | null)[];
+  pace?: {
+    ratio: number | null; upBarsPerUnit: number | null; dnBarsPerUnit: number | null;
+    spreadRatio: number | null; lean: "supply" | "demand" | "balanced" | null;
+  } | null;
+  paceAgrees?: boolean | null;
 }
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
@@ -135,6 +140,8 @@ export default function ReviewDrawer({ id, onClose }: { id: string; onClose: () 
               </span>
               <RunningRatio data={data} visible={visible} />
             </div>
+
+            <PacePanel data={data} />
 
             <Summary data={data} visible={visible} />
           </>
@@ -413,6 +420,48 @@ function Summary({ data, visible }: { data: ReviewData; visible: number }) {
       <p style={{ margin: 0, fontSize: 12.5, color: done ? "var(--text-1)" : "var(--text-3)", lineHeight: 1.55 }}>
         {done ? q : "Step through to the end, then sit with the question…"}
       </p>
+    </div>
+  );
+}
+
+
+/* -- Pace ------------------------------------------------------------------
+   The engine measures effort in volume. This measures it in time: bars spent
+   per point of advance versus per point of decline. Same question, an input
+   that is never broken.
+
+   Shown in full here -- direction included -- because this drawer serves
+   resolved cases only. The disagreement row is the interesting one: when the
+   volume feed is unreliable, pace is the better witness, and two methods
+   parting company deserves more attention than either agreeing with itself. */
+function PacePanel({ data }: { data: ReviewData }) {
+  const p = data.pace;
+  if (!p || p.ratio == null) return null;
+  const leanColor =
+    p.lean === "supply" ? "var(--red)" : p.lean === "demand" ? "var(--green)" : "var(--text-2)";
+  const disagrees = data.paceAgrees === false;
+
+  return (
+    <div className="card" style={{ padding: "14px 18px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <span style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)" }}>
+          pace · effort in time
+        </span>
+        <span style={{ ...mono, fontSize: 15, fontWeight: 500, color: leanColor }}>
+          {p.lean === "supply" ? "SUPPLY" : p.lean === "demand" ? "DEMAND" : "BALANCED"}
+        </span>
+        <span style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>ratio {p.ratio}</span>
+        <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
+          bars per point — up {p.upBarsPerUnit?.toPrecision(3)} · down {p.dnBarsPerUnit?.toPrecision(3)}
+          {p.spreadRatio != null && ` · declines ${p.spreadRatio}× the spread`}
+        </span>
+      </div>
+      {disagrees && (
+        <p style={{ ...mono, fontSize: 10.5, color: "var(--amber)", margin: "9px 0 0", lineHeight: 1.55 }}>
+          pace and the volume engine disagree here
+          {data.suspectVolume && " — and this instrument's volume feed is one of the unreliable ones, so pace is the better witness"}
+        </p>
+      )}
     </div>
   );
 }

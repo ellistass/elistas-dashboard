@@ -483,3 +483,68 @@ model ScannerCandidate {
   @@index([grade, fresh])
   @@map("scanner_candidates")
 }
+
+
+// ── Practice ─────────────────────────────────────────────────────────────────
+// Deliberate practice, kept in its OWN tables. A simulated fill must never
+// reach the Trade table that computes live P&L — mixing them is how a journal
+// stops being trustworthy. Same field shapes as the live side, so the same
+// breakdowns can run over both and be read against each other.
+model PracticeRun {
+  id           String         @id @default(cuid())
+  createdAt    DateTime       @default(now())
+  importedAt   DateTime       @default(now())
+  source       String                              // "trainer" | "replay" | "manual"
+  trainerRunId String?                             // the trainer's own run id, when it has one
+  label        String
+  notes        String?
+  cases        PracticeCase[]
+
+  @@unique([source, trainerRunId])
+  @@index([source, importedAt])
+  @@map("practice_runs")
+}
+
+model PracticeCase {
+  id               String       @id @default(cuid())
+  runId            String
+  run              PracticeRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // The trainer's stable identity (sym|ctx|lo|hi) — re-importing the same
+  // export updates rather than duplicating.
+  caseKey          String
+  seq              Int?
+  instrument       String
+  direction        String?
+  entry            Float?
+  stop             Float?
+  orderKind        String?
+  riskPct          Float?
+  rrBoundary       Float?
+  rrProjection     Float?
+  fillBar          Int?
+  fillType         String?
+  result           String?                          // win | loss | be
+  resultR          Float?
+  maeR             Float?
+  mfeR             Float?
+  // Context the trainer captured at entry — this is what makes practice
+  // comparable to live reads rather than just a P&L list.
+  barsStepped      Int?
+  springsAtEntry   Int?
+  upthrustsAtEntry Int?
+  stoppingAction   Boolean?
+  volRatioAtEntry  Float?
+  erRatioAtEntry   Float?
+  erVerdictAtEntry String?
+  engineVerdict    String?
+  marketOutcome    String?                          // up | down | chop
+  ctxPct           Float?
+  bandPct          Float?
+  aids             String?                          // which chart aids were on
+  closedAt         DateTime?
+
+  @@unique([runId, caseKey])
+  @@index([instrument])
+  @@index([runId])
+  @@map("practice_cases")
+}

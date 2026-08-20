@@ -21,6 +21,7 @@ import { db } from "@/lib/db";
 import { BASKET } from "@/lib/wyckoff/basket";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { buildLiveChart, SUSPECT_VOLUME } from "@/lib/wyckoff/review";
+import { paceRead } from "@/lib/wyckoff/pace";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -38,6 +39,9 @@ export async function GET(req: NextRequest) {
       rangeStartDate: true, breakoutDate: true, outcome: true,
       traderVerdict: true, traderReadAt: true, fresh: true, loggedBlind: true,
       watch: true, watchNote: true, alertPrice: true, alertHitAt: true,
+      // Timing marks. Safe pre-resolution: these say WHEN the scanner spoke,
+      // never what it concluded.
+      surfacedBarDate: true, surfacedReason: true, testBarDate: true,
     },
   });
   if (!row) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
@@ -73,8 +77,21 @@ export async function GET(req: NextRequest) {
     ((row.status === "open" && row.fresh === true) ||
       (row.status === "broken" && row.breakoutDate != null && row.breakoutDate >= brokenCutoff));
 
+  // Pace, with the DIRECTIONAL FIELD STRIPPED. `lean` is an inference about
+  // which way the range resolves; printing it beside a live unresolved
+  // candidate would hand over a verdict, which is the one thing the blind
+  // architecture exists to prevent. The trader gets the raw asymmetry — how
+  // much longer one side takes per point — and draws his own conclusion.
+  const fullPace = paceRead(
+    chart.bars as any,
+    chart.rangeStartIdx,
+    chart.breakoutIdx ?? chart.bars.length,
+  );
+  const { lean: _withheld, ...pace } = fullPace;
+
   return NextResponse.json({
     ok: true,
+    pace,
     instrument: row.instrument,
     suspectVolume: SUSPECT_VOLUME.has(row.instrument),
     rangeLo: row.rangeLo,
@@ -94,6 +111,9 @@ export async function GET(req: NextRequest) {
     watchNote: row.watchNote,
     alertPrice: row.alertPrice,
     alertHitAt: row.alertHitAt,
+    surfacedBarDate: row.surfacedBarDate ? row.surfacedBarDate.toISOString().slice(0, 10) : null,
+    surfacedReason: row.surfacedReason,
+    testBarDate: row.testBarDate ? row.testBarDate.toISOString().slice(0, 10) : null,
     resolved: row.outcome != null,
     ...chart,
   });
