@@ -60,6 +60,10 @@ export interface PendingRow {
   surfacedBarDate?: string | null;
   surfacedReason?: string | null;
   testBarDate?: string | null;
+  /** Data date this range was FIRST logged. Stable across re-anchoring. */
+  firstSeenBarDate?: string | null;
+  /** How many times the detector moved this range's start date. */
+  reanchorCount?: number | null;
   // Trades auto-linked to this read by the EA open handler (lib/wyckoff/link.ts).
   trades?: LinkedTrade[] | null;
   // Compact bar window written at scan time for the card thumbnail.
@@ -219,12 +223,20 @@ export default function CandidateCard({
           title={row.gradeNotes?.length ? row.gradeNotes.join(" · ") : undefined}
         />
         <ReasonChip reason={row.surfacedReason} />
-        {row.surfacedBarDate && (
+        {(row.surfacedBarDate || row.firstSeenBarDate) && (
           <span
-            title="when this range first reached a decision point"
+            title={
+              `first logged ${day(row.firstSeenBarDate)}` +
+              (row.surfacedBarDate ? ` · reached a decision point ${day(row.surfacedBarDate)}` : "") +
+              (row.reanchorCount
+                ? ` · the detector has re-anchored this range ${row.reanchorCount}× — the row, and these dates, survived`
+                : "")
+            }
             style={{ ...mono, fontSize: 9.5, color: "var(--text-3)", marginLeft: "auto" }}
           >
-            surfaced {day(row.surfacedBarDate)}
+            {row.firstSeenBarDate && `seen ${day(row.firstSeenBarDate)}`}
+            {row.surfacedBarDate && row.firstSeenBarDate !== row.surfacedBarDate &&
+              ` · live ${day(row.surfacedBarDate)}`}
           </span>
         )}
       </div>

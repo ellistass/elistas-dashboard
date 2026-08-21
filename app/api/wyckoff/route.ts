@@ -59,6 +59,12 @@ const PENDING_SELECT = {
   surfacedReason: true,
   testBarDate: true,
   sparkBars: true,
+  // Stable first-occurrence facts. These survive a re-anchor, which is what
+  // makes "when did this setup first appear" a real answer rather than an
+  // artifact of when the scan last ran.
+  firstSeenBarDate: true,
+  originalRangeStart: true,
+  reanchorCount: true,
   watch: true,
   watchNote: true,
   watchAt: true,

@@ -33,6 +33,7 @@ import {
   type FreshReason,
 } from "./engine";
 import { gradeRange, packFactors, type RangeGrade } from "./grade";
+import { assignRanges, type ExistingRow } from "./identity";
 import { computeTiming } from "./timing";
 
 // §10 — the shape returned to the trader. No verdict. No direction. No entry.
@@ -70,7 +71,8 @@ export interface WyckoffScanResult {
   scanned: number; // instruments successfully fetched
   rangesFound: number; // all ranges across all instruments (persisted)
   persisted: number; // rows written/updated this run
-  staleRemoved: number; // phantom open rows swept (range re-anchored to a new start)
+  staleRemoved: number; // open rows no longer detected at all
+  reanchored: number;   // ranges whose start date moved but kept their row
   latestBarDate: string | null; // newest bar seen across all instruments —
   //                               lets the digest show what data date the scan
   //                               actually read (staleness visibility)
@@ -154,70 +156,126 @@ function analyze(instrument: string, bars: Bar[], range: DetectedRange): Analyze
   };
 }
 
-/** Persist one analyzed range. Returns true if a row was written/updated. */
-async function persistRange(a: AnalyzedRange): Promise<boolean> {
-  const key = {
-    instrument: a.candidate.instrument,
-    rangeStartDate: toUtcDate(a.candidate.rangeStartDate),
-  };
-  const existing = await (db as any).scannerCandidate.findUnique({
-    where: { instrument_rangeStartDate: key },
-    // surfacedAt comes back so the first-surfaced stamp is written exactly
-    // once — every later scan must leave it alone or the lead-time measurement
-    // silently becomes "bars from the most recent scan", which is always ~0.
-    select: { id: true, status: true, outcome: true, surfacedAt: true },
+/**
+ * Persist every range detected for ONE instrument in a single pass.
+ *
+ * Per-instrument rather than per-range because identity is now decided by
+ * OVERLAP against the rows we already hold, and that assignment has to be
+ * one-to-one. Done a range at a time, two detections could both claim the same
+ * row and one would silently overwrite the other.
+ *
+ * What this fixes: rows were keyed `instrument + rangeStartDate`. The detector
+ * re-anchors that start date as the rolling data window shifts, so the same
+ * setup forked into a new row — orphaning yesterday's, and stamping today's
+ * with a first-seen date that should have been yesterday's.
+ */
+async function persistInstrument(
+  instrument: string,
+  analyzed: AnalyzedRange[],
+  lastBarDate: string,
+): Promise<{ written: number; reanchored: number; matchedIds: string[] }> {
+  const result = { written: 0, reanchored: 0, matchedIds: [] as string[] };
+  if (!analyzed.length) return result;
+
+  const rows = await (db as any).scannerCandidate.findMany({
+    where: { instrument },
+    select: {
+      id: true, status: true, outcome: true, surfacedAt: true,
+      rangeStartDate: true, breakoutDate: true, rangeLo: true, rangeHi: true,
+      traderVerdict: true, firstSeenBarDate: true, reanchorCount: true,
+    },
   });
 
-  // Frozen: once broken out (verdict locked) or outcome recorded, never touch.
-  if (existing && (existing.status === "broken" || existing.outcome != null)) return false;
+  const existing: ExistingRow[] = rows.map((r: any) => ({
+    id: r.id,
+    startDate: r.rangeStartDate.toISOString().slice(0, 10),
+    endDate: (r.breakoutDate ?? toUtcDate(lastBarDate)).toISOString().slice(0, 10),
+    lo: r.rangeLo,
+    hi: r.rangeHi,
+    // A row carrying a locked read or a recorded outcome is evidence, not an
+    // estimate. Its boundaries must never be rewritten by a later detection.
+    frozen: r.status === "broken" || r.outcome != null || r.traderVerdict != null,
+  }));
 
-  const data = {
-    rangeLo: a.candidate.rangeLo,
-    rangeHi: a.candidate.rangeHi,
-    contextPct: a.candidate.contextPct,
-    terminalTest: a.candidate.terminalTest,
-    stoppingAction: a.candidate.stoppingAction,
-    barsInRange: a.candidate.barsInRange,
-    status: a.candidate.status,
-    engineVerdict: a.verdict,
-    loggedBlind: a.loggedBlind,
-    fresh: a.fresh, // refreshed on every scan while the row is still open
-    breakoutDate: a.candidate.breakoutDate ? toUtcDate(a.candidate.breakoutDate) : null,
-    // Quality grade — recomputed every scan while the range is still forming,
-    // because a range that gets another boundary touch genuinely improves.
-    grade: a.grade.grade,
-    gradeScore: a.grade.score,
-    gradeFactors: packFactors(a.grade.factors),
-    gradeNotes: a.grade.notes,
-    touchesHi: a.range.touchesHi,
-    touchesLo: a.range.touchesLo,
-    surfacedReason: a.reason,
-    testBarDate: a.testBarDate ? toUtcDate(a.testBarDate) : null,
-    sparkBars: a.sparkBars,
-  };
+  const assignments = assignRanges(
+    analyzed.map((a) => ({
+      startDate: a.candidate.rangeStartDate,
+      endDate: a.candidate.breakoutDate ?? lastBarDate,
+      lo: a.candidate.rangeLo,
+      hi: a.candidate.rangeHi,
+      _a: a,
+    })),
+    existing,
+  );
 
-  // First-surfaced stamp: written the first time this range reaches a decision
-  // point and never again. surfacedBarDate is the DATA date, not the wall clock
-  // — a scan that runs late must not make the scanner look late.
-  const stamp =
-    a.fresh && !existing?.surfacedAt
-      ? {
-          surfacedAt: new Date(),
-          surfacedBarDate: toUtcDate(a.candidate.lastBarDate),
-        }
-      : {};
+  for (const assn of assignments) {
+    const a = (assn.detected as any)._a as AnalyzedRange;
+    const row = assn.matchedId ? rows.find((r: any) => r.id === assn.matchedId) : null;
 
-  if (existing) {
-    await (db as any).scannerCandidate.update({
-      where: { id: existing.id },
-      data: { ...data, ...stamp },
-    });
-  } else {
-    await (db as any).scannerCandidate.create({
-      data: { ...key, ...data, ...stamp, outcome: null },
-    });
+    const data = {
+      rangeLo: a.candidate.rangeLo,
+      rangeHi: a.candidate.rangeHi,
+      contextPct: a.candidate.contextPct,
+      terminalTest: a.candidate.terminalTest,
+      stoppingAction: a.candidate.stoppingAction,
+      barsInRange: a.candidate.barsInRange,
+      status: a.candidate.status,
+      engineVerdict: a.verdict,
+      loggedBlind: a.loggedBlind,
+      fresh: a.fresh, // refreshed on every scan while the row is still open
+      rangeStartDate: toUtcDate(a.candidate.rangeStartDate),
+      breakoutDate: a.candidate.breakoutDate ? toUtcDate(a.candidate.breakoutDate) : null,
+      grade: a.grade.grade,
+      gradeScore: a.grade.score,
+      gradeFactors: packFactors(a.grade.factors),
+      gradeNotes: a.grade.notes,
+      touchesHi: a.range.touchesHi,
+      touchesLo: a.range.touchesLo,
+      surfacedReason: a.reason,
+      testBarDate: a.testBarDate ? toUtcDate(a.testBarDate) : null,
+      sparkBars: a.sparkBars,
+    };
+
+    // First-surfaced stamp: written the first time this range reaches a
+    // decision point and never again. surfacedBarDate is the DATA date, not
+    // the wall clock — a scan that runs late must not make the scanner look
+    // late. This survives a re-anchor now, which is the entire point.
+    const surfaceStamp =
+      a.fresh && !row?.surfacedAt
+        ? { surfacedAt: new Date(), surfacedBarDate: toUtcDate(a.candidate.lastBarDate) }
+        : {};
+
+    if (row) {
+      // Re-anchor bookkeeping: correct the boundaries, record that they moved,
+      // and leave every first-occurrence fact alone.
+      const reanchorStamp = assn.reanchored
+        ? { reanchorCount: (row.reanchorCount ?? 0) + 1, lastReanchorAt: new Date() }
+        : {};
+      if (assn.reanchored) result.reanchored++;
+      await (db as any).scannerCandidate.update({
+        where: { id: row.id },
+        data: { ...data, ...surfaceStamp, ...reanchorStamp },
+      });
+      result.matchedIds.push(row.id);
+    } else {
+      const created = await (db as any).scannerCandidate.create({
+        data: {
+          ...data,
+          ...surfaceStamp,
+          instrument,
+          outcome: null,
+          // Set once, at creation, and never written again anywhere.
+          firstSeenBarDate: toUtcDate(a.candidate.lastBarDate),
+          originalRangeStart: toUtcDate(a.candidate.rangeStartDate),
+        },
+        select: { id: true },
+      });
+      result.matchedIds.push(created.id);
+    }
+    result.written++;
   }
-  return true;
+
+  return result;
 }
 
 /** Full basket sweep: detect → persist ALL → return FRESH (verdict-free). */
@@ -228,6 +286,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
   let rangesFound = 0;
   let persisted = 0;
   let staleRemoved = 0;
+  let reanchored = 0;
   let latestBarDate: string | null = null;
   const alerts: WatchAlert[] = [];
 
@@ -256,17 +315,19 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
       const last = bars[bars.length - 1]?.date ?? null;
       if (last && (!latestBarDate || last > latestBarDate)) latestBarDate = last;
       rangesFound += analyzed.length;
-      for (const a of analyzed) {
-        try {
-          if (await persistRange(a)) persisted++;
-        } catch (e) {
-          errors.push({
-            instrument: a.candidate.instrument,
-            message: `persist failed: ${e instanceof Error ? e.message : e}`,
-          });
-        }
-        if (a.fresh) fresh.push(a.candidate);
+      let keptIds: string[] = [];
+      try {
+        const res = await persistInstrument(inst.symbol, analyzed, last ?? "");
+        persisted += res.written;
+        reanchored += res.reanchored;
+        keptIds = res.matchedIds;
+      } catch (e) {
+        errors.push({
+          instrument: inst.symbol,
+          message: `persist failed: ${e instanceof Error ? e.message : e}`,
+        });
       }
+      for (const a of analyzed) if (a.fresh) fresh.push(a.candidate);
       // ── Stale-open sweep ──────────────────────────────────────────────────
       // As bars accumulate, the greedy detector can legitimately re-anchor an
       // open range to a different start date — leaving the previous open row
@@ -275,9 +336,9 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
       // a read was locked on it (a locked read is immutable evidence — those
       // rows are kept and will simply age out of the readable list).
       try {
-        const openStarts = analyzed
-          .filter((a) => a.range.status === "open")
-          .map((a) => toUtcDate(a.candidate.rangeStartDate));
+        // Sweep by ID now. Identity is decided by overlap, so a re-anchored
+        // range comes back as a MATCH and keeps its row — testing start dates
+        // here would delete rows this same scan just updated.
         const del = await (db as any).scannerCandidate.deleteMany({
           where: {
             instrument: inst.symbol,
@@ -285,7 +346,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
             outcome: null,
             traderVerdict: null,
             watch: null, // triaged rows are yours — the sweep never takes them
-            rangeStartDate: { notIn: openStarts },
+            id: { notIn: keptIds },
           },
         });
         staleRemoved += del.count ?? 0;
@@ -321,7 +382,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
 
   alerts.sort((a, b) => (a.watch === b.watch ? a.instrument.localeCompare(b.instrument) : a.watch === "now" ? -1 : 1));
 
-  return { candidates: fresh, alerts, scanned, rangesFound, persisted, staleRemoved, latestBarDate, errors };
+  return { candidates: fresh, alerts, scanned, rangesFound, persisted, staleRemoved, reanchored, latestBarDate, errors };
 }
 
 // ── Watchlist alerts ─────────────────────────────────────────────────────────

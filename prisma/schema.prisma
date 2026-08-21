@@ -470,13 +470,25 @@ model ScannerCandidate {
   leadToBreakout  Int?                         // bars surfaced -> breakout (backfilled)
   leadToTest      Int?                         // bars surfaced -> terminal test (backfilled)
 
+  // -- Stable first-occurrence facts. Written ONCE at creation and never
+  // touched again, so a re-anchor corrects the range's boundaries without
+  // rewriting when the setup first appeared.
+  firstSeenBarDate   DateTime?   // data date the scanner first logged this range
+  originalRangeStart DateTime?   // rangeStartDate as first detected, kept for audit
+  reanchorCount      Int      @default(0)
+  lastReanchorAt     DateTime?
+
   barsInRange    Int
   rangeStartDate DateTime                      // date of bar `start` — stable dedupe key
   breakoutDate   DateTime?                     // date of bar `end`; null while status = "open"
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  @@unique([instrument, rangeStartDate])
+  // NO unique on (instrument, rangeStartDate): rangeStartDate is a corrigible
+  // ESTIMATE, not an identity. The greedy detector re-anchors it as the data
+  // window rolls, and making it unique forced every re-anchor to fork a new
+  // row. Identity now comes from overlap — see lib/wyckoff/identity.ts.
+  @@index([instrument, rangeStartDate])
   @@index([instrument, scanDate])
   @@index([outcome, status])
   @@index([watch])
