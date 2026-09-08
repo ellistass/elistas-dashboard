@@ -300,13 +300,22 @@ export async function GET() {
     // P2021 = table does not exist — the one everyone hits before db:push.
     const msg = String(e?.message ?? "");
     const missingTable = e?.code === "P2021" || /scanner_candidates/.test(msg);
-    // Same fix, different symptom: the table exists but the triage columns
-    // don't yet, so Prisma rejects the arg instead of the model.
-    const missingColumn = /Unknown arg|Unknown field|column .* does not exist/i.test(msg) && /watch|alert/i.test(msg);
+    // Same fix, different symptom: the table exists but a column the select
+    // asks for does not, so Prisma rejects the ARG instead of the model.
+    //
+    // This used to additionally require the message to mention "watch" or
+    // "alert" — the two columns that existed when it was written. Every column
+    // added since (sightings, watchDate, rangeConfirmed) failed that test and
+    // fell through to a raw Prisma dump, which is the least useful thing to
+    // show someone whose desk has just gone empty. The cause is the same
+    // whichever column it is, so the check no longer names them.
+    const missingColumn = /Unknown arg|Unknown field|column .* does not exist/i.test(msg);
     return NextResponse.json(
       {
         error: missingTable || missingColumn
-          ? "The watchlist columns aren't in the database yet — run `npm run db:push` from elistas-dashboard (it regenerates the Prisma client too), then reload."
+          ? "The database and the Prisma client disagree about this table's columns — usually a deploy that reused a cached client. " +
+            "Run `npm run db:push` locally, or redeploy so `prisma generate` runs. " +
+            `(${msg.split("\n").find((l) => l.trim()) ?? "no detail"})`
           : e instanceof Error ? e.message : String(e),
       },
       { status: 500 },

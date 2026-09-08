@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "preflight": "node scripts/check-production-env.mjs",
-    "build": "npm run preflight && npm test && next build",
+    "build": "npm run preflight && prisma generate && npm test && next build",
     "start": "next start",
     "lint": "next lint",
     "postinstall": "prisma generate --schema=./prisma/schema.prisma",
