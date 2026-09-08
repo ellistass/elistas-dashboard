@@ -13,6 +13,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import type { PendingRow } from "./CandidateCard";
 import type { Scoreboard } from "./ScoreStrip";
 import type { LearnableStats } from "@/lib/wyckoff/learnable";
+import type { EdgeSegment, BaseRates } from "@/lib/wyckoff/edge";
 
 export interface ResolvedRow extends PendingRow {
   outcome: string;
@@ -30,6 +31,8 @@ interface WyckoffState {
   score: Scoreboard | null;
   passRate: { total: number; pass: number } | null;
   learnable: LearnableStats | null;
+  /** Engine accuracy measured against what price did on its own. */
+  engineEdge: { base: BaseRates; segments: EdgeSegment[] } | null;
   trackedOpen: number;
   awaitingBackfill: number;
   loading: boolean;
@@ -58,6 +61,7 @@ export function WyckoffProvider({ children }: { children: React.ReactNode }) {
   const [score, setScore] = useState<Scoreboard | null>(null);
   const [passRate, setPassRate] = useState<{ total: number; pass: number } | null>(null);
   const [learnable, setLearnable] = useState<LearnableStats | null>(null);
+  const [engineEdge, setEngineEdge] = useState<WyckoffState["engineEdge"]>(null);
   const [trackedOpen, setTrackedOpen] = useState(0);
   const [awaitingBackfill, setAwaitingBackfill] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -78,6 +82,7 @@ export function WyckoffProvider({ children }: { children: React.ReactNode }) {
       setScore(j.score ?? null);
       setPassRate(j.passRate ?? null);
       setLearnable(j.learnable ?? null);
+      setEngineEdge(j.engineEdge ?? null);
       setTrackedOpen(j.trackedOpen ?? 0);
       setAwaitingBackfill(j.awaitingBackfill ?? 0);
       setLastScanAt(j.lastScanAt ?? null);
@@ -114,6 +119,7 @@ export function WyckoffProvider({ children }: { children: React.ReactNode }) {
       value={{
         pending, watching, resolved, score, passRate,
         learnable,
+        engineEdge,
         trackedOpen, awaitingBackfill, loading, error,
         scanning, scanNote, lastScanAt, reload, runScan,
       }}

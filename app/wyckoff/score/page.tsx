@@ -11,7 +11,7 @@
 // setup before or after its trigger printed. They are reported separately —
 // a scanner can be generous on one and useless on the other.
 
-import { GraduationCap, TrendingUp, Timer } from "lucide-react";
+import { GraduationCap, TrendingUp, Timer, Scale } from "lucide-react";
 import ScoreStrip from "../_components/ScoreStrip";
 import { useWyckoff } from "../_components/WyckoffData";
 import { summarizeLearnable } from "@/lib/wyckoff/learnable";
@@ -23,7 +23,7 @@ import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "../_component
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 
 export default function ScorePage() {
-  const { score, passRate, learnable, resolved, loading, error } = useWyckoff();
+  const { score, passRate, learnable, resolved, engineEdge, loading, error } = useWyckoff();
   if (loading) return <LoadingCard what="benchmark" />;
 
   const learnableStats = learnable ?? summarizeLearnable(resolved);
@@ -50,6 +50,13 @@ export default function ScorePage() {
 
       <SectionHeader icon={<TrendingUp size={13} strokeWidth={2} />} title="You vs the engine" note="blind sample only" />
       {score ? <ScoreStrip score={score} passRate={passRate} /> : <EmptyState small text="No resolved reads yet." />}
+
+      <SectionHeader
+        icon={<Scale size={13} strokeWidth={2} />}
+        title="Does the engine beat doing nothing?"
+        note="accuracy is meaningless without the base rate — this is the comparison"
+      />
+      <EdgePanel edge={engineEdge} />
 
       <SectionHeader
         icon={<GraduationCap size={13} strokeWidth={2} />}
@@ -111,6 +118,68 @@ export default function ScorePage() {
         </p>
       </div>
     </>
+  );
+}
+
+/* ── The comparison the Score page was missing ──────────────────────────────
+   "The engine is at 56%" invites 50% as the bar. It is not the bar. On this
+   book price finished above the box 471 times and below it 316, so a model
+   that says "up" every time and thinks about nothing scores 60% on directional
+   cases — and 56% is worse than that.
+
+   Reported per segment, because the average hides an inversion: the ACCUM
+   calls look strong (63%) and are almost entirely the drift, while the DISTRIB
+   calls look weak (48%) and carry the real edge, being 8 points above the 40%
+   base rate for down. No amount of looking at 63 and 48 gets you there. */
+function EdgePanel({ edge }: {
+  edge: { base: { up: number; down: number; chop: number; pUp: number }; segments: Array<{ key: string; label: string; result: { verdict: string; edgePts: number | null; real: boolean; accuracy: { n: number; pct: number | null } } }> } | null;
+}) {
+  if (!edge) return <EmptyState small text="Not enough resolved ranges yet to compare the engine against the base rate." />;
+  const basePct = Math.round(edge.base.pUp * 100);
+  return (
+    <div className="card" style={{ padding: "16px 20px", marginBottom: 26 }}>
+      <p style={{ ...mono, fontSize: 10.5, color: "var(--text-2)", margin: "0 0 14px", lineHeight: 1.7 }}>
+        Across every resolved range, price finished above the box{" "}
+        <span style={{ color: "var(--text-1)" }}>{edge.base.up}</span> times and below it{" "}
+        <span style={{ color: "var(--text-1)" }}>{edge.base.down}</span>. So on directional cases,
+        always guessing “up” scores <span style={{ color: "var(--text-1)" }}>{basePct}%</span> —
+        that is the bar, not 50%.
+      </p>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+        {edge.segments.map((s) => {
+          const pts = s.result.edgePts;
+          const color = !s.result.real ? "var(--text-3)" : (pts ?? 0) > 0 ? "var(--green)" : "var(--amber)";
+          return (
+            <div
+              key={s.key}
+              style={{
+                display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap",
+                padding: "9px 0", borderBottom: "1px solid var(--border-subtle)",
+              }}
+            >
+              <span style={{ fontSize: 12, color: "var(--text-1)", minWidth: 168 }}>{s.label}</span>
+              <span style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>{s.result.verdict}</span>
+              {pts != null && s.result.real && (
+                <span style={{ ...mono, fontSize: 12, fontWeight: 500, color, marginLeft: "auto" }}>
+                  {pts > 0 ? "+" : ""}{pts} pts
+                </span>
+              )}
+              {!s.result.real && (
+                <span style={{ ...mono, fontSize: 10, color: "var(--text-3)", marginLeft: "auto" }}>no edge</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", margin: "13px 0 0", lineHeight: 1.7 }}>
+        A segment only claims an edge when the gap from its base rate clears its own margin of error.
+        Everything else is reported as “no edge” however good the percentage looks — which is the
+        whole point, since the strongest-looking number here (ACCUM at 63%) is very nearly just the
+        drift, and the worst-looking one (DISTRIB at 48%) is the one actually beating its base rate.
+      </p>
+    </div>
   );
 }
 

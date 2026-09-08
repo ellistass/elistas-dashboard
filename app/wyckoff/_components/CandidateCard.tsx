@@ -25,7 +25,7 @@ import { GradeChip, ReasonChip } from "./desk";
 import TradedStrip, { type LinkedTrade } from "./TradedStrip";
 import CardChart, { type SparkBar } from "./CardChart";
 import EntryPlans from "./EntryPlans";
-import EngineRead from "./EngineRead";
+import EngineRead, { type EngineRecord } from "./EngineRead";
 import SightingLog, { type Sighting } from "./SightingLog";
 import WatchDate from "./WatchDate";
 
@@ -77,6 +77,8 @@ export interface PendingRow {
   /** The engine's call. Present ONLY once your own read is locked — the API
    *  attaches it at that point and not before (see revealEngine in the route). */
   engineVerdict?: string | null;
+  /** The engine's historical record on calls like this one — see lib/wyckoff/edge.ts. */
+  engineRecord?: EngineRecord | null;
   // Trades auto-linked to this read by the EA open handler (lib/wyckoff/link.ts).
   trades?: LinkedTrade[] | null;
   // Compact bar window written at scan time for the card thumbnail.
@@ -494,7 +496,7 @@ export default function CandidateCard({
             {/* Your read is on the record and cannot be changed. So here is
                 the engine's — while there is still a trade to size. */}
             <div style={{ flexBasis: "100%" }}>
-              <EngineRead engineVerdict={engine} traderVerdict={row.traderVerdict} suspectVolume={suspect} />
+              <EngineRead engineVerdict={engine} traderVerdict={row.traderVerdict} suspectVolume={suspect} record={row.engineRecord} />
               {plans.length > 0 && row.traderVerdict !== "pass" && (
                 <div style={{ marginTop: 8 }}>
                   <p style={{ ...mono, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-3)", margin: "0 0 6px" }}>

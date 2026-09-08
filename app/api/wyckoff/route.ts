@@ -31,6 +31,7 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { computeScoreboard, type BenchmarkRow } from "@/lib/wyckoff/benchmark";
 import { summarizeLearnable } from "@/lib/wyckoff/learnable";
+import { engineSegments, recordForCall, baseRates, type EdgeRow } from "@/lib/wyckoff/edge";
 
 // Fields safe to show BEFORE resolution. engineVerdict is deliberately absent.
 const PENDING_SELECT = {
@@ -118,8 +119,9 @@ function isReadable(r: { status: string; fresh: boolean; breakoutDate: Date | nu
  * the select and filtering afterwards would put the verdict one forgotten
  * `delete` away from every unread card on the page.
  */
-async function revealEngine<T extends { id: string; traderVerdict: string | null }>(
+async function revealEngine<T extends { id: string; traderVerdict: string | null; terminalTest?: string }>(
   rows: T[],
+  history: EdgeRow[],
 ): Promise<T[]> {
   const read = rows.filter((r) => r.traderVerdict != null).map((r) => r.id);
   if (!read.length) return rows;
@@ -131,7 +133,27 @@ async function revealEngine<T extends { id: string; traderVerdict: string | null
     const byId = new Map(verdicts.map((v: any) => [v.id, v]));
     return rows.map((r) => {
       const v = byId.get(r.id) as any;
-      return v ? { ...r, engineVerdict: v.engineVerdict, loggedBlind: v.loggedBlind } : r;
+      if (!v) return r;
+      // The verdict travels with its track record. A verdict alone is an
+      // opinion presented as information — which is how "the engine is at 56%"
+      // sat on the Score page unchallenged while a constant "up" guess scored
+      // 60%. See lib/wyckoff/edge.ts.
+      const record = recordForCall(history, v.engineVerdict, r.terminalTest);
+      return {
+        ...r,
+        engineVerdict: v.engineVerdict,
+        loggedBlind: v.loggedBlind,
+        engineRecord: record
+          ? {
+              verdict: record.verdict,
+              accuracyPct: record.accuracy.pct,
+              n: record.accuracy.n,
+              basePct: record.basePct,
+              edgePts: record.edgePts,
+              real: record.real,
+            }
+          : null,
+      };
     });
   } catch {
     return rows;
@@ -233,7 +255,12 @@ export async function GET() {
     // Scoreboard over ALL resolved rows (not just the 100 shown).
     const allResolved: BenchmarkRow[] = await (db as any).scannerCandidate.findMany({
       where: { outcome: { not: null } },
-      select: { instrument: true, outcome: true, engineVerdict: true, traderVerdict: true, loggedBlind: true },
+      select: {
+        instrument: true, outcome: true, engineVerdict: true, traderVerdict: true,
+        loggedBlind: true,
+        // Needed to score a call against calls like it, not against all calls.
+        terminalTest: true, grade: true,
+      },
     });
 
     // Discipline metric: pass rate over ALL locked reads (resolved or not) —
@@ -253,13 +280,19 @@ export async function GET() {
 
     return NextResponse.json({
       lastScanAt: lastWrite?._max?.updatedAt ?? null,
-      pending: await attachTrades(await revealEngine(pending)),
-      watching: await attachTrades(await revealEngine(watching)),
+      pending: await attachTrades(await revealEngine(pending, allResolved as EdgeRow[])),
+      watching: await attachTrades(await revealEngine(watching, allResolved as EdgeRow[])),
       resolved: await attachTrades(resolved),
       trackedOpen,
       awaitingBackfill,
       passRate: { total: readsTotal, pass: readsPass },
       learnable: summarizeLearnable(allResolved),
+      // What price did on its own, and whether the engine beat it. Cheap: pure
+      // functions over rows already loaded for the scoreboard.
+      engineEdge: {
+        base: baseRates(allResolved as EdgeRow[]),
+        segments: engineSegments(allResolved as EdgeRow[]),
+      },
       score: computeScoreboard(allResolved),
     });
   } catch (e: any) {
