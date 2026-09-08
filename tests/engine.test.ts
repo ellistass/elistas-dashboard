@@ -138,3 +138,43 @@ test("freshness names WHY a range is at a decision point", () => {
   // A test that printed near the end outranks merely pressing the edge.
   assert.equal(freshReason(bars, range, bars.length - 1, null), "test-printed");
 });
+
+/** The AMD shape: a wide box whose FLOOR is tested constantly and whose ceiling
+ *  is reached exactly once, late. Built so the seed spans the full band —
+ *  otherwise the greedy detector finds a tighter sub-box near the lows and that
+ *  one is confirmed, which is what my first attempt at this fixture did. */
+function formingBox(): Bar[] {
+  const days = isoDays(30);
+  const out: Bar[] = [bar(107, 110, 105, 108, 1000, days[0])]; // sets hi = 110
+  for (let i = 1; i < 26; i++) out.push(bar(102, 104, 100, 101, 1000, days[i])); // hug the floor
+  out.push(bar(104, 109, 103, 108, 1000, days[26]));            // the ONE ceiling touch
+  return out;
+}
+
+test("a forming range is detected, and flagged as unproven", () => {
+  const bars = formingBox();
+  const [r] = detectRanges(bars);
+  assert.ok(r, "a range with one proven edge is still a consolidation");
+  assert.equal(r.confirmed, false, "but it must say the second edge is unproven");
+  assert.ok(r.touchesLo >= CFG.TOUCH_CONFIRMED, "floor proven");
+  assert.equal(r.touchesHi, 1, "ceiling touched exactly once");
+});
+
+test("a forming range surfaces ONLY on a printed test", () => {
+  const bars = formingBox();
+  const [r] = detectRanges(bars);
+  assert.equal(r.confirmed, false);
+  // Pressing an unproven edge is not evidence — it is one touch of a line that
+  // may not be a line. This gate is what lets detection be early without the
+  // desk becoming noisy.
+  assert.equal(freshReason(bars, r, null, null), null);
+  // A spring is the trigger itself, so it does surface.
+  assert.equal(freshReason(bars, r, bars.length - 1, null), "test-printed");
+});
+
+test("a confirmed range still surfaces on pressing alone", () => {
+  const bars = box(30, 100, 110);
+  const [r] = detectRanges(bars);
+  assert.equal(r.confirmed, true, "both edges touched twice");
+  assert.equal(freshReason(bars, r, null, null), "pressing-boundary");
+});

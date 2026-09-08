@@ -65,6 +65,8 @@ export interface PendingRow {
   gradeNotes?: string[] | null;
   touchesHi?: number | null;
   touchesLo?: number | null;
+  /** False = a forming range: one boundary still unproven. */
+  rangeConfirmed?: boolean | null;
   surfacedAt?: string | null;
   surfacedBarDate?: string | null;
   surfacedReason?: string | null;
@@ -320,6 +322,22 @@ export default function CandidateCard({
           title={row.gradeNotes?.length ? row.gradeNotes.join(" · ") : undefined}
         />
         <ReasonChip reason={row.surfacedReason} />
+        {row.rangeConfirmed === false && (
+          <span
+            title={
+              `Forming range — the ${(row.touchesLo ?? 0) < (row.touchesHi ?? 0) ? "floor" : "ceiling"} has only been touched once, ` +
+              `so this box is not fully proven. It is on the desk because a terminal test printed, which is the trigger itself. ` +
+              `AMD's spring printed a full session before its ceiling was touched a second time — waiting for that confirmation ` +
+              `meant waiting for the move the spring caused.`
+            }
+            style={{
+              ...mono, fontSize: 9.5, padding: "2px 8px", borderRadius: 999,
+              border: "1px dashed var(--border-strong)", color: "var(--text-3)",
+            }}
+          >
+            forming {row.touchesLo}/{row.touchesHi}
+          </span>
+        )}
         <SightingLog sightings={row.sightings} count={row.sightingCount} />
         {(row.surfacedBarDate || row.firstSeenBarDate) && (
           <span

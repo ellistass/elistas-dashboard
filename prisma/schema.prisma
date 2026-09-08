@@ -458,6 +458,11 @@ model ScannerCandidate {
   gradeNotes      String[]                     // short reasons rendered as chips
   touchesHi       Int?
   touchesLo       Int?
+  // Both edges touched >= CFG.TOUCH_CONFIRMED times. False = a FORMING range:
+  // a real consolidation whose second boundary is not proven yet. Forming
+  // ranges reach the desk only when a terminal test prints - see the freshness
+  // note in lib/wyckoff/engine.ts.
+  rangeConfirmed  Boolean  @default(true)
 
   // Compact bar window for the card thumbnail, written at scan time because the
   // scanner already holds the series. Fetching per card at render time would

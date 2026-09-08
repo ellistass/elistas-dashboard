@@ -63,6 +63,7 @@ const PENDING_SELECT = {
   gradeNotes: true,
   touchesHi: true,
   touchesLo: true,
+  rangeConfirmed: true,
   surfacedAt: true,
   surfacedBarDate: true,
   surfacedReason: true,

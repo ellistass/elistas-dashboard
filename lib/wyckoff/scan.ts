@@ -286,6 +286,7 @@ async function persistInstrument(
       gradeNotes: a.grade.notes,
       touchesHi: a.range.touchesHi,
       touchesLo: a.range.touchesLo,
+      rangeConfirmed: a.range.confirmed,
       surfacedReason: a.reason,
       testBarDate: a.testBarDate ? toUtcDate(a.testBarDate) : null,
       sparkBars: a.sparkBars,
