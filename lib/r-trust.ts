@@ -50,10 +50,16 @@ export function stopFraction(t: RTrustInput): number | null {
   return Math.abs(entry - sl) / entry;
 }
 
+/** Absorbs float error at the boundary. |entry - sl| / entry on a stop sitting
+ *  exactly at the floor lands a few parts in 10^17 short of it, so a strict
+ *  `>=` quietly rejects the very case the constant is defined by. Irrelevant to
+ *  any real price, but a documented threshold should mean what it says. */
+const EPS = 1e-12;
+
 /** True when R computed from these prices is measuring a real planned risk. */
 export function isRTrustworthy(t: RTrustInput): boolean {
   const f = stopFraction(t);
-  return f != null && f >= MIN_STOP_FRACTION;
+  return f != null && f >= MIN_STOP_FRACTION - EPS;
 }
 
 /** Why an R was rejected — for the import summary and the repair log. */

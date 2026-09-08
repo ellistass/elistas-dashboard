@@ -289,10 +289,31 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         // numbers only. Anything you've journaled stays.
         const existing = await (db.trade.findFirst as any)({
           where: { accountId: account.id, ticket: row.ticket },
-          select: { id: true, initialSlPrice: true, source: true },
+          select: { id: true, initialSlPrice: true, source: true, entryPrice: true, direction: true },
         })
 
         if (existing) {
+          // R must come from the stop the trade was FILLED with. When the EA
+          // captured one, that is the only trustworthy stop on the row — and
+          // `r` above was computed from the statement's FINAL SL, which is a
+          // different number the moment the stop was ever moved.
+          //
+          // Recomputing here rather than reusing `r` is the difference between
+          // a re-import refreshing a trade and a re-import quietly replacing a
+          // correct R with one measured against the wrong denominator. Nothing
+          // warns when that happens; the number simply changes.
+          const fillStop = existing.initialSlPrice
+          const rForUpdate =
+            fillStop && fillStop > 0 && row.closePrice != null && existing.entryPrice > 0
+              && isRTrustworthy({ entryPrice: existing.entryPrice, slPrice: fillStop })
+              ? computeR({
+                  entryPrice: existing.entryPrice,
+                  slPrice:    fillStop,
+                  closePrice: row.closePrice,
+                  direction:  (existing.direction as 'Long' | 'Short') ?? row.direction,
+                  symbol:     row.rawSymbol,
+                })
+              : r
           await (db.trade.update as any)({
             where: { id: existing.id },
             data: {
@@ -308,7 +329,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
               swap:         row.swap,
               profitCcy:    row.profitCcy,
               outcome,
-              ...(r != null && { resultR: r }),
+              ...(rForUpdate != null && { resultR: rForUpdate }),
               // Only seed initialSlPrice if it was null — never overwrite an
               // EA-frozen value or a user-corrected one.
               ...(existing.initialSlPrice == null && row.slPrice > 0

@@ -8,14 +8,16 @@
   "scripts": {
     "dev": "next dev",
     "preflight": "node scripts/check-production-env.mjs",
-    "build": "npm run preflight && next build",
+    "build": "npm run preflight && npm test && next build",
     "start": "next start",
     "lint": "next lint",
     "postinstall": "prisma generate --schema=./prisma/schema.prisma",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "create-user": "tsx --env-file=.env scripts/create-user.ts",
-    "delete-user": "tsx --env-file=.env scripts/delete-user.ts"
+    "delete-user": "tsx --env-file=.env scripts/delete-user.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:watch": "node --import tsx --test --watch tests/*.test.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

@@ -12,6 +12,10 @@
 //   • 230 R values divided by a break-even stop. Reported total R was +8,958
 //     while the money said -$1,736 — opposite signs.
 //
+// Not every check here is repairing a known break. Trade dedup currently works
+// perfectly (0 collisions in 762 rows) and its check exists to keep it that
+// way — the cheapest moment to add an invariant is while it still passes.
+//
 // Every one of those had a cheap invariant that would have failed the day it
 // started. That is what this file is: statements that must be true about the
 // data, checked on a schedule, loud when they break.
@@ -146,6 +150,62 @@ async function checkRTrust(): Promise<Check> {
   };
 }
 
+/**
+ * Trade dedup currently works — 0 collisions across 762 rows — and this check
+ * exists to keep it that way rather than to fix anything.
+ *
+ * The guard is `@@unique([accountId, ticket])`, which is per-account by design:
+ * two brokers can legitimately issue the same ticket number. That leaves one
+ * hole it cannot close — the SAME trade imported under two different account
+ * rows, which is what happens if an account is ever recreated and its history
+ * re-imported. The unique index sees two different accountIds and allows both.
+ *
+ * So this looks past tickets at the trade itself: same instrument, same
+ * direction, same fill time, same size, same price is not two trades.
+ */
+async function checkTradeDuplicates(): Promise<Check> {
+  const rows = await db.trade.findMany({
+    select: {
+      pair: true, direction: true, openTimeUtc: true, lotSize: true, entryPrice: true,
+    },
+  });
+  const seen = new Map<string, number>();
+  for (const t of rows) {
+    if (!t.openTimeUtc) continue; // no fill time = nothing to match on
+    const k = `${t.pair}|${t.direction}|${t.openTimeUtc.toISOString()}|${t.lotSize ?? ""}|${t.entryPrice}`;
+    seen.set(k, (seen.get(k) ?? 0) + 1);
+  }
+  const extra = [...seen.values()].filter((n) => n > 1).reduce((s, n) => s + n - 1, 0);
+  return {
+    id: "trade-duplicates",
+    claim: "No trade is logged twice under different accounts",
+    severity: extra === 0 ? "ok" : "fail",
+    detail: extra === 0
+      ? `${rows.length} trades, none duplicated`
+      : `${extra} duplicate trade row${extra === 1 ? "" : "s"} — same instrument, direction, fill time, size and price`,
+    count: extra,
+    fix: extra === 0 ? undefined
+      : "Likely an account re-imported under a new id: @@unique([accountId, ticket]) cannot see across accounts. Find them by that five-field key and delete the copy without journal notes.",
+  };
+}
+
+/**
+ * Every trade should belong to an account. An orphan is invisible to per-account
+ * drawdown, phase splits and equity — it silently is not in the numbers.
+ */
+async function checkOrphanTrades(): Promise<Check> {
+  const orphans = await db.trade.count({ where: { accountId: null } });
+  const total = await db.trade.count();
+  return {
+    id: "orphan-trades",
+    claim: "Every trade belongs to an account",
+    severity: orphans === 0 ? "ok" : orphans > 10 ? "warn" : "ok",
+    detail: orphans === 0 ? `all ${total} trades assigned` : `${orphans} of ${total} have no account`,
+    count: orphans,
+    fix: orphans === 0 ? undefined : "Assign them in the journal — until then they are absent from every per-account figure.",
+  };
+}
+
 /** An account whose EA has gone quiet cannot be trusted to be reporting closes. */
 async function checkEaSilence(): Promise<Check> {
   const accounts = await db.account.findMany({
@@ -205,6 +265,8 @@ export async function runIntegrityChecks(): Promise<IntegrityReport> {
     ["closed-but-open", checkClosedButOpen],
     ["r-vs-money", checkRAgreesWithMoney],
     ["r-trust", checkRTrust],
+    ["trade-duplicates", checkTradeDuplicates],
+    ["orphan-trades", checkOrphanTrades],
     ["ea-silence", checkEaSilence],
     ["scan-freshness", checkScanFreshness],
   ];
