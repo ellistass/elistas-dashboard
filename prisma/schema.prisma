@@ -466,6 +466,13 @@ model ScannerCandidate {
   surfacedAt      DateTime?
   surfacedBarDate DateTime?
   surfacedReason  String?                      // test-printed | pressing-boundary | just-broke-out
+
+  // -- Sighting log: every data date this same range was at a decision point.
+  // surfacedBarDate says when it FIRST became a decision and is written once;
+  // this says how many times the same box has come back to its edge while it
+  // sat untraded. Format: [{ barDate, reason, at }] - newest last, capped at 40.
+  sightings       Json?
+  sightingCount   Int      @default(0)          // every sighting ever, including trimmed ones
   testBarDate     DateTime?                    // bar the spring/upthrust printed on
   leadToBreakout  Int?                         // bars surfaced -> breakout (backfilled)
   leadToTest      Int?                         // bars surfaced -> terminal test (backfilled)

@@ -14,6 +14,7 @@ import { OpenPositions } from "./_components/dashboard/OpenPositions";
 import { AccountsAggregateCard, RecentAlertsCard } from "./_components/dashboard/RightRail";
 import { ManualPanel } from "./_components/dashboard/ManualPanel";
 import { MarketContext } from "./_components/dashboard/MarketContext";
+import { WyckoffSetups } from "./_components/dashboard/WyckoffSetups";
 import { PositionSizeCalc } from "./_components/PositionSizeCalc";
 import { MultiIdeaHero } from "./_components/MultiIdeaHero";
 import { WatchedPanel } from "./_components/WatchedPanel";
@@ -84,6 +85,12 @@ export default function Dashboard() {
   const [stddev, setStddev] = useState("");
   const [futures, setFutures] = useState("");
   const [accounts, setAccounts] = useState<AccountAggregate | null>(null);
+  // Wyckoff is the strategy, so the board it produces opens the page. Its own
+  // narrow endpoint rather than the desk's full payload — see api/wyckoff/top.
+  const [wyckoff, setWyckoff] = useState<{ candidates: any[]; lastScanAt: string | null }>({
+    candidates: [], lastScanAt: null,
+  });
+  const [wyckoffLoading, setWyckoffLoading] = useState(true);
 
   // Clock tick
   useEffect(() => {
@@ -93,16 +100,24 @@ export default function Dashboard() {
 
   const fetchDashboard = useCallback(async () => {
     try {
-      const [dashRes, accRes] = await Promise.all([
+      const [dashRes, accRes, wyckRes] = await Promise.all([
         fetch("/api/dashboard"),
         fetch("/api/accounts"),
+        fetch("/api/wyckoff/top"),
       ]);
       if (dashRes.ok) setData(await dashRes.json());
       if (accRes.ok) {
         const j = await accRes.json();
         setAccounts(j.aggregate ?? null);
       }
+      // Never blocks the rest of the dashboard: the route answers 200 with an
+      // empty board even when the scanner table is unavailable.
+      if (wyckRes.ok) {
+        const j = await wyckRes.json();
+        setWyckoff({ candidates: j.candidates ?? [], lastScanAt: j.lastScanAt ?? null });
+      }
     } catch (e) { console.error(e); }
+    setWyckoffLoading(false);
     setLoading(false);
   }, []);
 
@@ -261,8 +276,30 @@ export default function Dashboard() {
 
       {/* Main grid: content + right rail */}
       <div className="dash-main">
-        {/* LEFT column */}
+        {/* LEFT column — Wyckoff first. It is the strategy, so it gets the top
+            of the page: the best setup on the board, a door to the rest, then
+            what is already running. The currency-strength read and the RFDM
+            ideas stay, below, as context for a decision rather than the
+            decision itself. */}
         <div className="dash-col">
+          <WyckoffSetups
+            candidates={wyckoff.candidates}
+            lastScanAt={wyckoff.lastScanAt}
+            loading={wyckoffLoading}
+          />
+
+          {/* Open positions — what is already at risk, before anything new */}
+          <OpenPositions trades={openTrades as any} accounts={accountList as any} onChanged={fetchDashboard} />
+
+          {/* Market context — rates, sectors, sessions */}
+          <MarketContext
+            sectors={sectors}
+            rates={centralBankRates as any}
+            regime={regime}
+            session={session}
+            barchartFetchedAt={data?.barchartFetchedAt}
+          />
+
           {scores ? (
             <StrengthRead scores={scores as any} />
           ) : (
@@ -277,18 +314,6 @@ export default function Dashboard() {
             scoringModel={scores?.scoringModel}
             viewAllHref="/analysis"
             onChanged={fetchDashboard}
-          />
-
-          {/* Open positions */}
-          <OpenPositions trades={openTrades as any} accounts={accountList as any} onChanged={fetchDashboard} />
-
-          {/* Secondary market context — sectors / rates / sessions */}
-          <MarketContext
-            sectors={sectors}
-            rates={centralBankRates as any}
-            regime={regime}
-            session={session}
-            barchartFetchedAt={data?.barchartFetchedAt}
           />
         </div>
 

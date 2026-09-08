@@ -21,6 +21,9 @@ const GROUPS: NavGroup[] = [
   {
     label: 'Trading',
     items: [
+      // Wyckoff leads: it is the strategy, and the desk is the daily process.
+      // Dashboard is the morning glance; the desk is where the work happens.
+      { href: '/wyckoff',       label: 'Wyckoff',   icon: Frame, input: true },
       { href: '/',              label: 'Dashboard', icon: Gauge },
       { href: '/trades/active', label: 'Active',    icon: Crosshair },
       { href: '/calendar',      label: 'Calendar',  icon: CalendarDays },
@@ -34,7 +37,6 @@ const GROUPS: NavGroup[] = [
       // replaced it as the daily process. Route still exists; restore the line
       // below (and TREND_LANE_ENABLED in api/cron/trade-scan) to bring it back.
       // { href: '/scanner',    label: 'Screener',   icon: Radar },  // (re-add Radar to the lucide import too)
-      { href: '/wyckoff',    label: 'Wyckoff',    icon: Frame, input: true },
       { href: '/analytics',  label: 'Stats',      icon: TrendingUp },
       { href: '/scoreboard', label: 'Scoreboard', icon: Trophy },
       { href: '/analysis',   label: 'History',    icon: HistoryIcon },

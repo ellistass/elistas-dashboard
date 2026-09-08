@@ -20,9 +20,13 @@ import {
   Zap, Clock, X, BellRing, Bell, StickyNote,
 } from "lucide-react";
 import { SUSPECT_VOLUME, instrumentInfo, executeCall, instrumentName } from "@/lib/wyckoff/basket";
+import { entryPlans, findTestBar, type EntryPlan } from "@/lib/wyckoff/entry";
 import { GradeChip, ReasonChip } from "./desk";
 import TradedStrip, { type LinkedTrade } from "./TradedStrip";
 import CardChart, { type SparkBar } from "./CardChart";
+import EntryPlans from "./EntryPlans";
+import EngineRead from "./EngineRead";
+import SightingLog, { type Sighting } from "./SightingLog";
 
 export interface PendingRow {
   id: string;
@@ -64,6 +68,12 @@ export interface PendingRow {
   firstSeenBarDate?: string | null;
   /** How many times the detector moved this range's start date. */
   reanchorCount?: number | null;
+  /** Every data date this range was at a decision point — see SightingLog. */
+  sightings?: Sighting[] | null;
+  sightingCount?: number | null;
+  /** The engine's call. Present ONLY once your own read is locked — the API
+   *  attaches it at that point and not before (see revealEngine in the route). */
+  engineVerdict?: string | null;
   // Trades auto-linked to this read by the EA open handler (lib/wyckoff/link.ts).
   trades?: LinkedTrade[] | null;
   // Compact bar window written at scan time for the card thumbnail.
@@ -88,8 +98,12 @@ export default function CandidateCard({
   onWatchChange?: () => void;
 }) {
   const [verdict, setVerdict] = useState<string | null>(null);
+  const [style, setStyle] = useState<string | null>(null);
   const [entry, setEntry] = useState("");
   const [stop, setStop] = useState("");
+  // The engine's call arrives in the lock response, so the reveal is instant
+  // rather than waiting on the parent's refetch.
+  const [revealed, setRevealed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState(row.watchNote ?? "");
@@ -99,6 +113,43 @@ export default function CandidateCard({
   const inst = instrumentInfo(row.instrument);
   const readable = row.readable !== false;
   const hit = row.alertHitAt != null;
+  const engine = row.engineVerdict ?? revealed;
+
+  // Priced off the direction currently in play: your locked read if there is
+  // one, otherwise the side you just pressed in the form. No side, no plans —
+  // an unread card stays direction-neutral, which is the point of the desk.
+  const side = row.traderVerdict ?? verdict;
+  const plans = entryPlans({
+    rangeLo: row.rangeLo,
+    rangeHi: row.rangeHi,
+    verdict: side,
+    status: row.status,
+    testBar: findTestBar(row.sparkBars, row.testBarDate),
+  });
+
+  /** After a lock, work out which of the two entries you actually took by
+   *  seeing which plan your committed entry sits closest to. Nothing is stored
+   *  for this — the price you locked is the record, and it already says. */
+  const lockedStyle = (() => {
+    if (row.traderEntry == null || !plans.length) return null;
+    let best: EntryPlan | null = null;
+    let bestGap = Infinity;
+    for (const p of plans) {
+      const gap = Math.abs(p.entry - row.traderEntry);
+      if (gap < bestGap) { bestGap = gap; best = p; }
+    }
+    // Only claim a match when it is actually near one of them — a hand-typed
+    // entry mid-box belongs to neither, and saying otherwise would be a
+    // tidier story than the truth.
+    return best && bestGap <= (row.rangeHi - row.rangeLo) * 0.2 ? best.style : null;
+  })();
+
+  function chooseStyle(p: EntryPlan) {
+    setStyle(p.style);
+    const digits = row.rangeHi < 10 ? 4 : 2;
+    setEntry(p.entry.toFixed(digits));
+    setStop(p.stop.toFixed(digits));
+  }
 
   async function saveWatch(patch: Record<string, unknown>) {
     if (watchBusy) return;
@@ -136,6 +187,8 @@ export default function CandidateCard({
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `failed (${res.status})`);
+      // Show it here first — the parent reload will confirm it a beat later.
+      if (j.engineVerdict) setRevealed(j.engineVerdict);
       onLocked();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -223,6 +276,7 @@ export default function CandidateCard({
           title={row.gradeNotes?.length ? row.gradeNotes.join(" · ") : undefined}
         />
         <ReasonChip reason={row.surfacedReason} />
+        <SightingLog sightings={row.sightings} count={row.sightingCount} />
         {(row.surfacedBarDate || row.firstSeenBarDate) && (
           <span
             title={
@@ -408,8 +462,23 @@ export default function CandidateCard({
             {row.traderEntry != null && (
               <span style={{ ...mono, fontSize: 10.5, color: "var(--text-3)" }}>
                 entry {px(row.traderEntry, row.rangeHi)} · stop {row.traderStop != null ? px(row.traderStop, row.rangeHi) : "—"}
+                {lockedStyle && ` · ${lockedStyle}`}
               </span>
             )}
+
+            {/* Your read is on the record and cannot be changed. So here is
+                the engine's — while there is still a trade to size. */}
+            <div style={{ flexBasis: "100%" }}>
+              <EngineRead engineVerdict={engine} traderVerdict={row.traderVerdict} suspectVolume={suspect} />
+              {plans.length > 0 && row.traderVerdict !== "pass" && (
+                <div style={{ marginTop: 8 }}>
+                  <p style={{ ...mono, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-3)", margin: "0 0 6px" }}>
+                    both ways in
+                  </p>
+                  <EntryPlans plans={plans} chosen={lockedStyle} priceRef={row.rangeHi} />
+                </div>
+              )}
+            </div>
           </div>
         ) : !readable ? (
           // Kept because you asked for it, but the blind window has closed —
@@ -422,11 +491,30 @@ export default function CandidateCard({
           <>
             <div className="seg" style={{ display: "flex", marginBottom: 8 }}>
               {(["accum", "distrib", "pass"] as const).map((v) => (
-                <button key={v} type="button" className={verdict === v ? "on" : ""} style={{ flex: 1 }} onClick={() => setVerdict(v)}>
+                <button
+                  key={v}
+                  type="button"
+                  className={verdict === v ? "on" : ""}
+                  style={{ flex: 1 }}
+                  onClick={() => {
+                    setVerdict(v);
+                    // Switching sides invalidates a price picked for the other
+                    // one — clear rather than silently keep a stale level.
+                    setStyle(null);
+                    setEntry("");
+                    setStop("");
+                  }}
+                >
                   {verdictLabel(v)}
                 </button>
               ))}
             </div>
+
+            {/* Both ways in, priced. Only once you have picked a side — before
+                that there is no direction to price and showing one would be
+                the answer to the question the desk is asking. */}
+            <EntryPlans plans={plans} chosen={style} onChoose={chooseStyle} priceRef={row.rangeHi} />
+
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <input value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="entry" inputMode="decimal" style={inputStyle} />
               <input value={stop} onChange={(e) => setStop(e.target.value)} placeholder="stop" inputMode="decimal" style={inputStyle} />

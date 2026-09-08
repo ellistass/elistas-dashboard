@@ -11,6 +11,14 @@
 // range resolves, so it cannot be recovered from the network response.
 // Resolved rows reveal everything: your read, the engine's, and the outcome.
 //
+// THE ONE EXCEPTION, and why it is not a hole: a row whose traderVerdict is
+// already set gets its engineVerdict attached (see revealEngine below). The
+// read is immutable the instant it lands — /api/wyckoff/read has no update
+// path and re-POSTing 409s — so by the time the verdict is readable, the thing
+// it could have influenced is already on the record. What it CAN still inform
+// is the trade, which is the point: you commit your read blind, then see
+// whether the engine agrees before you risk money on it.
+//
 // Auth: session (same as the other dashboard pages).
 
 export const runtime = "nodejs";
@@ -59,6 +67,10 @@ const PENDING_SELECT = {
   surfacedReason: true,
   testBarDate: true,
   sparkBars: true,
+  // The sighting log. Trader-side and direction-free — it records WHEN this
+  // range was at a decision point, never what the engine made of it.
+  sightings: true,
+  sightingCount: true,
   // Stable first-occurrence facts. These survive a re-anchor, which is what
   // makes "when did this setup first appear" a real answer rather than an
   // artifact of when the scan last ran.
@@ -96,6 +108,35 @@ function isReadable(r: { status: string; fresh: boolean; breakoutDate: Date | nu
  * Safe before resolution: this returns YOUR OWN trade, not anything the engine
  * knows. Nothing here touches engineVerdict.
  */
+/**
+ * Attach engineVerdict to rows the trader has ALREADY read.
+ *
+ * A second query rather than a wider select, deliberately: PENDING_SELECT stays
+ * the single audited list of what may leave the server before resolution, and
+ * this exception has to be written out on purpose to happen at all. Widening
+ * the select and filtering afterwards would put the verdict one forgotten
+ * `delete` away from every unread card on the page.
+ */
+async function revealEngine<T extends { id: string; traderVerdict: string | null }>(
+  rows: T[],
+): Promise<T[]> {
+  const read = rows.filter((r) => r.traderVerdict != null).map((r) => r.id);
+  if (!read.length) return rows;
+  try {
+    const verdicts = await (db as any).scannerCandidate.findMany({
+      where: { id: { in: read } },
+      select: { id: true, engineVerdict: true, loggedBlind: true },
+    });
+    const byId = new Map(verdicts.map((v: any) => [v.id, v]));
+    return rows.map((r) => {
+      const v = byId.get(r.id) as any;
+      return v ? { ...r, engineVerdict: v.engineVerdict, loggedBlind: v.loggedBlind } : r;
+    });
+  } catch {
+    return rows;
+  }
+}
+
 async function attachTrades<T extends { id: string }>(rows: T[]): Promise<T[]> {
   if (!rows.length) return rows
   try {
@@ -211,8 +252,8 @@ export async function GET() {
 
     return NextResponse.json({
       lastScanAt: lastWrite?._max?.updatedAt ?? null,
-      pending: await attachTrades(pending),
-      watching: await attachTrades(watching),
+      pending: await attachTrades(await revealEngine(pending)),
+      watching: await attachTrades(await revealEngine(watching)),
       resolved: await attachTrades(resolved),
       trackedOpen,
       awaitingBackfill,

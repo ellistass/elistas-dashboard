@@ -8,8 +8,15 @@
 //   • no read has been logged yet (immutable — no edit, no re-POST).
 // Anything else is a 409/400. There is deliberately NO update or delete route:
 // if the read could be changed after the fact, the you-vs-engine score would
-// be fiction. The response echoes only trader-facing fields — never the
-// engine verdict.
+// be fiction.
+//
+// The response DOES carry the engine verdict — but only on the way back out of
+// a successful lock, once the write has landed and the read is immutable. The
+// blind is a rule about the order of two events, not a secret: your call goes
+// on the record first, and only then do you get to see the engine's, while
+// there is still a trade to size. Reading it before you commit is what the
+// GET-side select prevents; reading it after is the whole reason the number
+// exists.
 //
 // Auth: session (same as the other dashboard pages).
 
@@ -80,7 +87,7 @@ export async function POST(req: NextRequest) {
 
   // Guarded write: the WHERE re-asserts "no read, no outcome" so two racing
   // submissions can't both land (the second matches zero rows).
-  const res = await (db as any).scannerCandidate.updateMany({
+  const res: { count: number } = await (db as any).scannerCandidate.updateMany({
     where: { id, traderVerdict: null, outcome: null },
     data: {
       traderVerdict: verdict,
@@ -93,8 +100,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Read already locked" }, { status: 409 });
   }
 
+  // Now — and only now — the engine's call.
+  const revealed = await (db as any).scannerCandidate.findUnique({
+    where: { id },
+    select: { engineVerdict: true },
+  });
+
   return NextResponse.json({
     ok: true,
     locked: { id, verdict, entry, stop, readAt: new Date().toISOString() },
+    engineVerdict: revealed?.engineVerdict ?? null,
   });
 }

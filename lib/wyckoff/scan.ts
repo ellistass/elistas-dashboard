@@ -8,10 +8,17 @@
 //     or just-broke-out) and NEVER contains the engine verdict, a direction,
 //     or an entry recommendation. The trader reads the chart and decides.
 //
-// Dedup: one row per (instrument, rangeStartDate). Range starts are stable
-// across daily re-scans (earlier bars never change), so an open range updates
-// in place until it breaks out, then freezes. Rows are never touched again
-// once status is "broken" — that is the moment the verdict locks.
+// Dedup: identity is decided by OVERLAP against the rows already held (see
+// lib/wyckoff/identity.ts), not by rangeStartDate — that date is a corrigible
+// estimate the greedy detector re-anchors as the data window rolls. An open
+// range updates in place until it breaks out, then freezes: once status is
+// "broken" the verdict is locked and no scan writes to the row again.
+//
+// A settled row still has to MATCH its own re-detection, though. It stays in
+// the bars forever, so a scan that cannot match it creates a fresh copy
+// instead — which then resolves and posts an already-months-old success or
+// failure to the audit. That was the shape of the bug fixed here: ~785 clones
+// per scan.
 
 import { db } from "@/lib/db";
 import { BASKET } from "./basket";
@@ -71,6 +78,7 @@ export interface WyckoffScanResult {
   scanned: number; // instruments successfully fetched
   rangesFound: number; // all ranges across all instruments (persisted)
   persisted: number; // rows written/updated this run
+  settled: number; // detections matched to an already-settled row and left alone
   staleRemoved: number; // open rows no longer detected at all
   reanchored: number;   // ranges whose start date moved but kept their row
   latestBarDate: string | null; // newest bar seen across all instruments —
@@ -156,6 +164,33 @@ function analyze(instrument: string, bars: Bar[], range: DetectedRange): Analyze
   };
 }
 
+/** One entry in a candidate's sighting log. */
+export interface Sighting {
+  /** DATA date the scanner saw it at a decision point (YYYY-MM-DD). */
+  barDate: string;
+  /** Why it was a decision point that day. */
+  reason: FreshReason;
+  /** Wall-clock time of the scan that recorded it. */
+  at: string;
+}
+
+/** Keep the log bounded. A range that has offered itself forty times has
+ *  already made its point; the oldest entries are the ones you stop needing. */
+const MAX_SIGHTINGS = 40;
+
+/** Append today's sighting, or nothing if this range is not at a decision
+ *  point — or was already logged at this data date. */
+function buildSighting(row: any, a: AnalyzedRange): Record<string, unknown> {
+  if (!a.fresh || !a.reason) return {};
+  const barDate = a.candidate.lastBarDate;
+  const log: Sighting[] = Array.isArray(row?.sightings) ? (row.sightings as Sighting[]) : [];
+  if (log.some((sg) => sg?.barDate === barDate)) return {};
+  const next = [...log, { barDate, reason: a.reason, at: new Date().toISOString() }].slice(-MAX_SIGHTINGS);
+  // sightingCount counts every sighting ever, so it stays truthful after the
+  // log itself has been trimmed.
+  return { sightings: next, sightingCount: (row?.sightingCount ?? log.length) + 1 };
+}
+
 /**
  * Persist every range detected for ONE instrument in a single pass.
  *
@@ -173,8 +208,8 @@ async function persistInstrument(
   instrument: string,
   analyzed: AnalyzedRange[],
   lastBarDate: string,
-): Promise<{ written: number; reanchored: number; matchedIds: string[] }> {
-  const result = { written: 0, reanchored: 0, matchedIds: [] as string[] };
+): Promise<{ written: number; settled: number; reanchored: number; matchedIds: string[] }> {
+  const result = { written: 0, settled: 0, reanchored: 0, matchedIds: [] as string[] };
   if (!analyzed.length) return result;
 
   const rows = await (db as any).scannerCandidate.findMany({
@@ -183,6 +218,7 @@ async function persistInstrument(
       id: true, status: true, outcome: true, surfacedAt: true,
       rangeStartDate: true, breakoutDate: true, rangeLo: true, rangeHi: true,
       traderVerdict: true, firstSeenBarDate: true, reanchorCount: true,
+      sightings: true, sightingCount: true,
     },
   });
 
@@ -192,9 +228,19 @@ async function persistInstrument(
     endDate: (r.breakoutDate ?? toUtcDate(lastBarDate)).toISOString().slice(0, 10),
     lo: r.rangeLo,
     hi: r.rangeHi,
-    // A row carrying a locked read or a recorded outcome is evidence, not an
-    // estimate. Its boundaries must never be rewritten by a later detection.
-    frozen: r.status === "broken" || r.outcome != null || r.traderVerdict != null,
+    // SETTLED = the range broke out, or its outcome is already recorded.
+    // Those rows are finished: boundaries fixed, engine verdict locked at the
+    // breakout, grade final. They still MATCH (see assignRanges) so the
+    // detector cannot clone them — they just never get written to again.
+    //
+    // A locked READ is deliberately NOT settling. The read is a call on a
+    // range that is still open; if the row stopped tracking the moment you
+    // read it, it would never record its own breakout and never resolve — the
+    // read could not be scored at all. There are 13 such rows in the table,
+    // stuck open since July for exactly this reason. What the read fixes in
+    // place is traderEntry / traderStop / traderVerdict, and no scan writes
+    // those.
+    frozen: r.status === "broken" || r.outcome != null,
   }));
 
   const assignments = assignRanges(
@@ -211,6 +257,15 @@ async function persistInstrument(
   for (const assn of assignments) {
     const a = (assn.detected as any)._a as AnalyzedRange;
     const row = assn.matchedId ? rows.find((r: any) => r.id === assn.matchedId) : null;
+
+    // A settled row has claimed this detection. Keeping its id in matchedIds is
+    // what tells the stale sweep the range is still there; returning here is
+    // what stops the clone. Nothing is written.
+    if (row && assn.frozen) {
+      result.matchedIds.push(row.id);
+      result.settled++;
+      continue;
+    }
 
     const data = {
       rangeLo: a.candidate.rangeLo,
@@ -245,6 +300,18 @@ async function persistInstrument(
         ? { surfacedAt: new Date(), surfacedBarDate: toUtcDate(a.candidate.lastBarDate) }
         : {};
 
+    // ── Sighting log ──────────────────────────────────────────────────────
+    // surfacedBarDate answers "when did this FIRST become a decision" and is
+    // written once. It cannot answer "how many times has this same box come
+    // back to its edge while I did nothing about it" — and on a range that
+    // sits for weeks, that is the more useful question: the same setup on the
+    // same pair, offered again and again, is one thing to judge, not eight
+    // unrelated cards.
+    //
+    // Keyed on the DATA date, so re-running the scan twice in an afternoon
+    // logs one sighting, not two.
+    const sightingStamp = buildSighting(row, a);
+
     if (row) {
       // Re-anchor bookkeeping: correct the boundaries, record that they moved,
       // and leave every first-occurrence fact alone.
@@ -254,7 +321,7 @@ async function persistInstrument(
       if (assn.reanchored) result.reanchored++;
       await (db as any).scannerCandidate.update({
         where: { id: row.id },
-        data: { ...data, ...surfaceStamp, ...reanchorStamp },
+        data: { ...data, ...surfaceStamp, ...sightingStamp, ...reanchorStamp },
       });
       result.matchedIds.push(row.id);
     } else {
@@ -262,6 +329,7 @@ async function persistInstrument(
         data: {
           ...data,
           ...surfaceStamp,
+          ...sightingStamp,
           instrument,
           outcome: null,
           // Set once, at creation, and never written again anywhere.
@@ -285,6 +353,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
   let scanned = 0;
   let rangesFound = 0;
   let persisted = 0;
+  let settledRows = 0;
   let staleRemoved = 0;
   let reanchored = 0;
   let latestBarDate: string | null = null;
@@ -319,6 +388,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
       try {
         const res = await persistInstrument(inst.symbol, analyzed, last ?? "");
         persisted += res.written;
+        settledRows += res.settled;
         reanchored += res.reanchored;
         keptIds = res.matchedIds;
       } catch (e) {
@@ -382,7 +452,7 @@ export async function runWyckoffScan(): Promise<WyckoffScanResult> {
 
   alerts.sort((a, b) => (a.watch === b.watch ? a.instrument.localeCompare(b.instrument) : a.watch === "now" ? -1 : 1));
 
-  return { candidates: fresh, alerts, scanned, rangesFound, persisted, staleRemoved, reanchored, latestBarDate, errors };
+  return { candidates: fresh, alerts, scanned, rangesFound, persisted, settled: settledRows, staleRemoved, reanchored, latestBarDate, errors };
 }
 
 // ── Watchlist alerts ─────────────────────────────────────────────────────────

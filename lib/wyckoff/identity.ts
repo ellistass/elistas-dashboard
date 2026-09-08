@@ -35,8 +35,9 @@ export interface RangeSpan {
 
 export interface ExistingRow extends RangeSpan {
   id: string;
-  /** Rows with a locked read or an outcome are frozen and must never be
-   *  re-matched — their boundaries are evidence, not estimates. */
+  /** Settled rows: the range broke out, or its outcome is already recorded.
+   *  Nothing about them may be rewritten — but they MUST still take part in
+   *  matching. See the note above assignRanges: excluding them was the bug. */
   frozen?: boolean;
 }
 
@@ -102,6 +103,9 @@ export interface Assignment<T extends RangeSpan> {
   /** True when the match moved the range's start date — the re-anchor event
    *  that used to fork a new row and lose the original first-seen date. */
   reanchored: boolean;
+  /** The matched row is settled: it has claimed this detection (so no clone is
+   *  created) but the caller must not write to it. */
+  frozen: boolean;
 }
 
 /**
@@ -109,43 +113,66 @@ export interface Assignment<T extends RangeSpan> {
  *
  * Greedy over the best scores globally, one-to-one: without that, two detected
  * ranges can both claim the same row and one silently overwrites the other.
+ *
+ * SETTLED ROWS MATCH TOO — and this is the whole point.
+ *
+ * The first version of this function filtered them out (`existing.filter(e =>
+ * !e.frozen)`) on the reasoning that a row holding a locked read or a recorded
+ * outcome is evidence and must never be rewritten. True — but "never rewrite
+ * it" and "never match it" are different instructions, and taking the second
+ * one produced the opposite of what it was protecting.
+ *
+ * A range that has already broken out is STILL IN THE BARS. Every scan
+ * re-detects it, finds nothing to match (its row was hidden), and creates a
+ * brand-new row. Then the outcome backfill resolves that row, and a success or
+ * a failure that already happened months ago lands in the audit as if it were
+ * new. Measured on the live table: ~785 clone rows per scan, 9,304 of 10,485
+ * rows — one setup logged thirteen separate times, with the original (the copy
+ * carrying the trader's read, note and alert) orphaned behind twelve blanks.
+ *
+ * So: match everything, and hand the caller a `frozen` flag to decide what may
+ * be written. Claiming the detection is what stops the clone; the flag is what
+ * protects the evidence.
  */
 export function assignRanges<T extends RangeSpan>(
   detected: T[],
   existing: ExistingRow[],
 ): Array<Assignment<T>> {
-  const open = existing.filter((e) => !e.frozen);
-
   const pairs: Array<{ di: number; ei: number; score: number }> = [];
   detected.forEach((d, di) => {
-    open.forEach((e, ei) => {
+    existing.forEach((e, ei) => {
       const m = scoreMatch(d, e);
       if (m.time >= MIN_TIME_OVERLAP && m.price >= MIN_PRICE_OVERLAP) {
         pairs.push({ di, ei, score: m.score });
       }
     });
   });
-  pairs.sort((x, y) => y.score - x.score);
+  // Best score first; a settled row breaks a tie, because the older evidence
+  // has the better claim on a detection two rows fit equally well.
+  pairs.sort((x, y) => y.score - x.score || Number(!!existing[y.ei].frozen) - Number(!!existing[x.ei].frozen));
 
   const takenD = new Set<number>();
   const takenE = new Set<number>();
-  const result = new Map<number, { id: string; score: number }>();
+  const result = new Map<number, { id: string; score: number; frozen: boolean }>();
   for (const p of pairs) {
     if (takenD.has(p.di) || takenE.has(p.ei)) continue;
     takenD.add(p.di);
     takenE.add(p.ei);
-    result.set(p.di, { id: open[p.ei].id, score: p.score });
+    result.set(p.di, { id: existing[p.ei].id, score: p.score, frozen: !!existing[p.ei].frozen });
   }
 
   return detected.map((d, di) => {
     const hit = result.get(di);
-    if (!hit) return { detected: d, matchedId: null, score: 0, reanchored: false };
-    const row = open.find((e) => e.id === hit.id)!;
+    if (!hit) return { detected: d, matchedId: null, score: 0, reanchored: false, frozen: false };
+    const row = existing.find((e) => e.id === hit.id)!;
     return {
       detected: d,
       matchedId: hit.id,
       score: hit.score,
-      reanchored: row.startDate.slice(0, 10) !== d.startDate.slice(0, 10),
+      // A settled row's start date is final, so a "re-anchor" against one is
+      // not an event to record — it is just the detector drifting.
+      reanchored: !hit.frozen && row.startDate.slice(0, 10) !== d.startDate.slice(0, 10),
+      frozen: hit.frozen,
     };
   });
 }

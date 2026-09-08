@@ -104,6 +104,61 @@ export function ReasonChip({ reason }: { reason?: string | null }) {
   );
 }
 
+/* ── Repeat setups on one pair ─────────────────────────────────────────────
+   A pair with three live candidates is not three opportunities. It is one
+   instrument in a state you have not acted on, offering itself repeatedly —
+   and the desk was showing those three as unrelated cards scattered through a
+   grid sorted by grade, so the repetition (the actual signal) was invisible.
+
+   Grouping them says the thing plainly: SAME PAIR, N SETUPS, first seen on
+   this date. Ranking WITHIN the group is unchanged, so the one most worth
+   deciding is still on top; the group as a whole takes the rank of its best
+   card, so grouping never buries a live decision. */
+
+export interface CandidateGroup {
+  instrument: string;
+  rows: PendingRow[];
+  /** Earliest date any range on this pair reached a decision point. */
+  firstSeen: string | null;
+  /** Total decision-point sightings across every range on the pair — how many
+   *  separate times this instrument has asked for an answer. */
+  sightings: number;
+}
+
+const earliest = (rows: PendingRow[]): string | null => {
+  const dates = rows
+    .flatMap((r) => [r.surfacedBarDate, r.firstSeenBarDate])
+    .filter((d): d is string => !!d)
+    .map((d) => d.slice(0, 10));
+  return dates.length ? dates.sort()[0] : null;
+};
+
+/**
+ * Collapse a ranked list into per-instrument groups, preserving rank order.
+ *
+ * Rank order is preserved rather than recomputed: `rows` arrives from
+ * rankCandidates, the first appearance of an instrument fixes that group's
+ * position, and members keep their relative order inside it. So a grouped desk
+ * reads top-to-bottom in exactly the same urgency order an ungrouped one did.
+ */
+export function groupByInstrument(rows: PendingRow[]): CandidateGroup[] {
+  const order: string[] = [];
+  const bucket = new Map<string, PendingRow[]>();
+  for (const r of rows) {
+    if (!bucket.has(r.instrument)) { bucket.set(r.instrument, []); order.push(r.instrument); }
+    bucket.get(r.instrument)!.push(r);
+  }
+  return order.map((instrument) => {
+    const list = bucket.get(instrument)!;
+    return {
+      instrument,
+      rows: list,
+      firstSeen: earliest(list),
+      sightings: list.reduce((sum, r) => sum + (r.sightingCount ?? 0), 0),
+    };
+  });
+}
+
 /** Days since the range first reached a decision point. This is the number
  *  behind "I saw this at the test and then it went without me" — a setup that
  *  surfaced eleven days ago and is still sitting here has been quietly
