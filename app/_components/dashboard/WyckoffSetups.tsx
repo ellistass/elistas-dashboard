@@ -16,7 +16,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Frame, ArrowRight, AlertTriangle } from "lucide-react";
-import { rankCandidates, type CandidateGroup, groupByInstrument } from "@/app/wyckoff/_components/desk";
+import { rankCandidates } from "@/app/wyckoff/_components/desk";
+import { stackCandidates, type Stack } from "@/lib/wyckoff/stack";
 import CandidateCard, { type PendingRow } from "@/app/wyckoff/_components/CandidateCard";
 import LiveChartDrawer from "@/app/wyckoff/_components/LiveChartDrawer";
 
@@ -59,7 +60,9 @@ export function WyckoffSetups({
   // is that there is a best one, and showing three side by side quietly walks
   // that back into a shortlist you still have to choose from.
   const shown = expanded ? ranked.slice(0, 6) : ranked.slice(0, 1);
-  const repeats = groupByInstrument(ranked).filter((g) => g.rows.length > 1);
+  // Same reading as the desk: a pair pressing one area repeatedly, not a pair
+  // with several unrelated setups.
+  const repeats = stackCandidates(ranked as any).filter((st) => st.stacked);
   const stale = tradingDaysSince(lastScanAt);
 
   return (
@@ -162,14 +165,14 @@ export function WyckoffSetups({
 /** The same pair offering several setups at once is one instrument asking
  *  repeatedly, not several opportunities — and it is worth saying on the page
  *  you look at first, before the desk has a chance to make them look separate. */
-function RepeatNote({ groups }: { groups: CandidateGroup[] }) {
+function RepeatNote({ groups }: { groups: Array<Stack<any>> }) {
   return (
     <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", margin: "11px 0 0", lineHeight: 1.6 }}>
-      Repeating:{" "}
+      Pressing the same area:{" "}
       {groups.map((g, i) => (
         <span key={g.instrument}>
           {i > 0 && " · "}
-          <span style={{ color: "var(--text-2)" }}>{g.instrument}</span> {g.rows.length} setups
+          <span style={{ color: "var(--text-2)" }}>{g.instrument}</span> {g.rows.length} boxes
           {g.firstSeen && <span> since {g.firstSeen}</span>}
         </span>
       ))}

@@ -12,11 +12,12 @@
 // no track record; dimming lets you audit what it demoted for free.
 
 import { useState } from "react";
-import { Lock } from "lucide-react";
+import { Lock, Layers } from "lucide-react";
 import CandidateCard from "./_components/CandidateCard";
 import LiveChartDrawer from "./_components/LiveChartDrawer";
 import { useWyckoff } from "./_components/WyckoffData";
-import { rankCandidates, isDimmed, daysSinceSurfaced, groupByInstrument, type CandidateGroup } from "./_components/desk";
+import { rankCandidates, isDimmed, daysSinceSurfaced } from "./_components/desk";
+import { stackCandidates, type Stack } from "@/lib/wyckoff/stack";
 import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "./_components/ui";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
@@ -34,10 +35,10 @@ export default function DeskPage() {
   // "I saw it at the test and then it went without me" case.
   const ageing = ranked.filter((r) => (daysSinceSurfaced(r) ?? 0) >= 7).length;
 
-  // Pairs offering more than one live setup at once. Worth calling out in the
-  // note line, because it is the difference between "eleven things to decide"
-  // and "six, two of which are the same pair asking twice".
-  const repeats = groupByInstrument(ranked).filter((g) => g.rows.length > 1).length;
+  // Areas being pressed more than once. Not "duplicates to tidy" — a box price
+  // keeps returning to is the signal — but the desk should say so rather than
+  // scatter the boxes across a grid sorted by grade.
+  const repeats = stackCandidates(ranked as any).filter((st) => st.stacked).length;
 
   if (loading) return <LoadingCard what="candidates" />;
 
@@ -61,7 +62,8 @@ export default function DeskPage() {
           )}
           {repeats > 0 && (
             <span>
-              {repeats} pair{repeats === 1 ? "" : "s"} {repeats === 1 ? "is" : "are"} offering more than one setup — grouped below.{" "}
+              {repeats} pair{repeats === 1 ? "" : "s"} {repeats === 1 ? "is" : "are"} pressing the same area more than
+              once — stacked below, open one to see the pile.{" "}
             </span>
           )}
           silently tracking {trackedOpen} open range{trackedOpen === 1 ? "" : "s"} mid-box · {awaitingBackfill} older
@@ -105,11 +107,13 @@ export default function DeskPage() {
   );
 }
 
-/* A pair with one live setup renders exactly as before — a card in the grid.
-   A pair with several gets a header saying so, and its cards indented beneath
-   it. The distinction is the whole point: the second case is one instrument
-   asking repeatedly, and seeing it as three loose cards is how you end up
-   believing you looked at three different things. */
+/* One card per STACK, not per row.
+   Two overlapping boxes on a pair are one area being pressed twice, so the
+   desk fronts the most decidable of them and says how deep the pile is. The
+   others are not hidden — they are one click away in the drawer, drawn to
+   scale against each other, which is the only place the overlap is actually
+   legible. Scattering them across the grid as peers was the thing that made
+   repetition look like clutter instead of pressure. */
 function Grid({ rows, onChart, onChanged, dim }: {
   rows: Array<React.ComponentProps<typeof CandidateCard>["row"]>;
   onChart: (id: string) => void;
@@ -117,91 +121,88 @@ function Grid({ rows, onChart, onChanged, dim }: {
   dim?: boolean;
 }) {
   if (rows.length === 0) return null;
-  const groups = groupByInstrument(rows);
-  const anyRepeat = groups.some((g) => g.rows.length > 1);
-
-  // Nothing repeats — render the plain grid and skip the chrome entirely.
-  if (!anyRepeat) return <CardGrid rows={rows} onChart={onChart} onChanged={onChanged} dim={dim} />;
-
-  return (
-    <div style={{ marginBottom: 24 }}>
-      {groups.map((g) =>
-        g.rows.length === 1 ? (
-          <CardGrid key={g.instrument} rows={g.rows} onChart={onChart} onChanged={onChanged} dim={dim} tight />
-        ) : (
-          <RepeatGroup key={g.instrument} group={g} onChart={onChart} onChanged={onChanged} dim={dim} />
-        ),
-      )}
-    </div>
-  );
-}
-
-function RepeatGroup({ group, onChart, onChanged, dim }: {
-  group: CandidateGroup;
-  onChart: (id: string) => void;
-  onChanged: () => void;
-  dim?: boolean;
-}) {
-  const since = group.firstSeen
-    ? Math.max(0, Math.floor((Date.now() - Date.parse(`${group.firstSeen}T00:00:00Z`)) / 86_400_000))
-    : null;
-  return (
-    <div
-      style={{
-        border: "1px solid var(--border-subtle)", borderRadius: 12,
-        padding: "11px 12px 2px", marginBottom: 12,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap", marginBottom: 10 }}>
-        <span style={{ ...mono, fontSize: 13, fontWeight: 500, color: "var(--text-1)", letterSpacing: "0.02em" }}>
-          {group.instrument}
-        </span>
-        <span style={{ ...mono, fontSize: 10, color: "var(--accent)" }}>
-          {group.rows.length} setups
-        </span>
-        {group.firstSeen && (
-          <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
-            first at a decision point {group.firstSeen}
-            {since != null && since > 0 && ` · ${since}d ago`}
-          </span>
-        )}
-        {group.sightings > group.rows.length && (
-          <span
-            title="Total times any range on this pair has been at a decision point — the same box coming back to its edge counts each time."
-            style={{ ...mono, fontSize: 10, color: "var(--text-3)", marginLeft: "auto" }}
-          >
-            {group.sightings} sightings
-          </span>
-        )}
-      </div>
-      <CardGrid rows={group.rows} onChart={onChart} onChanged={onChanged} dim={dim} tight />
-    </div>
-  );
-}
-
-function CardGrid({ rows, onChart, onChanged, dim, tight }: {
-  rows: Array<React.ComponentProps<typeof CandidateCard>["row"]>;
-  onChart: (id: string) => void;
-  onChanged: () => void;
-  dim?: boolean;
-  tight?: boolean;
-}) {
+  const stacks = stackCandidates(rows as any) as Array<Stack<(typeof rows)[number]>>;
   return (
     <div
       style={{
         display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))",
-        gap: 12, marginBottom: tight ? 12 : 24, opacity: dim ? 0.62 : 1,
+        gap: 12, marginBottom: 24, opacity: dim ? 0.62 : 1,
       }}
     >
-      {rows.map((row) => (
+      {stacks.map((st) => (
+        <StackedCard
+          key={st.front.id}
+          stack={st}
+          onChart={onChart}
+          onChanged={onChanged}
+        />
+      ))}
+    </div>
+  );
+}
+
+/* The pile, as one card. The depth is drawn behind the front card rather than
+   written next to it — a stack should look like a stack, and the count means
+   more when you can see it. */
+function StackedCard({ stack, onChart, onChanged }: {
+  stack: Stack<React.ComponentProps<typeof CandidateCard>["row"]>;
+  onChart: (id: string) => void;
+  onChanged: () => void;
+}) {
+  const depth = stack.rows.length;
+  if (!stack.stacked) {
+    return (
+      <CandidateCard
+        row={stack.front}
+        onLocked={onChanged}
+        onChart={onChart}
+        onWatchChange={onChanged}
+      />
+    );
+  }
+  return (
+    <div style={{ position: "relative" }}>
+      {/* Sheets peeking out behind, one per extra box, capped so a deep pile
+          does not turn into a fan. */}
+      {Array.from({ length: Math.min(depth - 1, 3) }).map((_, i) => (
+        <div
+          key={i}
+          aria-hidden
+          style={{
+            position: "absolute", left: (i + 1) * 4, right: -((i + 1) * 4),
+            top: -((i + 1) * 4), height: 18,
+            borderRadius: "12px 12px 0 0",
+            border: "1px solid var(--border-subtle)", borderBottom: "none",
+            background: "var(--bg-base)", zIndex: -1,
+            opacity: 1 - i * 0.25,
+          }}
+        />
+      ))}
+      <div style={{ position: "relative" }}>
+        <button
+          type="button"
+          onClick={() => onChart(stack.front.id)}
+          title={`${depth} overlapping boxes on ${stack.instrument} — open to see the pile drawn to scale`}
+          style={{
+            position: "absolute", top: -11, right: 10, zIndex: 2,
+            fontFamily: "'DM Mono', monospace", fontSize: 9.5,
+            display: "inline-flex", alignItems: "center", gap: 5,
+            padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+            border: "1px solid var(--accent)", background: "var(--bg-base)",
+            color: "var(--accent)",
+          }}
+        >
+          <Layers size={10} strokeWidth={2} />
+          {depth} boxes
+          {stack.firstSeen && <span style={{ color: "var(--text-3)" }}>since {stack.firstSeen}</span>}
+        </button>
         <CandidateCard
-          key={row.id}
-          row={row}
+          row={stack.front}
           onLocked={onChanged}
           onChart={onChart}
           onWatchChange={onChanged}
         />
-      ))}
+      </div>
     </div>
   );
 }

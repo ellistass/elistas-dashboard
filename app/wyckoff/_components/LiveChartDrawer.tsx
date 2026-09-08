@@ -19,6 +19,7 @@ import { useEffect, useState } from "react";
 import { volumeView, isPlottableTag } from "@/lib/chart/volume";
 import { aggregateBars, indexForDate, viewWindow, TIMEFRAME_LABEL, TIMEFRAME_PURPOSE, MAX_BAR_PITCH, type Timeframe } from "@/lib/chart/timeframe";
 import { describePace, type PaceRead } from "@/lib/wyckoff/pace";
+import StackStrip, { type StackEntry } from "./StackStrip";
 import { X, AlertTriangle, ExternalLink, Bell, BellRing, Crosshair, Lock, ShieldCheck } from "lucide-react";
 
 interface Bar { o: number; h: number; l: number; c: number; v: number; date: string }
@@ -52,6 +53,9 @@ interface LiveChart {
   surfacedBarDate: string | null;
   surfacedReason: string | null;
   testBarDate: string | null;
+  /** Every unresolved box on this instrument overlapping this one in price.
+   *  Length 1 (just this candidate) when nothing is stacked. */
+  stack?: StackEntry[] | null;
 }
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
@@ -74,6 +78,12 @@ export default function LiveChartDrawer({
   onClose: () => void;
   onChanged?: () => void;
 }) {
+  // Which candidate is on screen. Starts at the one that was clicked, and the
+  // stack strip can swap it without tearing the drawer down — reading a pile
+  // means moving between its boxes, not closing and reopening for each.
+  const [activeId, setActiveId] = useState(id);
+  useEffect(() => { setActiveId(id); }, [id]);
+
   const [data, setData] = useState<LiveChart | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [alert, setAlert] = useState<number | null>(null);
@@ -100,7 +110,7 @@ export default function LiveChartDrawer({
       const res = await fetch("/api/wyckoff/watch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, alertPrice: price }),
+        body: JSON.stringify({ id: activeId, alertPrice: price }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `failed (${res.status})`);
@@ -121,7 +131,7 @@ export default function LiveChartDrawer({
       const res = await fetch("/api/wyckoff/read", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, verdict }),
+        body: JSON.stringify({ id: activeId, verdict }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `failed (${res.status})`);
@@ -138,18 +148,23 @@ export default function LiveChartDrawer({
     let alive = true;
     (async () => {
       try {
-        const res = await fetch(`/api/wyckoff/chart?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+        const res = await fetch(`/api/wyckoff/chart?id=${encodeURIComponent(activeId)}`, { cache: "no-store" });
         const j = await res.json();
         if (!alive) return;
         if (!res.ok) throw new Error(j.error ?? `failed (${res.status})`);
         setData(j);
         setAlert(j.alertPrice ?? null);
+        // Per-candidate UI state must not carry across a stack switch: a
+        // verdict half-selected on one box is not a verdict on the next.
+        setVerdict(null);
+        setArming(false);
+        setError(null);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
       }
     })();
     return () => { alive = false; };
-  }, [id]);
+  }, [activeId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -194,6 +209,15 @@ export default function LiveChartDrawer({
 
         {data && (
           <>
+            {/* The pile first, before the read controls. If this area has been
+                pressed four times you want to know that before you decide, not
+                after — it is context for the read, not a footnote to it. */}
+            <StackStrip
+              stack={data.stack ?? []}
+              instrument={data.instrument}
+              onSelect={setActiveId}
+            />
+
             <ReadControl
               data={data}
               verdict={verdict}

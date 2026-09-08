@@ -22,6 +22,7 @@ import { BASKET } from "@/lib/wyckoff/basket";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { buildLiveChart, SUSPECT_VOLUME } from "@/lib/wyckoff/review";
 import { paceRead } from "@/lib/wyckoff/pace";
+import { buildStacks, type StackableRow } from "@/lib/wyckoff/stack";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -91,9 +92,58 @@ export async function GET(req: NextRequest) {
   );
   const { lean: _withheld, ...pace } = fullPace;
 
+  // ── The rest of the stack ────────────────────────────────────────────────
+  // Other unresolved boxes on this instrument that overlap this one in price.
+  // They are not clutter: a pair pressing the same area repeatedly is the
+  // signal, and the drawer is where you can actually see all of it at once.
+  //
+  // Same blind rule as everywhere else — engineVerdict is absent from the
+  // select, so a sibling cannot leak what the front card withholds.
+  let stack: Array<Record<string, unknown>> = [];
+  try {
+    const siblings = await (db as any).scannerCandidate.findMany({
+      where: { instrument: row.instrument, outcome: null },
+      select: {
+        id: true, instrument: true, rangeLo: true, rangeHi: true, status: true,
+        grade: true, gradeScore: true, rangeStartDate: true, breakoutDate: true,
+        surfacedBarDate: true, firstSeenBarDate: true, sightingCount: true,
+        traderVerdict: true, watch: true,
+      },
+      take: 40,
+    });
+    const norm: StackableRow[] = siblings.map((r: any) => ({
+      ...r,
+      surfacedBarDate: r.surfacedBarDate ? r.surfacedBarDate.toISOString().slice(0, 10) : null,
+      firstSeenBarDate: r.firstSeenBarDate ? r.firstSeenBarDate.toISOString().slice(0, 10) : null,
+    }));
+    // Only the pile THIS candidate belongs to — a different area on the same
+    // instrument is a different setup and does not belong in this drawer.
+    const mine = buildStacks(norm).find((st) => st.rows.some((r) => r.id === row.id));
+    stack = (mine?.rows ?? []).map((r: any) => ({
+      id: r.id,
+      rangeLo: r.rangeLo,
+      rangeHi: r.rangeHi,
+      status: r.status,
+      grade: r.grade,
+      gradeScore: r.gradeScore,
+      rangeStartDate: r.rangeStartDate ? new Date(r.rangeStartDate).toISOString().slice(0, 10) : null,
+      breakoutDate: r.breakoutDate ? new Date(r.breakoutDate).toISOString().slice(0, 10) : null,
+      surfacedBarDate: r.surfacedBarDate,
+      sightingCount: r.sightingCount,
+      traderVerdict: r.traderVerdict,
+      watch: r.watch,
+      current: r.id === row.id,
+    }));
+  } catch {
+    // A drawer that fails to open because the stack query failed would be a
+    // poor trade for a feature that is context, not content.
+    stack = [];
+  }
+
   return NextResponse.json({
     ok: true,
     pace,
+    stack,
     instrument: row.instrument,
     suspectVolume: SUSPECT_VOLUME.has(row.instrument),
     rangeLo: row.rangeLo,

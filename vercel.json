@@ -8,6 +8,10 @@
     {
       "path": "/api/cron/idea-outcomes",
       "schedule": "15 21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/desk-health",
+      "schedule": "0 22 * * 1-5"
     }
   ]
 }
