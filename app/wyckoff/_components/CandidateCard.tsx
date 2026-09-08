@@ -17,7 +17,7 @@
 import { useState } from "react";
 import {
   Lock, ShieldCheck, AlertTriangle, CandlestickChart, ArrowLeftRight,
-  Zap, Clock, X, BellRing, Bell, StickyNote,
+  Zap, Clock, X, BellRing, Bell, StickyNote, EyeOff,
 } from "lucide-react";
 import { SUSPECT_VOLUME, instrumentInfo, executeCall, instrumentName } from "@/lib/wyckoff/basket";
 import { entryPlans, findTestBar, type EntryPlan } from "@/lib/wyckoff/entry";
@@ -27,6 +27,7 @@ import CardChart, { type SparkBar } from "./CardChart";
 import EntryPlans from "./EntryPlans";
 import EngineRead from "./EngineRead";
 import SightingLog, { type Sighting } from "./SightingLog";
+import WatchDate from "./WatchDate";
 
 export interface PendingRow {
   id: string;
@@ -48,6 +49,8 @@ export interface PendingRow {
   watch?: string | null;
   watchNote?: string | null;
   watchAt?: string | null;
+  /** The date you plan to act on this — see WatchDate. */
+  watchDate?: string | null;
   alertPrice?: number | null;
   alertSetAt?: string | null;
   alertHitAt?: string | null;
@@ -347,6 +350,28 @@ export default function CandidateCard({
           label="Later"
           title="Park it — I'll come back to this one"
           onClick={() => saveWatch({ watch: row.watch === "later" ? null : "later" })}
+        />
+        {row.watch && (
+          <button
+            type="button"
+            disabled={watchBusy}
+            onClick={() => saveWatch({ watch: null })}
+            title="Take this off the watchlist — clears the tag, the date and any alert. The range keeps being tracked and your locked read, if any, is untouched."
+            style={{
+              ...mono, display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10,
+              padding: "4px 9px", borderRadius: 999, cursor: watchBusy ? "default" : "pointer",
+              border: "1px solid var(--border-subtle)", background: "transparent",
+              color: "var(--text-3)", opacity: watchBusy ? 0.6 : 1,
+            }}
+          >
+            <EyeOff size={11} strokeWidth={2} />
+            Remove
+          </button>
+        )}
+        <WatchDate
+          value={row.watchDate}
+          busy={watchBusy}
+          onSave={(d) => saveWatch({ watchDate: d })}
         />
         <button
           type="button"

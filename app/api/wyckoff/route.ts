@@ -80,6 +80,7 @@ const PENDING_SELECT = {
   watch: true,
   watchNote: true,
   watchAt: true,
+  watchDate: true,
   alertPrice: true,
   alertSetAt: true,
   alertHitAt: true,

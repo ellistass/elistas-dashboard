@@ -437,6 +437,13 @@ model ScannerCandidate {
   watch          String?                       // "now" | "later" | null (untriaged)
   watchNote      String?                       // why you flagged it - your own context
   watchAt        DateTime?                     // when it was last (re)tagged
+  // The date you are actually waiting for. A range can be structurally ready
+  // weeks before it is tradeable - you know the CPI print, the earnings date,
+  // the rate decision that has to clear first. Parking it under "later" loses
+  // that: the card says you are waiting without saying what for or until when.
+  // Set this and the watchlist can tell you what is due today instead of you
+  // re-deciding every card every morning.
+  watchDate      DateTime?                     // planned entry / revisit date (date only, UTC midnight)
   alertPrice     Float?                        // level set by clicking the chart
   alertSetAt     DateTime?                     // arm time - only bars AFTER this day can fire
   alertHitAt     DateTime?                     // stamped by the scan when a bar touched it

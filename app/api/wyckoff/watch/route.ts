@@ -1,6 +1,7 @@
 // app/api/wyckoff/watch/route.ts — triage a candidate (mutable, reversible).
 //
-// POST { id, watch?: "now" | "later" | null, note?: string | null, alertPrice?: number | null }
+// POST { id, watch?: "now" | "later" | null, note?: string | null,
+//        alertPrice?: number | null, watchDate?: "YYYY-MM-DD" | null }
 //
 // WHY THIS IS NOT /read: a triage tag is NOT a verdict. It says "keep this in
 // front of me", never accum or distrib, and it carries no direction — so it can
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest) {
     where: { id },
     select: {
       id: true, outcome: true, rangeLo: true, rangeHi: true,
-      watch: true, watchNote: true, alertPrice: true,
+      watch: true, watchNote: true, alertPrice: true, watchDate: true,
     },
   });
   if (!row) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
@@ -75,6 +76,10 @@ export async function POST(req: NextRequest) {
       data.alertSetAt = null;
       data.alertHitAt = null;
       data.alertHitDate = null;
+      // Same reasoning as the alert: a date you are waiting on, attached to a
+      // range you are no longer watching, is an orphan that will surface as a
+      // due item for a card that is not on the list.
+      data.watchDate = null;
     }
   }
 
@@ -86,6 +91,38 @@ export async function POST(req: NextRequest) {
     }
     const trimmed = typeof n === "string" ? n.trim().slice(0, NOTE_MAX) : null;
     data.watchNote = trimmed ? trimmed : null;
+  }
+
+  // ── planned entry / revisit date ─────────────────────────────────────────
+  // Stored at UTC midnight and compared by calendar day. A time-of-day here
+  // would be false precision: "I am waiting for Thursday's CPI" is a day, and
+  // storing 14:32:07 because that is when you typed it would make "due today"
+  // depend on the hour you set it.
+  if ("watchDate" in body) {
+    const d = body.watchDate;
+    if (d === null || d === "") {
+      data.watchDate = null;
+    } else if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      return NextResponse.json({ error: "watchDate must be YYYY-MM-DD or null" }, { status: 400 });
+    } else {
+      const parsed = new Date(`${d}T00:00:00Z`);
+      if (Number.isNaN(parsed.getTime())) {
+        return NextResponse.json({ error: `watchDate ${d} is not a real date` }, { status: 400 });
+      }
+      if (row.outcome != null) {
+        return NextResponse.json(
+          { error: "Range already resolved — there is nothing left to wait for" },
+          { status: 409 },
+        );
+      }
+      data.watchDate = parsed;
+      // A date implies watching, exactly as an alert does — otherwise the card
+      // keeps its date and gets swept off the desk before the date arrives.
+      if (!row.watch && !("watch" in body)) {
+        data.watch = "later";
+        data.watchAt = new Date();
+      }
+    }
   }
 
   // ── alert level ──────────────────────────────────────────────────────────
@@ -137,7 +174,7 @@ export async function POST(req: NextRequest) {
     where: { id },
     data,
     select: {
-      id: true, watch: true, watchNote: true, watchAt: true,
+      id: true, watch: true, watchNote: true, watchAt: true, watchDate: true,
       alertPrice: true, alertSetAt: true, alertHitAt: true, alertHitDate: true,
     },
   });

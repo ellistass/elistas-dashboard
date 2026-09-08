@@ -26,7 +26,7 @@ const SELECT = {
   surfacedAt: true, surfacedBarDate: true, surfacedReason: true, testBarDate: true,
   firstSeenBarDate: true, sightings: true, sightingCount: true,
   traderVerdict: true, traderEntry: true, traderStop: true, traderReadAt: true,
-  watch: true, watchNote: true, alertPrice: true, alertHitAt: true, alertHitDate: true,
+  watch: true, watchNote: true, watchDate: true, alertPrice: true, alertHitAt: true, alertHitDate: true,
   sparkBars: true, fresh: true,
 } as const;
 

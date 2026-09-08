@@ -106,74 +106,17 @@ export function DashHeader({
         </div>
       </div>
 
-      {/* Right: engine picker + actions */}
+      {/* Right: refresh only.
+          The RFDM controls that lived here — the engine picker (Sonnet /
+          Haiku / rules / routine), Run Analysis, the Telegram send and the
+          Manual data-entry toggle — moved off the dashboard when Wyckoff
+          became the strategy. Nothing about RFDM was deleted: the scoring API,
+          the prompt, the cron at 06:30/13:30 UTC and the whole /analysis
+          history are untouched and still running. What is gone is the manual
+          trigger, so an RFDM run now happens on schedule rather than on a
+          button. The props are still accepted so restoring the block is a
+          paste, not a rewrite. */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <div className="seg" title="Choose the scoring engine">
-          {ENGINES.map((e) => (
-            <button key={e.v} className={engine === e.v ? 'on' : ''} onClick={() => onEngine(e.v)}>
-              {e.label}
-            </button>
-          ))}
-        </div>
-
-        <button
-          onClick={() => onRun(false)} disabled={scoring}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 7,
-            padding: '8px 17px', borderRadius: 9, border: 'none',
-            background: 'var(--accent)', color: 'var(--accent-on)',
-            boxShadow: 'var(--accent-glow)',
-            fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            opacity: scoring ? 0.6 : 1, transition: 'opacity 0.15s',
-          }}>
-          {scoring ? <Spinner dark /> : <Zap size={14} strokeWidth={2} />}
-          {scoring ? 'Analysing…' : 'Run Analysis'}
-        </button>
-
-        <button
-          onClick={() => onRun(true)} disabled={scoring || sent}
-          title="Run analysis and send the result to Telegram"
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 7,
-            padding: '8px 15px', borderRadius: 9,
-            border: `1px solid ${sent ? 'var(--green-border)' : 'var(--border)'}`,
-            background: sent ? 'var(--green-dim)' : 'var(--bg-card-2)',
-            color: sent ? 'var(--green)' : 'var(--text-body)',
-            fontSize: 13, fontWeight: 500, cursor: 'pointer',
-            opacity: scoring || sent ? 0.7 : 1,
-          }}>
-          <Send size={13} strokeWidth={2} />
-          {sent ? 'Sent' : 'Telegram'}
-        </button>
-
-        {/* Manual scoring toggle */}
-        <button
-          onClick={onManualToggle}
-          title="Toggle the manual data-entry panel"
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 8,
-            padding: '8px 12px', borderRadius: 9,
-            border: `1px solid ${manualOn ? 'var(--accent-border)' : 'var(--border)'}`,
-            background: manualOn ? 'var(--accent-dim)' : 'transparent',
-            color: manualOn ? 'var(--accent)' : 'var(--text-2)',
-            fontSize: 12, fontWeight: 500, cursor: 'pointer',
-          }}>
-          Manual
-          <span style={{
-            width: 30, height: 16, borderRadius: 999, position: 'relative', flexShrink: 0,
-            background: manualOn ? 'var(--accent)' : 'var(--bg-elevated)',
-            border: `1px solid ${manualOn ? 'var(--accent)' : 'var(--border-strong)'}`,
-            transition: 'background 0.15s',
-          }}>
-            <span style={{
-              position: 'absolute', top: 1.5, left: manualOn ? 15 : 2,
-              width: 11, height: 11, borderRadius: '50%',
-              background: manualOn ? 'var(--accent-on)' : 'var(--text-3)',
-              transition: 'left 0.15s',
-            }} />
-          </span>
-        </button>
-
         <button
           onClick={onRefresh} disabled={loading} title="Refresh dashboard data"
           style={{

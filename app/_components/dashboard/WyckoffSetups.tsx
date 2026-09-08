@@ -13,14 +13,14 @@
 // then structural grade. The card is a summary, not a read: to actually read
 // one you go to the desk, because the read form belongs where the chart is.
 
+import { useState } from "react";
 import Link from "next/link";
-import { Frame, ArrowRight, AlertTriangle, BellRing } from "lucide-react";
-import { rankCandidates, GradeChip, ReasonChip, type CandidateGroup, groupByInstrument } from "@/app/wyckoff/_components/desk";
-import type { PendingRow } from "@/app/wyckoff/_components/CandidateCard";
-import { SUSPECT_VOLUME, instrumentName } from "@/lib/wyckoff/basket";
+import { Frame, ArrowRight, AlertTriangle } from "lucide-react";
+import { rankCandidates, type CandidateGroup, groupByInstrument } from "@/app/wyckoff/_components/desk";
+import CandidateCard, { type PendingRow } from "@/app/wyckoff/_components/CandidateCard";
+import LiveChartDrawer from "@/app/wyckoff/_components/LiveChartDrawer";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
-const px = (v: number, ref: number) => v.toFixed(ref < 10 ? 4 : 2);
 const day = (s: string | null | undefined) => (s ? s.slice(0, 10) : null);
 
 /** Trading-day staleness, weekends excluded — a Saturday reading of Friday's
@@ -44,20 +44,27 @@ export function WyckoffSetups({
   candidates,
   lastScanAt,
   loading,
+  onChanged,
 }: {
   candidates: PendingRow[];
   lastScanAt: string | null;
   loading?: boolean;
+  onChanged?: () => void;
 }) {
+  const [chartId, setChartId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
   const ranked = rankCandidates(candidates ?? []);
-  const top = ranked.slice(0, 3);
-  const groups = groupByInstrument(ranked);
-  const repeats = groups.filter((g) => g.rows.length > 1);
+  // One card by default. It is the A+ setup — the whole claim of this section
+  // is that there is a best one, and showing three side by side quietly walks
+  // that back into a shortlist you still have to choose from.
+  const shown = expanded ? ranked.slice(0, 6) : ranked.slice(0, 1);
+  const repeats = groupByInstrument(ranked).filter((g) => g.rows.length > 1);
   const stale = tradingDaysSince(lastScanAt);
 
   return (
-    <div className="card" style={{ padding: "15px 18px 16px", marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", marginBottom: 13 }}>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", marginBottom: 11 }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7, color: "var(--text-1)" }}>
           <Frame size={14} strokeWidth={2} />
           <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em" }}>A+ setup</span>
@@ -78,78 +85,77 @@ export function WyckoffSetups({
             {stale}d old
           </span>
         )}
-        <Link
-          href="/wyckoff"
-          style={{
-            marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5,
-            fontSize: 12, fontWeight: 600, fontFamily: "'Sora', sans-serif",
-            color: "var(--accent)", textDecoration: "none",
-          }}
-        >
-          See more{ranked.length > top.length ? ` · ${ranked.length}` : ""}
-          <ArrowRight size={13} strokeWidth={2} />
-        </Link>
+
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
+          {/* "See more" shows more setups, right here. It used to be a link to
+              /wyckoff, which is a different thing: going somewhere else to look
+              is not seeing more. The link to the full desk is still there, but
+              it is now clearly the other option rather than the only one. */}
+          {ranked.length > 1 && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5, padding: 0,
+                border: "none", background: "none", cursor: "pointer",
+                fontSize: 12, fontWeight: 600, fontFamily: "'Sora', sans-serif",
+                color: "var(--accent)",
+              }}
+            >
+              {expanded ? "Show less" : `See more · ${ranked.length - 1}`}
+              <ArrowRight
+                size={13}
+                strokeWidth={2}
+                style={{ transform: expanded ? "rotate(-90deg)" : undefined, transition: "transform 0.15s" }}
+              />
+            </button>
+          )}
+          <Link
+            href="/wyckoff"
+            style={{
+              fontSize: 12, fontFamily: "'Sora', sans-serif",
+              color: "var(--text-3)", textDecoration: "none",
+            }}
+          >
+            Full desk
+          </Link>
+        </span>
       </div>
 
       {loading ? (
         <p style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: 0 }}>loading the board…</p>
-      ) : top.length === 0 ? (
+      ) : shown.length === 0 ? (
         <p style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: 0, lineHeight: 1.6 }}>
           Nothing at a decision point. A quiet day is the normal state — the daily scan
           repopulates this after each close.
         </p>
       ) : (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 9 }}>
-            {top.map((r, i) => <SetupTile key={r.id} row={r} best={i === 0} />)}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: expanded ? "repeat(auto-fill, minmax(330px, 1fr))" : "1fr",
+              gap: 12,
+            }}
+          >
+            {shown.map((row) => (
+              <CandidateCard
+                key={row.id}
+                row={row}
+                onLocked={() => onChanged?.()}
+                onChart={setChartId}
+                onWatchChange={() => onChanged?.()}
+              />
+            ))}
           </div>
           {repeats.length > 0 && <RepeatNote groups={repeats} />}
         </>
       )}
+
+      {chartId && (
+        <LiveChartDrawer id={chartId} onClose={() => setChartId(null)} onChanged={() => onChanged?.()} />
+      )}
     </div>
-  );
-}
-
-function SetupTile({ row, best }: { row: PendingRow; best?: boolean }) {
-  const suspect = SUSPECT_VOLUME.has(row.instrument);
-  const name = instrumentName(row.instrument);
-  const hit = row.alertHitAt != null;
-  return (
-    <Link
-      href="/wyckoff"
-      style={{
-        display: "block", textDecoration: "none", padding: "11px 12px", borderRadius: 10,
-        border: `1px solid ${hit ? "var(--accent)" : best ? "var(--border-strong)" : "var(--border-subtle)"}`,
-        background: best ? "var(--bg-card-2, transparent)" : "transparent",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
-        <span style={{ ...mono, fontSize: 14, fontWeight: 500, color: "var(--text-1)", letterSpacing: "0.02em" }}>
-          {row.instrument}
-        </span>
-        {name !== row.instrument && (
-          <span style={{ fontSize: 10, color: "var(--text-3)", fontWeight: 300 }}>{name}</span>
-        )}
-        {suspect && <AlertTriangle size={10} strokeWidth={2} style={{ color: "var(--amber)" }} />}
-        {hit && <BellRing size={11} strokeWidth={2} style={{ color: "var(--accent)", marginLeft: "auto" }} />}
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-        <GradeChip grade={row.grade} score={row.gradeScore} />
-        <ReasonChip reason={row.surfacedReason} />
-      </div>
-
-      <div style={{ ...mono, fontSize: 10.5, color: "var(--text-2)" }}>
-        {px(row.rangeLo, row.rangeHi)} – {px(row.rangeHi, row.rangeHi)}
-        <span style={{ color: "var(--text-3)" }}> · {row.barsInRange} bars</span>
-      </div>
-      <div style={{ ...mono, fontSize: 9.5, color: "var(--text-3)", marginTop: 4 }}>
-        {row.status === "open" ? "open" : `broke ${day(row.breakoutDate)}`}
-        {row.terminalTest !== "none" && ` · ${row.terminalTest}`}
-        {row.traderVerdict && ` · read locked`}
-        {(row.sightingCount ?? 0) > 1 && ` · seen ${row.sightingCount}×`}
-      </div>
-    </Link>
   );
 }
 

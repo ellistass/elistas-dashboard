@@ -1,22 +1,24 @@
 "use client";
 // app/page.tsx — Elistas Dashboard (v2 redesign)
 // Orchestration + state only. All presentation lives in app/_components/dashboard/*
-// and the restyled shared components (MultiIdeaHero, PositionSizeCalc, WatchedPanel,
+// and the restyled shared components (PositionSizeCalc, WatchedPanel,
 // DiagnosticsPanel). Types mirror the /api/dashboard + /api/accounts payloads
 // (see _components/dashboard/types.ts — unchanged contracts).
+//
+// Wyckoff leads the page: the A+ setup renders as the real candidate card,
+// then open positions, then market context. The RFDM strength read and idea
+// hero were removed from here — see the note where they used to sit.
 
 import { useState, useEffect, useCallback } from "react";
 import { DashHeader, type Engine } from "./_components/dashboard/DashHeader";
 import { DashBanners } from "./_components/dashboard/Banners";
 import { StatusRow } from "./_components/dashboard/StatusRow";
-import { StrengthRead, EmptyScoreHero } from "./_components/dashboard/StrengthRead";
 import { OpenPositions } from "./_components/dashboard/OpenPositions";
 import { AccountsAggregateCard, RecentAlertsCard } from "./_components/dashboard/RightRail";
 import { ManualPanel } from "./_components/dashboard/ManualPanel";
 import { MarketContext } from "./_components/dashboard/MarketContext";
 import { WyckoffSetups } from "./_components/dashboard/WyckoffSetups";
 import { PositionSizeCalc } from "./_components/PositionSizeCalc";
-import { MultiIdeaHero } from "./_components/MultiIdeaHero";
 import { WatchedPanel } from "./_components/WatchedPanel";
 import { RoutineSetupCard } from "./_components/RoutineSetupCard";
 import { DiagnosticsPanel } from "./_components/DiagnosticsPanel";
@@ -216,7 +218,6 @@ export default function Dashboard() {
   const centralBankRates = data?.centralBankRates ?? [];
   const freshness = data?.freshness;
   const todaysIdeas = data?.todaysIdeas ?? [];
-  const ideaActions = (data as any)?.ideaActions ?? {};
   const session = currentSession();
   const regime = sectorRegime(sectors);
 
@@ -282,10 +283,14 @@ export default function Dashboard() {
             ideas stay, below, as context for a decision rather than the
             decision itself. */}
         <div className="dash-col">
+          {/* The A+ setup, as the actual card — chart, grade, read form and all.
+              A summary tile that linked to /wyckoff was making you go and look
+              somewhere else to see the thing this section is about. */}
           <WyckoffSetups
             candidates={wyckoff.candidates}
             lastScanAt={wyckoff.lastScanAt}
             loading={wyckoffLoading}
+            onChanged={fetchDashboard}
           />
 
           {/* Open positions — what is already at risk, before anything new */}
@@ -300,21 +305,13 @@ export default function Dashboard() {
             barchartFetchedAt={data?.barchartFetchedAt}
           />
 
-          {scores ? (
-            <StrengthRead scores={scores as any} />
-          ) : (
-            <EmptyScoreHero session={session} scoring={scoring} onRun={() => runAnalysis(false)} />
-          )}
-
-          {/* Today's calls — priority-1 hero + secondary ideas (Take/Watch/Skip) */}
-          <MultiIdeaHero
-            ideas={todaysIdeas as any}
-            ideaActions={ideaActions}
-            accounts={calcAccounts.map((a: any) => ({ ...a, status: accountList.find((x: any) => x.id === a.id)?.status ?? '' })) as any}
-            scoringModel={scores?.scoringModel}
-            viewAllHref="/analysis"
-            onChanged={fetchDashboard}
-          />
+          {/* REMOVED from the dashboard: the RFDM currency-strength read
+              (StrengthRead / EmptyScoreHero) and the RFDM idea hero
+              (MultiIdeaHero). Wyckoff is the strategy, and two strategies
+              competing for the top of the page meant neither owned it.
+              Neither feature is deleted — the scoring API, the ideas and the
+              history all still exist and still run on cron; they live on
+              /analysis now. Restore by re-adding those two blocks here. */}
         </div>
 
         {/* RIGHT rail */}
