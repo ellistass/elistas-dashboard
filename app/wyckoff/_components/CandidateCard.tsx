@@ -21,12 +21,14 @@ import {
 } from "lucide-react";
 import { SUSPECT_VOLUME, instrumentInfo, executeCall, instrumentName, tradingViewUrl, tradingViewFull, volumeRouteNote } from "@/lib/wyckoff/basket";
 import { entryPlans, findTestBar, type EntryPlan } from "@/lib/wyckoff/entry";
+import { gradeRetest } from "@/lib/wyckoff/retest";
 import { GradeChip, ReasonChip } from "./desk";
 import TradedStrip, { type LinkedTrade } from "./TradedStrip";
 import CardChart, { type SparkBar } from "./CardChart";
 import EntryPlans from "./EntryPlans";
 import EngineRead, { type EngineRecord } from "./EngineRead";
 import SightingLog, { type Sighting } from "./SightingLog";
+import RetestGrade from "./RetestGrade";
 import WatchDate from "./WatchDate";
 
 export interface PendingRow {
@@ -147,6 +149,29 @@ export default function CandidateCard({
     // entry mid-box belongs to neither, and saying otherwise would be a
     // tidier story than the truth.
     return best && bestGap <= (row.rangeHi - row.rangeLo) * 0.2 ? best.style : null;
+  })();
+
+  /* Grade the break and its pullback from the spark window the scanner already
+     stored. The conservative plan is the LPS by geometry; this is what tells
+     an LPS from a breakout being sold into, which price alone cannot. */
+  const retest = (() => {
+    if (row.status !== "broken" || !row.breakoutDate) return null;
+    const spark = Array.isArray(row.sparkBars) ? row.sparkBars : null;
+    if (!spark || spark.length < 8) return null;
+    const bars = spark.map((t: any) => ({
+      o: Number(t[0]), h: Number(t[1]), l: Number(t[2]), c: Number(t[3]),
+      v: Number(t[4]), date: String(t[5]).slice(0, 10),
+    }));
+    const day = row.breakoutDate.slice(0, 10);
+    const end = bars.findIndex((b) => b.date === day);
+    // The spark window is capped, so a long range can start before it. Clamp
+    // to what is actually in hand rather than inventing a baseline.
+    const start = Math.max(0, end - (row.barsInRange ?? 20));
+    if (end < 0 || end - start < 5) return null;
+    return gradeRetest({
+      bars, start, end, rangeLo: row.rangeLo, rangeHi: row.rangeHi,
+      up: bars[end].c > row.rangeHi,
+    });
   })();
 
   function chooseStyle(p: EntryPlan) {
@@ -517,6 +542,7 @@ export default function CandidateCard({
                     both ways in
                   </p>
                   <EntryPlans plans={plans} chosen={lockedStyle} priceRef={row.rangeHi} />
+                  <RetestGrade grade={retest} />
                 </div>
               )}
             </div>
@@ -555,6 +581,7 @@ export default function CandidateCard({
                 that there is no direction to price and showing one would be
                 the answer to the question the desk is asking. */}
             <EntryPlans plans={plans} chosen={style} onChoose={chooseStyle} priceRef={row.rangeHi} />
+            <RetestGrade grade={retest} />
 
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <input value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="entry" inputMode="decimal" style={inputStyle} />
