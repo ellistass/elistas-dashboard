@@ -16,6 +16,8 @@ import ScoreStrip from "../_components/ScoreStrip";
 import { useWyckoff } from "../_components/WyckoffData";
 import { summarizeLearnable } from "@/lib/wyckoff/learnable";
 import { summariseLeads } from "@/lib/wyckoff/timing";
+import { rate, SOLID_RATE_N } from "@/lib/stats";
+import { RateValueText } from "@/app/_components/Rate";
 import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "../_components/ui";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
@@ -33,7 +35,13 @@ export default function ScorePage() {
   // than shown as a precise-looking percentage built on four cases.
   const byGrade = ["A", "B", "C", "D"].map((g) => {
     const rows = resolved.filter((r) => r.grade === g && (r.outcome === "up" || r.outcome === "down"));
-    return { grade: g, n: rows.length };
+    // "Does the grade predict anything" is a question about the ENGINE's call
+    // on those rows — the only side with enough resolved cases to ask.
+    const hits = rows.filter((r) =>
+      (r.engineVerdict === "accum" && r.outcome === "up") ||
+      (r.engineVerdict === "distrib" && r.outcome === "down"),
+    ).length;
+    return { grade: g, n: rows.length, r: rate(hits, rows.length) };
   });
 
   return (
@@ -88,15 +96,18 @@ export default function ScorePage() {
           {byGrade.map((g) => (
             <div key={g.grade}>
               <p className="kicker" style={{ margin: "0 0 5px" }}>Grade {g.grade}</p>
-              <p style={{ ...mono, margin: 0, fontSize: 19, fontWeight: 500, color: "var(--text-1)" }}>{g.n}</p>
-              <p style={{ ...mono, margin: "4px 0 0", fontSize: 9.5, color: "var(--text-3)" }}>directional cases</p>
+              <RateValueText rate={g.r} size={19} />
+              <p style={{ ...mono, margin: "4px 0 0", fontSize: 9.5, color: "var(--text-3)" }}>
+                {g.r.pct != null ? "engine hit rate" : "directional cases"}
+              </p>
             </div>
           ))}
         </div>
         <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", margin: "14px 0 0", lineHeight: 1.6 }}>
-          Win rates per grade appear once each cohort clears 20 resolved directional cases. Showing a
-          percentage before then would dress up noise as evidence — and the grader is the thing being
-          tested here, so it deserves a real sample before it earns your trust.
+          Hit rates appear once a cohort clears {SOLID_RATE_N} resolved directional cases, and are
+          marked provisional below that. Showing a bare percentage earlier would dress up noise as
+          evidence — and the grader is the thing being tested here, so it deserves a real sample
+          before it earns your trust.
         </p>
       </div>
     </>
@@ -106,7 +117,7 @@ export default function ScorePage() {
 function LearnablePanel({ stats }: {
   stats: { total: number; successes: number; failures: number; accum: number; distrib: number };
 }) {
-  const hitRate = stats.total ? Math.round((stats.successes / stats.total) * 100) : null;
+  const hitRate = rate(stats.successes, stats.total);
   return (
     <div className="card" style={{ display: "flex", flexWrap: "wrap", gap: 0, padding: 0, marginBottom: 26, overflow: "hidden" }}>
       <LearnableCell
@@ -116,7 +127,8 @@ function LearnablePanel({ stats }: {
       />
       <LearnableCell
         label="Engine hit rate"
-        value={hitRate == null ? "—" : `${hitRate}%`}
+        value={hitRate.label}
+        valueTitle={hitRate.title}
         detail={stats.total ? `${stats.successes} of ${stats.total}` : "waiting for resolved cases"}
         accent
         bordered
@@ -143,13 +155,14 @@ function LearnablePanel({ stats }: {
   );
 }
 
-function LearnableCell({ label, value, detail, accent, bordered, warn }: {
+function LearnableCell({ label, value, detail, accent, bordered, warn, valueTitle }: {
   label: string; value: string; detail: string; accent?: boolean; bordered?: boolean; warn?: boolean;
+  valueTitle?: string;
 }) {
   return (
     <div style={{ flex: "1 1 170px", padding: "15px 20px", borderLeft: bordered ? "1px solid var(--border-subtle)" : undefined }}>
       <p className="kicker" style={{ margin: "0 0 5px" }}>{label}</p>
-      <p style={{
+      <p title={valueTitle} style={{
         ...mono, margin: 0, fontSize: 22, lineHeight: 1, fontWeight: 500,
         color: warn ? "var(--amber)" : accent ? "var(--accent)" : "var(--text-1)",
       }}>

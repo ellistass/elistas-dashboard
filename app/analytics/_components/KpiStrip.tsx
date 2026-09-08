@@ -14,6 +14,16 @@ interface Tile {
 }
 
 export function KpiStrip({ data }: { data: AnalyticsResponse }) {
+  // How much of the book the R tiles actually describe.
+  const rCov = data.coverage?.resultR
+    ? {
+        present: data.coverage.resultR.present,
+        total: data.coverage.resultR.total,
+        pct: data.coverage.resultR.total
+          ? Math.round((data.coverage.resultR.present / data.coverage.resultR.total) * 100)
+          : 0,
+      }
+    : null;
   const { kpi, discipline } = data
   const disciplinePct = Math.round(kpi.disciplinePct * 100)
   const good = disciplinePct >= 70
@@ -34,12 +44,18 @@ export function KpiStrip({ data }: { data: AnalyticsResponse }) {
     },
     {
       label: 'Total R', value: `${signed(kpi.totalR, 1)}R`,
-      sub: counterfactual > 0.1 ? `${signed(counterfactual, 1)}R if clean` : 'realized',
+      // R only exists for trades with a real fill stop. After the R repair that
+      // is 495 of 759 — so this tile covers about two thirds of the book and
+      // used to imply all of it. Money P&L is the complete picture.
+      sub: rCov
+        ? `over ${rCov.present} of ${rCov.total} trades with a stop`
+        : counterfactual > 0.1 ? `${signed(counterfactual, 1)}R if clean` : 'realized',
       color: kpi.totalR >= 0 ? 'var(--green)' : 'var(--red)',
       bg: 'var(--bg-card-raised)', border: 'var(--border)',
     },
     {
-      label: 'Avg R', value: signed(kpi.avgR, 2), sub: 'per trade',
+      label: 'Avg R', value: signed(kpi.avgR, 2),
+      sub: rCov ? `per trade · ${rCov.pct}% coverage` : 'per trade',
       color: 'var(--text-1)', bg: 'var(--bg-card-raised)', border: 'var(--border)',
     },
     {

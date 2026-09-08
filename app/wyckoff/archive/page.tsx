@@ -21,6 +21,7 @@ import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "../_component
 import { summariseLeads } from "@/lib/wyckoff/timing";
 import { isLearnableCase } from "@/lib/wyckoff/learnable";
 import { SUSPECT_VOLUME, instrumentName } from "@/lib/wyckoff/basket";
+import { rate, compareRates } from "@/lib/stats";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const day = (iso: string | null | undefined) => (iso ? iso.slice(0, 10) : "—");
@@ -203,8 +204,12 @@ export default function ArchivePage() {
    produced, and how much warning it gave. */
 function AuditBand({ label, rows }: { label: string; rows: ResolvedRow[] }) {
   const withRead = rows.filter((r) => r.traderVerdict && r.loggedBlind);
-  const youHits = withRead.filter((r) => verdictHits(r.traderVerdict!, r.outcome)).length;
-  const engHits = withRead.filter((r) => verdictHits(r.engineVerdict, r.outcome)).length;
+  // A month rarely holds enough blind reads for a percentage to mean anything —
+  // across the whole history there are 14. Showing "50% / 100%" off two cases
+  // is the single most misleading thing this panel could do.
+  const you = rate(withRead.filter((r) => verdictHits(r.traderVerdict!, r.outcome)).length, withRead.length);
+  const eng = rate(withRead.filter((r) => verdictHits(r.engineVerdict, r.outcome)).length, withRead.length);
+  const gap = compareRates(you, eng);
   const leads = summariseLeads(rows.map((r) => r.leadToBreakout ?? null));
   const grades = ["A", "B", "C", "D"].map((g) => ({ g, n: rows.filter((r) => r.grade === g).length }));
   const graded = grades.reduce((s, x) => s + x.n, 0);
@@ -215,8 +220,14 @@ function AuditBand({ label, rows }: { label: string; rows: ResolvedRow[] }) {
       <Cell label="Resolved" value={String(rows.length)} detail={`${dirn} directional · ${rows.length - dirn} chop`} />
       <Cell
         label="You vs engine"
-        value={withRead.length ? `${Math.round((youHits / withRead.length) * 100)}% / ${Math.round((engHits / withRead.length) * 100)}%` : "—"}
-        detail={withRead.length ? `${youHits} vs ${engHits} of ${withRead.length} blind reads` : "no blind reads this period"}
+        value={you.pct != null && eng.pct != null ? `${you.label} / ${eng.label}` : you.n > 0 ? `${you.hits} / ${eng.hits} of ${you.n}` : "—"}
+        detail={
+          you.n === 0
+            ? "no blind reads this period"
+            : you.pct == null
+              ? `${you.n} blind read${you.n === 1 ? "" : "s"} — too few for a rate`
+              : gap.note
+        }
         accent
         bordered
       />

@@ -16,9 +16,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { RefreshCw, AlertTriangle } from "lucide-react";
 import { useWyckoff } from "./WyckoffData";
+import { rate, compareRates } from "@/lib/stats";
+import { RateStat, ProvisionalKey } from "@/app/_components/Rate";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
-const pct = (c: number, n: number) => (n ? `${Math.round((c / n) * 100)}%` : "—");
 
 const TABS = [
   { href: "/wyckoff", label: "Desk", key: "desk" },
@@ -60,7 +61,15 @@ export default function WyckoffStrip() {
 
   const stale = tradingDaysSince(lastScanAt);
   const staleWarn = stale != null && stale >= 2;
-  const prPct = passRate && passRate.total > 0 ? Math.round((passRate.pass / passRate.total) * 100) : null;
+
+  // These three tiles rest on 14, 14 and 29 cases respectively. They used to
+  // render as bare percentages beside each other, which invited exactly the
+  // comparison the sample cannot support.
+  const youRate = rate(score?.you.correct ?? 0, score?.you.n ?? 0);
+  const engineRate = rate(score?.engineSameSet.correct ?? 0, score?.engineSameSet.n ?? 0);
+  const passR = rate(passRate?.pass ?? 0, passRate?.total ?? 0);
+  const gap = compareRates(youRate, engineRate);
+  const anyProvisional = [youRate, engineRate, passR].some((r) => r.confidence === "provisional");
 
   return (
     <div
@@ -73,9 +82,26 @@ export default function WyckoffStrip() {
       <div style={{ display: "flex", alignItems: "center", gap: 22, flexWrap: "wrap", padding: "12px 0 10px" }}>
         <h1 style={{ margin: 0, fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em" }}>Wyckoff</h1>
 
-        <Stat label="you" value={score ? pct(score.you.correct, score.you.n) : "—"} accent />
-        <Stat label="engine" value={score ? pct(score.engineSameSet.correct, score.engineSameSet.n) : "—"} />
-        <Stat label="pass" value={prPct == null ? "—" : `${prPct}%`} />
+        <RateStat label="you" rate={youRate} accent />
+        <RateStat label="engine" rate={engineRate} />
+        <RateStat label="pass" rate={passR} />
+        {gap.gapPct != null && (
+          <span
+            title={
+              gap.meaningful
+                ? "The gap clears the combined margin of error on this sample — read it as a real difference."
+                : "The gap is smaller than the uncertainty on either number. On this many cases it is not yet a difference at all."
+            }
+            style={{
+              ...mono, fontSize: 9.5, padding: "3px 8px", borderRadius: 999,
+              border: `1px solid ${gap.meaningful ? "var(--border-strong)" : "var(--border-subtle)"}`,
+              color: gap.meaningful ? "var(--text-2)" : "var(--text-3)",
+            }}
+          >
+            {gap.meaningful ? `${gap.gapPct > 0 ? "+" : ""}${gap.gapPct} pts` : "tied within noise"}
+          </span>
+        )}
+        <ProvisionalKey show={anyProvisional} />
 
         <span
           title={lastScanAt ? `scanner last wrote ${lastScanAt}` : "the scan has never run"}
@@ -140,18 +166,5 @@ export default function WyckoffStrip() {
         })}
       </div>
     </div>
-  );
-}
-
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
-      <span style={{ ...mono, fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-3)" }}>
-        {label}
-      </span>
-      <span style={{ ...mono, fontSize: 15, fontWeight: 500, color: accent ? "var(--accent)" : "var(--text-1)" }}>
-        {value}
-      </span>
-    </span>
   );
 }

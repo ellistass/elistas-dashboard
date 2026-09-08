@@ -115,7 +115,7 @@ export default function AnalyticsPage() {
           </div>
 
           <RecommendedPairs data={data} days={days} />
-          <ModelScoreboard byModel={data.byModel} />
+          <ModelScoreboard byModel={data.byModel} coverage={data.coverage} />
           <RulesSplit data={data} />
         </>
       )}

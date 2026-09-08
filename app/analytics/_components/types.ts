@@ -6,6 +6,14 @@
 export interface Account { id: string; name: string; broker: string; isActive: boolean }
 
 export interface AnalyticsResponse {
+  /** Share of closed trades that actually carry each field. A split over a
+   *  mostly-empty field describes the exception, not the account. */
+  coverage?: {
+    model: { present: number; total: number }
+    grade: { present: number; total: number }
+    session: { present: number; total: number }
+    resultR: { present: number; total: number }
+  }
   range: { days: number; since: string }
   accountId: string | null
   kpi: {

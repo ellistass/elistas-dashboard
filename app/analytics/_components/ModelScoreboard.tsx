@@ -7,6 +7,8 @@ import { Layers, TrendingUp, Waves } from 'lucide-react'
 import { STRATEGIES } from '@/app/_components/strategies'
 import type { AnalyticsResponse } from './types'
 import { Kicker, MONO, signed } from './ui'
+import { rate, coverage as coverageOf } from '@/lib/stats'
+import { RateValueText, CoverageNote } from '@/app/_components/Rate'
 
 type ModelStats = AnalyticsResponse['byModel'][string]
 
@@ -31,10 +33,15 @@ const MODEL_META: Record<string, { tag: string; accent: string; chipBg: string; 
 
 const FALLBACK_META = MODEL_META.A
 
-export function ModelScoreboard({ byModel }: { byModel: AnalyticsResponse['byModel'] }) {
+export function ModelScoreboard({ byModel, coverage }: {
+  byModel: AnalyticsResponse['byModel']
+  coverage?: AnalyticsResponse['coverage']
+}) {
+  const cov = coverage?.model ? coverageOf(coverage.model.present, coverage.model.total) : null
   return (
     <div style={{ marginBottom: 14 }}>
       <Kicker icon={<Layers size={14} strokeWidth={2} />} style={{ marginBottom: 12 }}>Strategy scoreboard</Kicker>
+      <CoverageNote note={cov?.note ?? null} />
       <div className="an-models" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
         {STRATEGIES.map(def => {
           const meta = MODEL_META[def.code] ?? FALLBACK_META
@@ -53,7 +60,10 @@ function ModelCard({ code, name, meta, stats }: {
   stats: ModelStats
 }) {
   const decisive = stats.wins + stats.losses
-  const winRate = decisive ? `${Math.round((stats.wins / decisive) * 100)}%` : '—'
+  // Measured on the live book: 2 of 759 closed trades carry a model at all, so
+  // this card was reporting a "win rate" on a sample of one or two and drawing
+  // it at 22px next to metrics built on hundreds.
+  const winRate = rate(stats.wins, decisive)
   const pnl = stats.totalPnL
   const pnlStr = `${pnl >= 0 ? '+$' : '-$'}${Math.abs(Math.round(pnl)).toLocaleString('en-US')}`
   const { Glyph } = meta
@@ -83,7 +93,7 @@ function ModelCard({ code, name, meta, stats }: {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 16, position: 'relative' }}>
-        <Metric label="Win rate" value={winRate} color="var(--text-1)" />
+        <MetricRate label="Win rate" rate={winRate} />
         <Metric label="Total R" value={signed(stats.totalR, 1)} color={stats.totalR >= 0 ? 'var(--green)' : 'var(--red)'} />
         <Metric label="Trades" value={String(stats.count)} color="var(--text-1)" />
       </div>
@@ -96,6 +106,19 @@ function ModelCard({ code, name, meta, stats }: {
         <span style={{ color: 'var(--red)' }}>{stats.losses}L</span>
         <span style={{ color: 'var(--text-label)' }}>{stats.be}BE</span>
         <span style={{ marginLeft: 'auto', color: pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>{pnlStr}</span>
+      </div>
+    </div>
+  )
+}
+
+/** A rate always carries its n — see lib/stats.ts. Below ten cases it renders
+ *  as "1 of 2" rather than "50%", which is the honest thing that sample says. */
+function MetricRate({ label, rate: r }: { label: string; rate: ReturnType<typeof rate> }) {
+  return (
+    <div>
+      <p style={{ margin: 0, fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-3)' }}>{label}</p>
+      <div style={{ marginTop: 4 }}>
+        <RateValueText rate={r} size={22} />
       </div>
     </div>
   )

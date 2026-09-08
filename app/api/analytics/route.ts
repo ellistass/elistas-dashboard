@@ -202,9 +202,35 @@ export async function GET(req: NextRequest) {
     .filter((i: any) => !i.takenByUser && i.outcome === 'Win' && i.priceMoveR)
     .reduce((s: number, i: any) => s + (i.priceMoveR ?? 0), 0)
 
+  // ── Field coverage ─────────────────────────────────────────────────────
+  // A breakdown over a field most rows do not carry is not a breakdown, it is
+  // a report on the exception. On the live book 2 of 759 closed trades carry a
+  // model and 2 carry a grade — the scoreboard and the grade panel have been
+  // describing those two trades as though they described the account. The UI
+  // cannot know that without being told, so it is told.
+  const coverage = {
+    model: {
+      present: (closed as any[]).filter((t) => t.model === 'A' || t.model === 'B').length,
+      total: closed.length,
+    },
+    grade: {
+      present: (closed as any[]).filter((t) => t.grade && String(t.grade).trim()).length,
+      total: closed.length,
+    },
+    session: {
+      present: (closed as any[]).filter((t) => t.session && String(t.session).trim()).length,
+      total: closed.length,
+    },
+    resultR: {
+      present: (closed as any[]).filter((t) => t.resultR != null).length,
+      total: closed.length,
+    },
+  }
+
   return NextResponse.json({
     range: { days, since },
     accountId,
+    coverage,
     kpi: {
       tradesClosed: closed.length,
       winRate: Number(winRate.toFixed(3)),

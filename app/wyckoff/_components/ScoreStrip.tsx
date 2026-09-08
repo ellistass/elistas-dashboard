@@ -1,4 +1,6 @@
 "use client";
+import { rate, compareRates } from "@/lib/stats";
+import { RateValueText } from "@/app/_components/Rate";
 // app/wyckoff/_components/ScoreStrip.tsx — the benchmark, composed as ONE unit.
 //
 // Design intent: the page's headline is a comparison (you vs engine), not five
@@ -18,6 +20,18 @@ export interface Scoreboard {
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const pct = (c: number, n: number) => (n ? `${Math.round((c / n) * 100)}%` : "—");
 
+function HeroRate({ label, rate: r, detail, accent }: {
+  label: string; rate: ReturnType<typeof rate>; detail: string; accent?: boolean;
+}) {
+  return (
+    <div>
+      <p className="kicker" style={{ margin: "0 0 5px" }}>{label}</p>
+      <RateValueText rate={r} size={30} accent={accent} />
+      <p style={{ ...mono, margin: "5px 0 0", fontSize: 10, color: "var(--text-3)" }}>{detail}</p>
+    </div>
+  );
+}
+
 export default function ScoreStrip({
   score,
   passRate,
@@ -28,13 +42,34 @@ export default function ScoreStrip({
   const prPct = passRate && passRate.total > 0 ? passRate.pass / passRate.total : null;
   const prHealthy = prPct != null && prPct >= 0.33 && prPct <= 0.55;
 
+  // The duel rests on 14 shared cases. Rendering it as two big percentages
+  // facing each other invites a comparison the sample cannot settle, so the
+  // verdict on whether the gap is even readable is stated next to it.
+  const you = rate(score.you.correct, score.you.n);
+  const eng = rate(score.engineSameSet.correct, score.engineSameSet.n);
+  const engAll = rate(score.engineOverallBlind.correct, score.engineOverallBlind.n);
+  const duel = compareRates(you, eng);
+
   return (
     <div className="card" style={{ display: "flex", flexWrap: "wrap", alignItems: "stretch", gap: 0, padding: 0, marginBottom: 26, overflow: "hidden" }}>
       {/* ── Hero: the duel ── */}
       <div style={{ display: "flex", alignItems: "center", gap: 26, padding: "18px 26px", flex: "1 1 340px" }}>
-        <Hero label="You" value={pct(score.you.correct, score.you.n)} detail={`${score.you.correct}/${score.you.n} · decisive ${pct(score.you.decisiveCorrect, score.you.decisiveN)}`} accent />
+        <HeroRate label="You" rate={you} detail={`decisive ${pct(score.you.decisiveCorrect, score.you.decisiveN)}`} accent />
         <span style={{ ...mono, fontSize: 11, color: "var(--text-3)", letterSpacing: "0.14em" }}>VS</span>
-        <Hero label="Engine · same set" value={pct(score.engineSameSet.correct, score.engineSameSet.n)} detail={`${score.engineSameSet.correct}/${score.engineSameSet.n} · decisive ${pct(score.engineSameSet.decisiveCorrect, score.engineSameSet.decisiveN)}`} />
+        <HeroRate label="Engine · same set" rate={eng} detail={`decisive ${pct(score.engineSameSet.decisiveCorrect, score.engineSameSet.decisiveN)}`} />
+      </div>
+
+      <div style={{ flexBasis: "100%", padding: "0 26px 14px" }}>
+        <span
+          title={
+            duel.meaningful
+              ? "The gap clears the combined margin of error — read it as a real difference."
+              : "The gap is inside the uncertainty on both numbers. Not yet a difference, however it looks."
+          }
+          style={{ ...mono, fontSize: 10, color: duel.meaningful ? "var(--text-2)" : "var(--text-3)" }}
+        >
+          {duel.note}
+        </span>
       </div>
 
       {/* ── Supporting stats ── */}
@@ -44,7 +79,7 @@ export default function ScoreStrip({
         borderLeft: "1px solid var(--border-subtle)", background: "var(--bg-card-2, transparent)",
       }}>
         <Mini label="Shared sample" value={String(score.resolvedWithRead)} detail="resolved · blind · with your read" />
-        <Mini label="Engine overall (blind)" value={pct(score.engineOverallBlind.correct, score.engineOverallBlind.n)} detail={`${score.engineOverallBlind.correct}/${score.engineOverallBlind.n} ranges`} />
+        <Mini label="Engine overall (blind)" value={engAll.label} detail={`${engAll.hits}/${engAll.n} ranges`} />
         {/* Pass-rate meter — the discipline gauge, with its healthy band drawn in */}
         <div style={{ minWidth: 170 }}>
           <p className="kicker" style={{ margin: "0 0 5px" }}>Pass rate</p>
@@ -72,19 +107,6 @@ export default function ScoreStrip({
     </div>
   );
 }
-
-function Hero({ label, value, detail, accent }: { label: string; value: string; detail: string; accent?: boolean }) {
-  return (
-    <div>
-      <p className="kicker" style={{ margin: "0 0 5px" }}>{label}</p>
-      <p style={{ ...mono, margin: 0, fontSize: 32, lineHeight: 1, fontWeight: 500, color: accent ? "var(--accent)" : "var(--text-1)" }}>
-        {value}
-      </p>
-      <p style={{ ...mono, margin: "6px 0 0", fontSize: 10, color: "var(--text-3)" }}>{detail}</p>
-    </div>
-  );
-}
-
 function Mini({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
     <div>
