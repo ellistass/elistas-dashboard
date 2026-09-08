@@ -17,8 +17,10 @@
 //     and EA-captured fields like initialSlPrice are preserved.
 //   • On CREATE we set source='broker-statement' and also seed
 //     initialSlPrice from the CSV's SL column — knowing it's the final SL
-//     after any modifications, but it's the best anchor available. The
-//     user can correct via the edit drawer.
+//     after any modifications, but it's the best anchor available — ONLY when
+//     that SL is far enough from entry to plausibly be the fill stop. A stop
+//     moved to break-even is not risk, and seeding it here would poison every
+//     later R recompute. See lib/r-trust.ts.
 //   • Returns { ok, summary: { created, updated, skipped, errors } }
 //     and `errors[]` carries up to 20 row-level reasons for triage.
 
@@ -28,6 +30,7 @@ export const runtime = 'nodejs'
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { normaliseSymbol, resultR as computeR, sessionFromUtcHour } from '@/lib/mt4'
+import { isRTrustworthy } from '@/lib/r-trust'
 
 type Direction = 'Long' | 'Short'
 
@@ -249,12 +252,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       try {
         const { pair } = normaliseSymbol(row.rawSymbol)
 
-        // Compute R from the broker's prices. Note: SL here is the FINAL SL
-        // (after any modifications), so R will be wrong for trades where you
-        // moved SL. Dollar P&L is always correct. The user can recompute via
-        // the drawer's "Recompute R from $" button for legacy rows.
+        // Compute R from the broker's prices. SL here is the FINAL SL (after
+        // any modifications), so for any trade whose stop was moved the
+        // denominator is not the risk that was actually taken. Dollar P&L is
+        // always correct.
+        //
+        // This used to guard with `entryPrice !== slPrice` — exact equality
+        // only. A stop moved to entry + 0.2 pips is not equal to entry, so it
+        // passed, and R came out divided by almost nothing: 230 rows in the
+        // book carried R values up to 2955 on a $59 profit. Reported total R
+        // was +8,958 while the money said -$1,736 — opposite signs.
+        //
+        // isRTrustworthy applies a distance floor instead, calibrated against
+        // EA-captured stops (the only genuinely-at-fill ones). See lib/r-trust.ts.
         const r = (row.closePrice != null && row.entryPrice > 0 && row.slPrice > 0
-                   && row.entryPrice !== row.slPrice)
+                   && isRTrustworthy({ entryPrice: row.entryPrice, slPrice: row.slPrice }))
           ? computeR({
               entryPrice: row.entryPrice,
               slPrice:    row.slPrice,
@@ -299,7 +311,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
               ...(r != null && { resultR: r }),
               // Only seed initialSlPrice if it was null — never overwrite an
               // EA-frozen value or a user-corrected one.
-              ...(existing.initialSlPrice == null && row.slPrice > 0 && {
+              ...(existing.initialSlPrice == null && row.slPrice > 0
+                  && isRTrustworthy({ entryPrice: row.entryPrice, slPrice: row.slPrice }) && {
                 initialSlPrice: row.slPrice,
               }),
             },
@@ -324,7 +337,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
               weakCcy:      '',
               entryPrice:   row.entryPrice,
               slPrice:      row.slPrice,
-              initialSlPrice: row.slPrice > 0 ? row.slPrice : null,
+              // Only seed initialSlPrice when the SL is far enough from entry to
+              // plausibly BE the fill stop. Seeding a break-even stop here does
+              // not just produce one bad R — it becomes the "source of truth
+              // for R calc" that every later recompute trusts.
+              initialSlPrice:
+                row.slPrice > 0 && isRTrustworthy({ entryPrice: row.entryPrice, slPrice: row.slPrice })
+                  ? row.slPrice
+                  : null,
               tpPrice:      row.tpPrice,
               closePrice:   row.closePrice,
               lotSize:      row.lotSize,
