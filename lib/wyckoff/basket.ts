@@ -174,3 +174,75 @@ export function tradingViewSymbol(symbol: string): string {
   if (!inst) return symbol;
   return inst.yahoo.endsWith("=F") ? `${symbol}1!` : inst.yahoo.startsWith("^") ? inst.yahoo.slice(1) : symbol;
 }
+
+// ── Where the REAL volume lives ──────────────────────────────────────────────
+//
+// volumeQuality: "suspect" is not a claim that the setup is worse — measured
+// over 517 resolved cases, suspect-volume instruments score 56% and verified
+// ones 55%. It is a routing instruction: OUR feed's volume is unusable there,
+// so do the volume read on the exchange feed instead.
+//
+// Which makes the exchange prefix the load-bearing part. A bare "6E1!" can
+// resolve to whatever source TradingView picks, and picking a volume-less one
+// is exactly the failure this flag exists to route around. "CME:6E1!" cannot.
+const TV_EXCHANGE: Record<string, string> = {
+  // CME currency futures + CME_MINI equity index futures.
+  "6E": "CME", "6B": "CME", "6A": "CME", "6N": "CME", "6C": "CME", "6J": "CME", "6S": "CME",
+  ES: "CME_MINI", NQ: "CME_MINI", RTY: "CME_MINI", YM: "CBOT_MINI",
+  // Metals on COMEX, energy on NYMEX.
+  GC: "COMEX", SI: "COMEX", HG: "COMEX", PL: "NYMEX", PA: "NYMEX",
+  CL: "NYMEX", BZ: "NYMEX", NG: "NYMEX", RB: "NYMEX", HO: "NYMEX",
+  // Grains on CBOT; softs on ICE US.
+  ZC: "CBOT", ZW: "CBOT", ZS: "CBOT", ZL: "CBOT", ZM: "CBOT",
+  SB: "ICEUS", KC: "ICEUS", CT: "ICEUS", CC: "ICEUS",
+};
+
+// The seven the scanner is forced to read as a CASH INDEX, because Yahoo
+// carries no future for Eurex / ICE-EU / Euronext / OSE / HKEX / ASX. A cash
+// index has NO VOLUME AT ALL — which is the entire reason these are flagged
+// suspect, and the reason a plain symbol swap would have been useless here:
+// TVC:FTSE is just the same volume-less series on a different site.
+//
+// So these map to the actual tradeable FUTURE, which is the only place the
+// volume read this scanner cannot do is possible.
+const TV_FUTURE: Record<string, string> = {
+  DAX: "EUREX:FDAX1!",      // FDAX — the future behind the DAX 40 cash read
+  STOXX: "EUREX:FESX1!",    // FESX — EuroStoxx 50
+  FTSE: "ICEEUR:Z1!",       // Z — FTSE 100 on ICE Europe
+  CAC: "EURONEXT:FCE1!",    // FCE — CAC 40
+  NKY: "CME:NKD1!",         // NKD — the dollar Nikkei, far easier to access than OSE
+  HSI: "HKEX:HSI1!",        // HSI — Hang Seng
+  ASX: "ASX:AP1!",          // AP — SPI 200
+};
+
+/** Fully-qualified TradingView symbol, e.g. "CME:6E1!" or "NASDAQ:AAPL".
+ *  The exchange prefix is what guarantees the real volume feed. */
+export function tradingViewFull(symbol: string): string {
+  const inst = BY_SYMBOL.get(symbol);
+  if (!inst) return symbol;
+  // A cash-index read has a future behind it; that future is the whole point.
+  if (TV_FUTURE[symbol]) return TV_FUTURE[symbol];
+  const tv = tradingViewSymbol(symbol);
+  const ex = TV_EXCHANGE[symbol];
+  // Stocks and ETFs are left unprefixed on purpose: the US consolidated tape is
+  // already the right feed, and hard-coding NYSE vs NASDAQ per ticker is a
+  // maintenance burden that buys nothing.
+  return ex ? `${ex}:${tv}` : tv;
+}
+
+/** Deep link to the TradingView chart for this instrument. */
+export function tradingViewUrl(symbol: string): string {
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tradingViewFull(symbol))}`;
+}
+
+/** Why this instrument sends you to TradingView, in one line for the UI. */
+export function volumeRouteNote(symbol: string): string | null {
+  if (!SUSPECT_VOLUME.has(symbol)) return null;
+  const inst = BY_SYMBOL.get(symbol);
+  if (TV_FUTURE[symbol]) {
+    return `${symbol} is read here as a cash index, which carries no volume at all. ` +
+      `${TV_FUTURE[symbol]} is the future behind it — read the volume there.`;
+  }
+  return `This feed's volume for ${symbol} is unusable${inst ? "" : ""}. ` +
+    `${tradingViewFull(symbol)} is the exchange contract — read the volume there.`;
+}

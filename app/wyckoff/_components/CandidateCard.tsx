@@ -19,7 +19,7 @@ import {
   Lock, ShieldCheck, AlertTriangle, CandlestickChart, ArrowLeftRight,
   Zap, Clock, X, BellRing, Bell, StickyNote, EyeOff,
 } from "lucide-react";
-import { SUSPECT_VOLUME, instrumentInfo, executeCall, instrumentName } from "@/lib/wyckoff/basket";
+import { SUSPECT_VOLUME, instrumentInfo, executeCall, instrumentName, tradingViewUrl, tradingViewFull, volumeRouteNote } from "@/lib/wyckoff/basket";
 import { entryPlans, findTestBar, type EntryPlan } from "@/lib/wyckoff/entry";
 import { GradeChip, ReasonChip } from "./desk";
 import TradedStrip, { type LinkedTrade } from "./TradedStrip";
@@ -243,9 +243,23 @@ export default function CandidateCard({
           </span>
         )}
         {suspect && (
-          <span title="Yahoo volume unreliable for this instrument — read on TradingView's CME feed">
-            <AlertTriangle size={12} strokeWidth={2} style={{ color: "var(--amber)", display: "block" }} />
-          </span>
+          // A warning with nowhere to go is just a warning. The flag exists to
+          // route you to a feed that HAS volume, so it is the link.
+          <a
+            href={tradingViewUrl(row.instrument)}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title={volumeRouteNote(row.instrument) ?? undefined}
+            style={{
+              ...mono, display: "inline-flex", alignItems: "center", gap: 4, fontSize: 9.5,
+              padding: "2px 7px", borderRadius: 999, textDecoration: "none",
+              border: "1px solid var(--amber-border)", color: "var(--amber)",
+            }}
+          >
+            <AlertTriangle size={10} strokeWidth={2} />
+            {tradingViewFull(row.instrument)}
+          </a>
         )}
         <button
           type="button"

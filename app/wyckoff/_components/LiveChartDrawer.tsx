@@ -67,7 +67,7 @@ const day = (iso: string | null | undefined) => (iso ? iso.slice(0, 10) : "—")
 
 // TradingView + execute mapping come from the instrument config — one source
 // of truth (lib/wyckoff/basket) for feed symbol, CFD/spot, and inversion.
-import { instrumentInfo, tradingViewSymbol } from "@/lib/wyckoff/basket";
+import { instrumentInfo, tradingViewFull, tradingViewUrl, volumeRouteNote } from "@/lib/wyckoff/basket";
 
 export default function LiveChartDrawer({
   id,
@@ -199,7 +199,7 @@ export default function LiveChartDrawer({
             <AlertTriangle size={14} strokeWidth={2} style={{ color: "var(--amber)", flexShrink: 0, marginTop: 1 }} />
             <span style={{ ...mono, fontSize: 11, color: "var(--amber)" }}>
               Yahoo volume is unreliable for this instrument — the volume bars below are NOT a valid
-              effort read. Do the volume read on TradingView&apos;s CME feed; use this chart for price structure only.
+              effort read. Use this chart for price structure only — {volumeRouteNote(data.instrument) ?? "do the volume read on the exchange feed"}
             </span>
           </div>
         )}
@@ -316,7 +316,16 @@ export default function LiveChartDrawer({
             <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
               <span style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>
                 <span style={{ color: "var(--text-3)" }}>confirm on TradingView: </span>
-                <b>{tradingViewSymbol(data.instrument)}</b>
+                <a
+                  href={tradingViewUrl(data.instrument)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={volumeRouteNote(data.instrument) ?? "open this chart on TradingView"}
+                  style={{ color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}
+                >
+                  {tradingViewFull(data.instrument)}
+                  <ExternalLink size={10} strokeWidth={2} style={{ marginLeft: 4, verticalAlign: "-1px" }} />
+                </a>
                 {(() => {
                   const inst = instrumentInfo(data.instrument);
                   if (!inst || !inst.executeSymbol || inst.executeSymbol === data.instrument) return null;
