@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { DashHeader, type Engine } from "./_components/dashboard/DashHeader";
 import { DashBanners } from "./_components/dashboard/Banners";
+import { EaHealthBanner } from "./_components/dashboard/EaHealthBanner";
 import { StatusRow } from "./_components/dashboard/StatusRow";
 import { OpenPositions } from "./_components/dashboard/OpenPositions";
 import { AccountsAggregateCard, RecentAlertsCard } from "./_components/dashboard/RightRail";
@@ -271,6 +272,9 @@ export default function Dashboard() {
         hasLiveData={!!data?.hasLiveData}
         onOpenManual={() => setShowManual(true)}
       />
+
+      {/* Only renders when "Open" has stopped meaning "open" — see ea-health.ts */}
+      <EaHealthBanner health={(data as any)?.eaHealth} />
 
       {/* Status row: Daily R budget · Next high-impact · DXY · VIX */}
       <StatusRow dailyR={data?.dailyR} nextEvent={data?.nextEvent} macros={data?.macros} regime={regime} />

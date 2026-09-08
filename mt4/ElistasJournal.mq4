@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                              ElistasJournal.mq4 |
 //|                              Auto-log MT4 trades to the dashboard|
-//|                                                          v2.10  |
+//|                                                          v2.11  |
 //|  WHY v2                                                          |
 //|  ------                                                          |
 //|  v1 hung the terminal: OnInit swept the whole account history    |
@@ -42,6 +42,17 @@
 //|    OnInit and its close re-sent — so reattaching the EA repairs   |
 //|    anything that slipped through.                                 |
 //|                                                                  |
+//|  NEW in v2.11 — reconciliation no longer waits for a human        |
+//|  ------------                                                    |
+//|  • v2.10 reconciled at OnInit and nowhere else, which made        |
+//|    reattaching the EA the only repair path — and nothing in the   |
+//|    dashboard said so. An EA running continuously for weeks never  |
+//|    re-inits, so a close lost to one disconnect stayed lost. Three |
+//|    trades sat Open for up to a month that way.                    |
+//|  • Reconciliation now also runs every ReconcileMinutes on the     |
+//|    timer: one /state call, then the same local-only comparison.   |
+//|    Set ReconcileMinutes = 0 for the old attach-only behaviour.    |
+//|                                                                  |
 //|  SETUP (unchanged)                                               |
 //|  -----                                                           |
 //|  • Tools → Options → Expert Advisors → Allow WebRequest for:     |
@@ -50,7 +61,7 @@
 //+------------------------------------------------------------------+
 #property strict
 #property copyright "Elistas"
-#property version   "2.00"
+#property version   "2.11"
 
 //--- Inputs
 input string  ApiBase            = "https://elistas-dashboard.vercel.app";
@@ -64,7 +75,8 @@ input int     PollMillis         = 2000;    // tick frequency
 input int     BatchSize          = 25;      // max events per POST
 input int     BalanceHeartbeatSec = 300;    // push balance/equity every N seconds (0 = off)
 input int     CloseRetryTicks    = 5;       // ticks to keep retrying a close the broker hasn't filed yet
-input int     MaxReconcileCloses = 200;     // cap on close events OnInit reconciliation may enqueue
+input int     MaxReconcileCloses = 200;     // cap on close events each reconciliation may enqueue
+input int     ReconcileMinutes   = 30;      // re-run reconciliation every N minutes (0 = only at attach)
 input bool    VerboseLog         = false;
 
 //--- Open-position snapshot (parallel arrays)
@@ -74,6 +86,9 @@ double   knownOpenTP[];
 // Per-ticket count of ticks where the order had left the open book but was not
 // selectable from history yet. Bounded retry — see DetectOpensAndCloses.
 int      knownCloseMiss[];
+
+//--- Last periodic reconciliation (see MaybePeriodicReconcile).
+datetime lastReconcileAt = 0;
 
 //--- Event queue — each entry is one complete event JSON object (no brackets)
 string   eventQueue[];
@@ -215,8 +230,59 @@ void OnTimer()
 
    // Bounded network work per tick: one event batch + one screenshot, max.
    if(backoffTicks > 0) { backoffTicks--; return; }
+
+   // Reconciliation BEFORE the flush, so anything it finds goes out on this
+   // same tick rather than waiting for the next one. It is rate-limited to one
+   // /state call per ReconcileMinutes, and skipped entirely while we are in
+   // backoff (the check above already returned) — so the "one batched POST per
+   // tick" budget is never exceeded by more than that single extra call, and
+   // only once every half hour by default.
+   MaybePeriodicReconcile();
+
    FlushEventQueue();
    FlushOneScreenshot();
+}
+
+//+------------------------------------------------------------------+
+//| Periodic reconciliation                                          |
+//|                                                                  |
+//| The repair path existed in v2.10 and ran exactly once, at        |
+//| OnInit. That is fine for a terminal restarted daily and useless  |
+//| for one left running: an EA that never re-inits never reconciles, |
+//| so a close event lost to a single disconnect is lost for good.    |
+//| The only cure was knowing to reattach the EA — which is a thing   |
+//| the dashboard never said and no one would guess.                  |
+//|                                                                   |
+//| Cost is one GET per interval. The comparison itself is local      |
+//| (OrderSelect against the terminal's own pools) and only enqueues, |
+//| exactly as at OnInit.                                             |
+//|                                                                   |
+//| Caveat inherited from ReconcileClosesAgainstServer: OrderSelect   |
+//| only sees history the terminal has loaded. Set the Account        |
+//| History tab to All History or old closes stay invisible.          |
+//+------------------------------------------------------------------+
+void MaybePeriodicReconcile()
+{
+   if(ReconcileMinutes <= 0) return;                     // attach-only, as before
+   datetime now = TimeCurrent();
+   if(lastReconcileAt == 0) { lastReconcileAt = now; return; }   // OnInit just did one
+   if(now - lastReconcileAt < ReconcileMinutes * 60) return;
+   lastReconcileAt = now;
+
+   int    serverHighest = -1;
+   int    openServer[];  ArrayResize(openServer, 0);
+   string syncMode = "full";
+   if(!FetchServerState(serverHighest, openServer, syncMode))
+   {
+      if(VerboseLog) Print("[ElistasJournal] Periodic reconcile — /state fetch failed, will retry next interval.");
+      return;
+   }
+   if(syncMode == "off") return;
+
+   // Both directions, same as OnInit. Opens the server missed, and closes it
+   // never heard about.
+   ReconcileOpensAgainstServer(openServer);
+   ReconcileClosesAgainstServer(openServer);
 }
 
 //+------------------------------------------------------------------+

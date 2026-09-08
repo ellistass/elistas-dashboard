@@ -12,6 +12,9 @@
 //   • macros              DXY + VIX context tiles
 //   • todaysIdeas         Claude's ideas[] from today's alert (for the trade plan board)
 //   • recentAlerts        last 5 Telegram alerts sent (audit trail)
+//   • eaHealth            accounts whose EA has gone quiet + trades that have
+//                         been "Open" long enough that a missed close is the
+//                         likelier explanation (see lib/ea-health.ts)
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -29,6 +32,7 @@ import {
   pickDxyVix,
 } from "@/lib/dashboard-context";
 import { normalizeRanking } from "@/lib/normalize-ranking";
+import { assessEaHealth } from "@/lib/ea-health";
 
 export async function GET() {
   try {
@@ -142,6 +146,20 @@ export async function GET() {
     const macros = pickDxyVix(sectorsSnap?.data);
     const nextEvent = nextHighImpactEvent(calendar);
 
+    // ── Is the journal being told the truth? ───────────────────────────────
+    // Cheap: one small account query, then pure functions over data already in
+    // hand. Wrapped because a dashboard that fails to render because the health
+    // check failed would be its own kind of joke.
+    let eaHealth = null;
+    try {
+      const accounts = await db.account.findMany({
+        select: { id: true, name: true, isActive: true, lastSyncedAt: true, eaSyncMode: true },
+      });
+      eaHealth = assessEaHealth(accounts as any, openTrades as any);
+    } catch (e) {
+      console.error("EA health check failed:", e);
+    }
+
     return NextResponse.json({
       scores,
       openTrades,
@@ -154,6 +172,7 @@ export async function GET() {
       todaysIdeas,
       ideaActions,
       recentAlerts,
+      eaHealth,
       barchartFetchedAt: sectorsSnap?.fetchedAt ?? null,
       ratesFetchedAt: latestRates?.fetchedAt ?? null,
       fetchedAt: new Date().toISOString(),
