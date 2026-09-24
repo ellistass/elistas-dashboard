@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import {
   Gauge, Crosshair, CalendarDays, PenLine,
   TrendingUp, Trophy, History as HistoryIcon,
-  Wallet, Database, Pencil, LogOut, Menu, Frame,
+  Wallet, Database, Pencil, LogOut, Menu, Frame, Target,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -24,6 +24,8 @@ const GROUPS: NavGroup[] = [
       // Wyckoff leads: it is the strategy, and the desk is the daily process.
       // Dashboard is the morning glance; the desk is where the work happens.
       { href: '/wyckoff',       label: 'Wyckoff',   icon: Frame, input: true },
+      // Mechanical triggers from the Sep 2026 backtest — separate from the read.
+      { href: '/setups',        label: 'Setups',    icon: Target },
       { href: '/',              label: 'Dashboard', icon: Gauge },
       { href: '/trades/active', label: 'Active',    icon: Crosshair },
       { href: '/calendar',      label: 'Calendar',  icon: CalendarDays },
