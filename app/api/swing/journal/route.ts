@@ -35,7 +35,12 @@ export async function GET(req: Request) {
     ]);
     const takenBy = new Map(taken.filter((t: any) => t.setupLogId).map((t: any) => [t.setupLogId, t]));
     const counts = rows.reduce((c: Record<string, number>, r: any) => { const k = r.outcome ?? "pending"; c[k] = (c[k] ?? 0) + 1; return c; }, {});
+    const yours = taken
+      .filter((t: any) => t.status === "closed" && t.resultR != null)
+      .sort((a: any, b: any) => String(a.exitDate).localeCompare(String(b.exitDate)))
+      .map((t: any) => ({ r: t.resultR, label: `${t.exitDate} ${t.instrument} (${t.account})` }));
     return NextResponse.json({
+      yours,
       table: resultsTable(rows, taken),
       counts,
       rows: rows.map((r: any) => ({ ...r, taken: takenBy.get(r.id) ?? null })),

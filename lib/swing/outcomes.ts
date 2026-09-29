@@ -84,7 +84,7 @@ export async function resolveOutcomes(): Promise<{ resolved: number; still: numb
 
 // ── Results table ────────────────────────────────────────────────────────────
 
-export interface ResultRow { group: string; expectation: string; stats: GroupStats }
+export interface ResultRow { group: string; expectation: string; expLo: number | null; expHi: number | null; stats: GroupStats }
 
 const closed = (r: any) => r.outcome === "win" || r.outcome === "loss" || r.outcome === "be";
 const byExit = (a: any, b: any) => String(a.exitDate).localeCompare(String(b.exitDate));
@@ -96,16 +96,16 @@ export function resultsTable(rows: any[], taken: any[]): ResultRow[] {
   const cot = (r: any) => r.cot;
   const quiet = (r: any) => r.quietRetest === true;
   return [
-    { group: "All setups", expectation: "—", stats: g(() => true) },
-    { group: "Grade A", expectation: "about +0.35R, streaks about 5", stats: g((r) => r.grade === "A") },
-    { group: "Grade B", expectation: "about 0R", stats: g((r) => r.grade === "B") },
-    { group: "Futures / stocks: reversal", expectation: "+0.67R in the backtest (rule + reversal)", stats: g((r) => r.market === "futures" && r.context === "reversal") },
-    { group: "Futures / stocks: with-trend", expectation: "+0.17R", stats: g((r) => r.market === "futures" && r.context === "with-trend") },
-    { group: "Forex: COT trapped", expectation: "+0.34 to +0.48R", stats: g((r) => r.market === "forex" && cot(r) === "trapped") },
-    { group: "Forex: COT late", expectation: "−0.16 to −0.39R", stats: g((r) => r.market === "forex" && cot(r) === "late") },
-    { group: "Quiet retest", expectation: "+0.28 to +0.48R", stats: g(quiet) },
+    { group: "All setups", expectation: "—", expLo: null, expHi: null, stats: g(() => true) },
+    { group: "Grade A", expectation: "about +0.35R, streaks about 5", expLo: 0.25, expHi: 0.45, stats: g((r) => r.grade === "A") },
+    { group: "Grade B", expectation: "about 0R", expLo: -0.1, expHi: 0.1, stats: g((r) => r.grade === "B") },
+    { group: "Futures / stocks: reversal", expectation: "+0.67R in the backtest (rule + reversal)", expLo: 0.57, expHi: 0.76, stats: g((r) => r.market === "futures" && r.context === "reversal") },
+    { group: "Futures / stocks: with-trend", expectation: "+0.17R", expLo: 0.1, expHi: 0.25, stats: g((r) => r.market === "futures" && r.context === "with-trend") },
+    { group: "Forex: COT trapped", expectation: "+0.34 to +0.48R", expLo: 0.34, expHi: 0.48, stats: g((r) => r.market === "forex" && cot(r) === "trapped") },
+    { group: "Forex: COT late", expectation: "−0.16 to −0.39R", expLo: -0.39, expHi: -0.16, stats: g((r) => r.market === "forex" && cot(r) === "late") },
+    { group: "Quiet retest", expectation: "+0.28 to +0.48R", expLo: 0.28, expHi: 0.48, stats: g(quiet) },
     {
-      group: "Taken by you", expectation: "—",
+      group: "Taken by you", expectation: "—", expLo: null, expHi: null,
       stats: stats(taken.filter((t) => t.status === "closed" && t.resultR != null).sort((a, b) => String(a.exitDate).localeCompare(String(b.exitDate))).map((t) => t.resultR)),
     },
   ];

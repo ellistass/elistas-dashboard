@@ -14,7 +14,7 @@ import { fmtPx, fmtUsd, riskForGrade, sizeFor, specFor, todayUtc, type Instrumen
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const inp = { ...mono, fontSize: 11, padding: "4px 7px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-card-2)", color: "var(--text-1)", width: "100%" } as const;
-const btn = { ...mono, fontSize: 10.5, padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border-strong)", color: "var(--text-1)", display: "inline-flex", gap: 5, alignItems: "center" } as const;
+const btn = { ...mono, fontSize: 11, padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border-strong)", background: "var(--bg-card-2)", color: "var(--text-1)", cursor: "pointer", display: "inline-flex", gap: 5, alignItems: "center" } as const;
 const lbl = { ...mono, fontSize: 9.5, color: "var(--text-3)", display: "grid", gap: 3 } as const;
 
 export interface TakeCard {

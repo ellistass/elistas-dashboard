@@ -723,6 +723,7 @@ model SwingTrade {
   stopHitPrice    Float?
   capHitDate      String?
   daysHeld        Int?
+  recentBars      Json?                   // [[date,o,h,l,c]] ~20 bars before entry → now, for the trade chart
   moveDueSince    String?                 // bar date the rule stop first moved past yours
   moveMissLoggedFor String?               // moveDueSince already logged as a Management break
   exitMissLogged  Boolean   @default(false) // planned event exit missed, already logged

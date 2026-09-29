@@ -1,32 +1,42 @@
 "use client";
 // app/tonight/page.tsx — Tonight: what do I do right now?
 //
-// The evening routine on one page: the two accounts, one line per required
-// action on open trades, the setups decided at this close, open rule breaks,
-// and event dates to check. Everything links to the page where it's done.
+// Top to bottom by urgency: the clock to tonight's closes, the two accounts
+// against their monthly stop and target, open trades that need you (one plain
+// instruction each, with the chart), setups filled or triggering, orders
+// working (closest to filling first), and event housekeeping.
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Moon, RefreshCw, AlertTriangle, ShieldAlert, CalendarClock, Target } from "lucide-react";
-import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "../wyckoff/_components/ui";
-import { fmtUsd, type Ledger, type SwingAccountCfg } from "@/lib/swing/core";
+import { RefreshCw, ShieldAlert } from "lucide-react";
+import {
+  kit as s, Btn, CandleChart, Clocks, DistBar, Grade, Legend, Level, PageHead, Pips, Section, SideTag,
+  Sparkline, Tag, px, rr, usd, type Candle,
+} from "../_components/swing/kit";
+import TradeCard, { type Action } from "../_components/swing/TradeCard";
+import AccountCard from "../_components/swing/AccountCard";
+import TakeBar, { type TakeCard } from "../setups/TakeBar";
+import type { Ledger, SwingAccountCfg } from "@/lib/swing/core";
 
-const mono = { fontFamily: "'DM Mono', monospace" } as const;
-const btn = { ...mono, fontSize: 10.5, padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border-strong)", color: "var(--text-1)", display: "inline-flex", gap: 6, alignItems: "center" } as const;
-const h3 = { ...mono, fontSize: 11, color: "var(--text-3)", margin: "22px 0 8px", display: "flex", gap: 6, alignItems: "center" } as const;
-const line = { ...mono, fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border-subtle)", display: "flex", gap: 8, alignItems: "baseline" } as const;
-
+interface ActNow {
+  market: string; instrument: string; executeSymbol: string | null; side: string; grade: string; inverted: boolean; inTrade: boolean;
+  state: string; entryKind: string; entry: number; stop: number; cap: number | null; breakeven: number; candles: Candle[];
+  rNow: number | null; risk: number; accounts: string[]; reward: number | null; take: TakeCard;
+}
+interface Working {
+  market: string; instrument: string; side: string; grade: string; inverted: boolean; inTrade: boolean;
+  kind: "limit" | "close"; level: number; stop: number; left: number; total: number; closes: number[]; away: number | null; last: number | null;
+}
 interface Payload {
-  today: string;
-  closes: { stocks: string; forex: string };
+  today: string; closes: { label: string; at: string }[];
   accounts: (SwingAccountCfg & { ledger: Ledger })[];
-  actions: { tradeId: string; instrument: string; kind: string; text: string; urgent: boolean }[];
-  decided: { market: string; instrument: string; grade: string; side: string; text: string; inTrade: boolean }[];
+  trades: any[]; actions: Action[]; actNow: ActNow[]; working: Working[];
   scannedAt: { futures: string | null; forex: string | null };
   alerts: { id: string; date: string; instrument: string; rule: string; detail: string }[];
-  prompts: string[];
-  openCount: number;
+  missingEarnings: string[]; upcoming: string[];
 }
+
+const weekday = (d: string) => new Date(d + "T12:00:00Z").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
 export default function TonightPage() {
   const [data, setData] = useState<Payload | null>(null);
@@ -36,7 +46,6 @@ export default function TonightPage() {
   const load = useCallback(async (refresh = false) => {
     setBusy(true); setError(null);
     try {
-      // "refresh" re-prices the open trades first (same as Trades → refresh prices).
       if (refresh) await fetch("/api/swing/trades?status=open&refresh=1");
       const r = await fetch("/api/swing/tonight");
       const j = await r.json();
@@ -47,101 +56,153 @@ export default function TonightPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  const patch = useCallback(async (body: Record<string, unknown>) => {
+    const r = await fetch("/api/swing/trades", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) { setError(j.error ?? r.statusText); return false; }
+    await load();
+    return true;
+  }, [load]);
+
+  if (!data) {
+    return (
+      <div className={s.page}>
+        <PageHead title="Tonight" sub={error ? <span style={{ color: "var(--red)" }}>{error}</span> : "Loading tonight…"} />
+      </div>
+    );
+  }
+
+  const needs = data.trades.filter((t) => data.actions.some((a) => a.tradeId === t.id && a.urgent));
+  const quiet = data.trades.filter((t) => !needs.includes(t));
+  const filled = data.actNow.filter((a) => !a.inTrade);
+  const sub = [
+    weekday(data.today),
+    `${needs.length} trade${needs.length === 1 ? "" : "s"} need${needs.length === 1 ? "s" : ""} you`,
+    `${filled.length} setup${filled.length === 1 ? "" : "s"} to act on`,
+    `${data.working.length} order${data.working.length === 1 ? "" : "s"} working`,
+  ].join(" · ");
+
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
-      <SectionHeader
-        icon={<Moon size={14} />}
-        title="Tonight"
-        note={data ? `${data.today} · stocks close ${data.closes.stocks} · forex close ${data.closes.forex} (Lagos)` : undefined}
-        right={<button style={btn} onClick={() => load(true)} disabled={busy}><RefreshCw size={11} className={busy ? "animate-spin" : ""} /> refresh prices</button>}
-      />
-      {error ? <ErrorCard message={error} /> : null}
-      {!data && !error ? <LoadingCard what="tonight" /> : null}
+    <div className={s.page}>
+      <PageHead title="Tonight" sub={sub} right={
+        <div className={s.row} style={{ alignItems: "stretch" }}>
+          <Clocks closes={data.closes} />
+          <Btn onClick={() => load(true)} disabled={busy} title="Re-price open trades from Yahoo"><RefreshCw size={12} className={busy ? "animate-spin" : ""} /> Refresh</Btn>
+        </div>
+      } />
+      {error ? <div className={s.small} style={{ color: "var(--red)" }}>{error}</div> : null}
 
-      {data ? (
-        <>
-          {data.alerts.length ? (
-            <div className="card" style={{ padding: 12, borderColor: "var(--red-border)", marginBottom: 12 }}>
-              <div style={{ ...mono, fontSize: 10.5, color: "var(--red)", display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
-                <ShieldAlert size={12} /> {data.alerts.length} RULE BREAK{data.alerts.length > 1 ? "S" : ""} NOT REVIEWED
+      {data.alerts.length ? (
+        <div className={s.card} style={{ borderColor: "var(--red)", display: "grid", gap: 6 }}>
+          <div className={s.row} style={{ color: "var(--red)", fontWeight: 600 }}><ShieldAlert size={15} /> {data.alerts.length} rule break{data.alerts.length > 1 ? "s" : ""} not reviewed</div>
+          {data.alerts.slice(0, 3).map((a) => <div key={a.id} className={s.small}>{a.date} · {a.instrument} · <b>{a.rule}</b> — {a.detail}</div>)}
+          <Link href="/discipline" className={s.small} style={{ color: "var(--accent)" }}>Review on Discipline →</Link>
+        </div>
+      ) : null}
+
+      <div className={s.grid2}>
+        {data.accounts.map((a) => <AccountCard key={a.key} a={a} />)}
+      </div>
+
+      <Section title="Needs you tonight" count={needs.length}>
+        {needs.length ? needs.map((t) => <TradeCard key={t.id} t={t} actions={data.actions.filter((a) => a.tradeId === t.id)} patch={patch} />)
+          : <div className={`${s.card} ${s.empty}`}>{data.trades.length ? "Your open trades need nothing tonight." : <>No open trades. Took one at your broker? <Link href="/trades" style={{ color: "var(--accent)" }}>Add it on Trades</Link> so the stop maths runs.</>}</div>}
+      </Section>
+
+      {quiet.length ? (
+        <Section title="Open, nothing to do" count={quiet.length}>
+          {quiet.map((t) => <TradeCard key={t.id} t={t} actions={data.actions.filter((a) => a.tradeId === t.id)} patch={patch} />)}
+        </Section>
+      ) : null}
+
+      <Section title="Act on these" count={filled.length} hint="filled on the last bar, or entering at the next open">
+        {filled.length ? (
+          <>
+            <div className={s.grid2}>{filled.map((a, i) => <ActCard key={i} a={a} />)}</div>
+            <Legend items={[{ label: "entry", tone: "fg2" }, { label: "stop", tone: "red" }, { label: "+1R → breakeven", tone: "accent" }, { label: "cap", tone: "green" }]} />
+          </>
+        ) : <div className={`${s.card} ${s.empty}`}>Nothing filled or triggering on the last bar.</div>}
+      </Section>
+
+      <Section title="Orders working" count={data.working.length} hint="closest to filling first">
+        {data.working.length ? (
+          <div className={s.list}>
+            {data.working.map((w, i) => (
+              <div key={i} className={`${s.listRow} ${s.ord}`} style={{ opacity: w.inTrade ? 0.5 : 1 }}>
+                <Grade g={w.grade} />
+                <span style={{ fontWeight: 700 }}>{w.instrument}</span>
+                <Tag tone={w.side === "long" ? "long" : "short"}>{w.side === "long" ? "BUY" : "SELL"}</Tag>
+                <div className={s.fullNarrow}>
+                  <DistBar near={(w.away ?? 99) < 2} pct={w.away ?? 99}
+                    label={<>{w.kind === "close" ? `needs a close ${w.side === "long" ? "above" : "below"}` : "limit"} <b style={{ color: "var(--text-1)" }}>{px(w.level)}</b>{w.away != null ? ` · ${w.away.toFixed(1)}% away` : ""}{w.inverted ? " · future's price" : ""}{w.inTrade ? " · in a trade" : ""}</>} />
+                </div>
+                <div className={s.hideNarrow}><Sparkline values={w.closes} level={w.level} /></div>
+                <div className={s.hideNarrow}>
+                  {w.kind === "limit" ? <Pips left={w.left} total={Math.min(20, Math.max(w.total, w.left))} /> : <span className={s.small}>decided at tonight's close</span>}
+                </div>
               </div>
-              {data.alerts.slice(0, 5).map((a) => (
-                <div key={a.id} style={{ ...mono, fontSize: 11, color: "var(--text-2)", padding: "2px 0" }}>{a.date} · {a.instrument} · {a.rule} — {a.detail}</div>
-              ))}
-              <Link href="/discipline" style={{ ...mono, fontSize: 10.5, color: "var(--accent)" }}>review on Discipline →</Link>
-            </div>
-          ) : null}
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>
-            {data.accounts.map((a) => <AccountCard key={a.key} a={a} />)}
+            ))}
           </div>
+        ) : <div className={`${s.card} ${s.empty}`}>No orders working.</div>}
+        <div className={s.small} style={{ color: "var(--text-3)" }}>
+          From the last stored scans (futures {data.scannedAt.futures ? new Date(data.scannedAt.futures).toLocaleString() : "never"} · forex {data.scannedAt.forex ? new Date(data.scannedAt.forex).toLocaleString() : "never"}).
+          Take or skip them on <Link href="/setups" style={{ color: "var(--accent)" }}>Setups</Link>.
+        </div>
+      </Section>
 
-          <h3 style={h3}><AlertTriangle size={11} /> ACTIONS ON OPEN TRADES · {data.actions.length}</h3>
-          {data.actions.length ? (
-            <div className="card" style={{ padding: "4px 12px" }}>
-              {data.actions.map((a, i) => (
-                <div key={i} style={{ ...line, color: a.urgent ? "var(--amber)" : "var(--text-2)", borderBottom: i === data.actions.length - 1 ? "none" : line.borderBottom }}>
-                  <span>{a.urgent ? "●" : "○"}</span><span style={{ flex: 1 }}>{a.text}</span>
-                  <Link href="/trades" style={{ fontSize: 10, color: "var(--accent)" }}>trades →</Link>
-                </div>
-              ))}
+      {data.upcoming.length || data.missingEarnings.length ? (
+        <div className={s.dashed} style={{ display: "grid", gap: 12 }}>
+          {data.upcoming.length ? (
+            <div style={{ display: "grid", gap: 4 }}>
+              <div style={{ fontWeight: 600 }}>This week's events on your trades</div>
+              {data.upcoming.map((u) => <div key={u} className={s.small} style={{ color: "var(--amber)" }}>{u}</div>)}
             </div>
-          ) : <EmptyState text={data.openCount ? "Nothing to do on your open trades tonight." : "No open trades."} small />}
-
-          <h3 style={h3}><Target size={11} /> TONIGHT'S CLOSES · {data.decided.length}</h3>
-          {data.decided.length ? (
-            <div className="card" style={{ padding: "4px 12px" }}>
-              {data.decided.map((d, i) => (
-                <div key={i} style={{ ...line, color: d.inTrade ? "var(--text-3)" : "var(--text-2)", borderBottom: i === data.decided.length - 1 ? "none" : line.borderBottom }}>
-                  <span style={{ color: d.grade === "A" ? "var(--green)" : "var(--text-3)", minWidth: 16 }}>{d.grade}</span>
-                  <b style={{ color: "var(--text-1)", minWidth: 64 }}>{d.instrument}</b>
-                  <span style={{ color: d.side === "long" ? "var(--green)" : "var(--red)", minWidth: 40 }}>{d.side}</span>
-                  <span style={{ flex: 1 }}>{d.text}{d.inTrade ? " · already in a trade" : ""}</span>
-                  <span style={{ fontSize: 10, color: "var(--text-3)" }}>{d.market}</span>
-                </div>
-              ))}
-            </div>
-          ) : <EmptyState text="No setups at a decision point. The last stored scans had nothing live." small />}
-          <p style={{ ...mono, fontSize: 9.5, color: "var(--text-3)", marginTop: 6 }}>
-            From the last stored scans (futures {data.scannedAt.futures ? new Date(data.scannedAt.futures).toLocaleString() : "never"} · forex {data.scannedAt.forex ? new Date(data.scannedAt.forex).toLocaleString() : "never"}).
-            Take or skip them on <Link href="/setups" style={{ color: "var(--accent)" }}>Setups</Link>.
-          </p>
-
-          {data.prompts.length ? (
-            <>
-              <h3 style={h3}><CalendarClock size={11} /> EVENTS · {data.prompts.length}</h3>
-              <div className="card" style={{ padding: "4px 12px" }}>
-                {data.prompts.map((p, i) => <div key={i} style={{ ...line, color: "var(--text-2)", borderBottom: i === data.prompts.length - 1 ? "none" : line.borderBottom }}>{p}</div>)}
-              </div>
-            </>
           ) : null}
-        </>
+          {data.missingEarnings.length ? (
+            <div className={s.spread}>
+              <div style={{ display: "grid", gap: 6 }}>
+                <div style={{ fontWeight: 600 }}>{data.missingEarnings.length} stock{data.missingEarnings.length > 1 ? "s have" : " has"} no earnings date</div>
+                <div className={s.chips}>{data.missingEarnings.map((m) => <span key={m} className={s.chip}>{m}</span>)}</div>
+              </div>
+              <Link href="/discipline#events" className={s.btn}>Add dates</Link>
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
 }
 
-function AccountCard({ a }: { a: SwingAccountCfg & { ledger: Ledger } }) {
-  const L = a.ledger;
-  const stat = (k: string, v: string, tone?: string) => (
-    <div><div style={{ ...mono, fontSize: 9.5, color: "var(--text-3)" }}>{k}</div><div style={{ ...mono, fontSize: 14, color: tone ?? "var(--text-1)" }}>{v}</div></div>
-  );
-  const stopTone = L.stopHit ? "var(--red)" : L.stopRemaining < a.monthlyStop * 0.4 ? "var(--amber)" : "var(--text-1)";
+function ActCard({ a }: { a: ActNow }) {
+  const lines = [
+    ...(a.cap != null ? [{ label: "cap", value: a.cap, tone: "green" }] : []),
+    { label: "+1R", value: a.breakeven, tone: "accent", dash: true },
+    { label: "entry", value: a.entry, tone: "fg2", dash: true },
+    { label: "stop", value: a.stop, tone: "red" },
+  ];
+  const zones = [
+    ...(a.cap != null ? [{ from: a.entry, to: a.cap, tone: "greenDim" }] : []),
+    { from: a.stop, to: a.entry, tone: "redDim" },
+  ];
   return (
-    <div className="card" style={{ padding: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>{a.name}</span>
-        <span style={{ ...mono, fontSize: 11, color: "var(--text-2)" }}>{fmtUsd(a.balance)}</span>
+    <div className={s.card} style={{ display: "grid", gap: 10 }}>
+      <div className={s.row}>
+        <span className={s.sym}>{a.instrument}</span>
+        <SideTag side={a.side} />
+        <Tag>grade {a.grade} · {a.accounts.join(" & ") || "no account"} · {usd(a.risk)}</Tag>
+        <span className={s.mono} style={{ marginLeft: "auto", fontSize: 12, color: a.rNow == null ? "var(--text-2)" : a.rNow >= 0 ? "var(--green)" : "var(--red)" }}>
+          {a.state === "filled" ? `${rr(a.rNow)} now` : "enter at the next open"}
+        </span>
       </div>
-      {L.stopHit ? <div style={{ ...mono, fontSize: 10.5, color: "var(--red)", marginTop: 4 }}>MONTHLY STOP HIT — done until the 1st</div> : null}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 10 }}>
-        {stat("open risk", fmtUsd(L.openRisk))}
-        {stat("slots", `${L.slotsUsed} / ${a.maxSlots}`, L.slotsUsed >= a.maxSlots ? "var(--amber)" : undefined)}
-        {stat("stop room", fmtUsd(L.stopRemaining), stopTone)}
-        {stat("this month", fmtUsd(L.realised), L.realised >= 0 ? "var(--green)" : "var(--red)")}
-        {stat("locked", fmtUsd(L.locked), L.locked > 0 ? "var(--green)" : undefined)}
-        {stat("house pot", fmtUsd(L.housePot))}
+      {a.inverted ? <div className={s.small} style={{ color: "var(--amber)" }}>Prices are the future's — execute {a.executeSymbol} in the opposite terms.</div> : null}
+      <CandleChart bars={a.candles} lines={lines} zones={zones} height={180} />
+      <div className={s.levels}>
+        <Level k="stop" v={px(a.stop)} tone="red" />
+        <Level k="+1R → BE" v={px(a.breakeven)} tone="accent" />
+        <Level k={a.cap != null ? "cap" : "exit"} v={a.cap != null ? px(a.cap) : "trail only"} tone="green" />
       </div>
+      <div className={s.small}>risk {px(Math.abs(a.entry - a.stop))}{a.reward != null ? ` · reward ${a.reward.toFixed(2)}R` : ""} · entry {px(a.entry)}{a.entryKind === "open" ? " (reference — market at the open)" : ""}</div>
+      <TakeBar card={a.take} />
     </div>
   );
 }

@@ -73,6 +73,13 @@ const trackedFields = (k: Tracked) => ({
   stopHitPrice: k.stopHitPrice, capHitDate: k.capHitDate, daysHeld: k.daysHeld,
 });
 
+/** Candles for the trade card: ~20 bars before entry through the last bar (max 90). */
+function chartBars(bars: { date: string; o: number; h: number; l: number; c: number }[], entryDate: string) {
+  const i = bars.findIndex((b) => b.date >= entryDate);
+  const from = Math.max(0, (i < 0 ? bars.length : i) - 20, bars.length - 90);
+  return bars.slice(from).map((b) => [b.date, b.o, b.h, b.l, b.c]);
+}
+
 /** Recompute every open trade from its feed. One fetch per feed; a bad feed only fails its own trades. */
 export async function refreshOpenTrades(): Promise<{ refreshed: number; errors: { id: string; error: string }[] }> {
   const open = await T().findMany({ where: { status: "open" } });
@@ -90,7 +97,7 @@ export async function refreshOpenTrades(): Promise<{ refreshed: number; errors: 
     }
     for (const t of trades) {
       const k = trackTrade(trackInput(t), bars);
-      await T().update({ where: { id: t.id }, data: { ...trackedFields(k), trackError: null, trackedAt: new Date(), ...(await eveningChecks(t, k)) } });
+      await T().update({ where: { id: t.id }, data: { ...trackedFields(k), recentBars: chartBars(bars, t.entryDate), trackError: null, trackedAt: new Date(), ...(await eveningChecks(t, k)) } });
       refreshed++;
     }
   }
@@ -127,8 +134,9 @@ export async function refreshTrade(id: string) {
   const t = await T().findUnique({ where: { id } });
   if (!t || t.status !== "open") return t;
   try {
-    const k = trackTrade(trackInput(t), await fetchFeedBars(t.feed));
-    return await T().update({ where: { id }, data: { ...trackedFields(k), trackError: null, trackedAt: new Date() } });
+    const bars = await fetchFeedBars(t.feed);
+    const k = trackTrade(trackInput(t), bars);
+    return await T().update({ where: { id }, data: { ...trackedFields(k), recentBars: chartBars(bars, t.entryDate), trackError: null, trackedAt: new Date() } });
   } catch (e) {
     return await T().update({ where: { id }, data: { trackError: e instanceof Error ? e.message : String(e), trackedAt: new Date() } });
   }

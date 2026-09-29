@@ -1,0 +1,122 @@
+/* app/_components/swing/kit.module.css — the swing pages' shared look.
+   Built on the dashboard's own tokens (globals.css): cards on --bg-card,
+   insets on --bg-card-2, hairlines on --border-subtle, DM Mono for numbers. */
+
+.page { max-width: 1120px; margin: 0 auto; display: grid; gap: 26px; }
+.mono { font-family: 'DM Mono', monospace; font-variant-numeric: tabular-nums; }
+
+/* Header */
+.head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.title { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
+.sub { color: var(--text-2); font-size: 13px; margin-top: 4px; }
+
+/* Section eyebrow: label · count · hint, then a hairline to the edge */
+.section { display: grid; gap: 12px; }
+.eyebrow { font-family: 'DM Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-3); display: flex; align-items: center; gap: 10px; }
+.eyebrow::after { content: ""; flex: 1; height: 1px; background: var(--border-subtle); }
+.eyebrowCount { color: var(--text-2); }
+.eyebrowHint { text-transform: none; letter-spacing: 0; }
+
+/* Surfaces */
+.card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 14px; padding: 16px; min-width: 0; }
+.inset { background: var(--bg-card-2); border-radius: 8px; padding: 7px 9px; }
+.dashed { background: var(--bg-card); border: 1px dashed var(--border-strong); border-radius: 14px; padding: 14px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.spread { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.sym { font-weight: 700; font-size: 18px; }
+.muted { color: var(--text-3); }
+.small { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-2); }
+.big { font-family: 'DM Mono', monospace; font-size: 30px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+
+/* Tags */
+.tag { justify-self: start; align-self: center; width: fit-content; font-family: 'DM Mono', monospace; font-size: 10.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-2); white-space: nowrap; }
+.long { color: var(--green); border-color: var(--green); background: var(--green-dim); }
+.short { color: var(--red); border-color: var(--red); background: var(--red-dim); }
+.good { color: var(--green); border-color: var(--green); }
+.warn { color: var(--amber); border-color: var(--amber); background: var(--amber-dim); }
+.bad { color: var(--red); border-color: var(--red); background: var(--red-dim); }
+.info { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+
+/* Buttons */
+.btn { font-family: 'DM Mono', monospace; font-size: 11.5px; border-radius: 8px; padding: 7px 12px; border: 1px solid var(--border-strong); background: var(--bg-card-2); color: var(--text-1); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; text-decoration: none; justify-self: start; }
+.btn:hover { border-color: var(--text-3); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btnPrimary { background: var(--accent); border-color: var(--accent); color: var(--accent-on); font-weight: 500; }
+.btnPrimary:hover { border-color: var(--accent); filter: brightness(1.08); }
+.btnDanger { color: var(--red); border-color: var(--red-border); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The one instruction on a card */
+.do { background: var(--accent-dim); border: 1px solid var(--accent); border-radius: 10px; padding: 12px 14px; display: grid; gap: 4px; }
+.doWarn { background: var(--amber-dim); border-color: var(--amber); }
+.doBad { background: var(--red-dim); border-color: var(--red); }
+.doWhat { font-size: 15.5px; font-weight: 600; }
+.doWhy { font-size: 12.5px; color: var(--text-2); }
+
+/* Clocks */
+.clocks { display: flex; gap: 10px; flex-wrap: wrap; }
+.clock { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 10px 14px; min-width: 160px; }
+.clockNext { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.clockK { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text-3); letter-spacing: 0.08em; text-transform: uppercase; }
+.clockV { font-family: 'DM Mono', monospace; font-size: 20px; margin-top: 2px; }
+.clockNext .clockV { color: var(--accent); }
+.clockT { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-2); }
+
+/* Stats */
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.statK { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text-3); }
+.statV { font-family: 'DM Mono', monospace; font-size: 15px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.slots { display: inline-flex; gap: 5px; align-items: center; }
+.slot { width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid var(--border-strong); }
+.slotOn { background: var(--accent); border-color: var(--accent); }
+
+/* Level tiles */
+.levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px; }
+.lvlK { font-family: 'DM Mono', monospace; font-size: 9.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; }
+.lvlV { font-family: 'DM Mono', monospace; font-size: 14px; font-variant-numeric: tabular-nums; }
+
+/* Trade card: text left, chart right */
+.trade { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 18px; }
+@media (max-width: 800px) { .trade { grid-template-columns: 1fr; } }
+
+/* List rows (orders, logs) */
+.list { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 14px; overflow: hidden; }
+.listRow { display: grid; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--border-subtle); }
+.listRow:first-child { border-top: none; }
+.listRow:hover { background: var(--bg-card-2); }
+.ord { grid-template-columns: 26px 70px 56px minmax(130px, 1.2fr) minmax(140px, 1fr) 118px; }
+@media (max-width: 760px) { .ord { grid-template-columns: 26px 1fr auto; } .hideNarrow { display: none; } .fullNarrow { grid-column: 1 / -1; } }
+.grade { font-family: 'DM Mono', monospace; font-size: 11px; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; border: 1px solid var(--border-strong); color: var(--text-3); }
+.gradeA { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+
+/* Bars */
+.dist { display: grid; gap: 4px; min-width: 0; }
+.track { height: 6px; border-radius: 3px; background: var(--bg-card-2); position: relative; overflow: hidden; }
+.fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; }
+.pips { display: flex; gap: 2px; }
+.pip { width: 4px; height: 12px; border-radius: 1.5px; background: var(--border-strong); }
+.pipOn { background: var(--text-2); }
+
+/* Chips */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-family: 'DM Mono', monospace; font-size: 11px; padding: 3px 9px; border-radius: 999px; background: var(--bg-card-2); color: var(--text-2); }
+
+/* Charts */
+.chart { display: block; width: 100%; height: auto; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text-3); }
+.legendSwatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+
+/* Forms (kept plain) */
+.field { font-family: 'DM Mono', monospace; font-size: 9.5px; color: var(--text-3); display: grid; gap: 3px; }
+.input { font-family: 'DM Mono', monospace; font-size: 11.5px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-card-2); color: var(--text-1); width: 100%; }
+.formGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+
+/* Tables */
+.tableWrap { overflow-x: auto; }
+.table { font-family: 'DM Mono', monospace; font-size: 11.5px; width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.table th { text-align: left; font-weight: 400; color: var(--text-3); padding: 7px 10px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+.table td { padding: 7px 10px; border-top: 1px solid var(--border-subtle); white-space: nowrap; color: var(--text-2); }
+
+.empty { color: var(--text-3); font-size: 13px; text-align: center; padding: 22px; }

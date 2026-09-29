@@ -80,8 +80,14 @@ export async function GET(req: Request) {
     const calendar = [...events.map((e: any) => ({ date: e.date, symbol: e.symbol, type: e.type, note: e.note ?? "" })), ...fixedDates(month)]
       .sort((a, b) => a.date.localeCompare(b.date));
 
+    const closedTrades = trades
+      .filter((t: any) => t.status === "closed" && t.exitDate >= from && t.exitDate <= to)
+      .sort((a: any, b: any) => a.exitDate.localeCompare(b.exitDate))
+      .map((t: any) => ({ account: t.account, instrument: t.instrument, side: t.side, exitDate: t.exitDate, resultR: t.resultR, pnlUsd: t.pnlUsd }));
+
     return NextResponse.json({
       month,
+      closedTrades,
       accounts: acc,
       setups: { all: count("all"), futures: count("futures"), forex: count("forex"), skipsWithoutSetup: skips.filter((s: any) => !s.setupLogId).length },
       score,
