@@ -12,5 +12,10 @@ const nextConfig = {
   // prisma generate in postinstall so types ARE correct at build time, but
   // this guard keeps cosmetic type issues from blocking deploys.
   typescript: { ignoreBuildErrors: true },
+  // Swing restructure: the home page is Tonight. The old RFDM dashboard is
+  // hidden, not deleted — remove this redirect to bring it back at "/".
+  async redirects() {
+    return [{ source: '/', destination: '/tonight', permanent: false }]
+  },
 }
 module.exports = nextConfig

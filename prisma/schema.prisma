@@ -579,3 +579,201 @@ model PracticeCase {
   @@index([runId])
   @@map("practice_cases")
 }
+
+/// Real daily futures volume = sum of the live individual contracts (Yahoo "6AZ26.CME" etc.),
+/// collected nightly because Yahoo deletes contracts at expiry. Replaces the roll-broken "=F" volume.
+model FuturesVolume {
+  id         String   @id @default(cuid())
+  instrument String
+  date       String
+  total      Float
+  contracts  Json
+  source     String   @default("yahoo-contracts")
+  updatedAt  DateTime @updatedAt
+
+  @@unique([instrument, date])
+  @@index([instrument])
+}
+
+/// Stored Setups-page scans, one row per market ("futures", "forex"). Recomputed
+/// only when a new daily bar has completed (lib/setups/scanCache) or on "rescan".
+model SetupScanCache {
+  key        String   @id
+  payload    Json
+  computedAt DateTime
+  updatedAt  DateTime @updatedAt
+}
+
+/// Every setup the Setups page has ever shown, frozen as first seen.
+/// Scans only INSERT a new row or move lastSeenAt / lastState / goneAt on an
+/// existing one — `snapshot` is never rewritten (lib/setups/log.ts).
+model SetupLog {
+  id           String    @id @default(cuid())
+  market       String                      // "futures" | "forex"
+  instrument   String                      // basket symbol, or the forex pair
+  side         String                      // "long" | "short"
+  entry        String                      // "conservative" | "aggressive" | "forex"
+  grade        String                      // grade when first seen
+  firstState   String
+  lastState    String
+  rangeLo      Float
+  rangeHi      Float
+  rangeStart   String
+  signalDate   String?                     // break (or test) bar
+  entryPrice   Float
+  stop         Float
+  breakevenAt  Float
+  target       Float?                      // forex has no cap (trail only)
+  firstBarDate String                      // last completed bar when first seen
+  firstSeenAt  DateTime  @default(now())
+  lastSeenAt   DateTime
+  goneAt       DateTime?                   // null = still on the page
+  snapshot     Json                        // the whole card as first seen, chart bars included
+  // Grouping tags copied out of the snapshot (lib/swing/outcomes.ts tagsFor)
+  context      String?                     // "reversal" | "with-trend"
+  cot          String?                     // forex sell-leg COT: "trapped" | "late" | "flat" | "n/a"
+  quietRetest  Boolean?
+  // Outcome under the mechanical rules (lib/swing/simulate.ts), filled nightly
+  outcome      String?                     // "win" | "loss" | "be" | "expired" | "open"
+  fillDate     String?
+  fillPrice    Float?
+  exitDate     String?
+  exitPrice    Float?
+  exitReason   String?                     // stop | trail | cap | time
+  resultR      Float?
+  peakR        Float?
+  resolvedAt   DateTime?
+
+  @@index([market, lastSeenAt])
+  @@index([firstSeenAt])
+  @@map("setup_logs")
+}
+
+/// Swing system — the two books the rules talk about ("50k", "15k"). Kept apart
+/// from the MT4/RFDM Account table on purpose. Missing rows fall back to the
+/// spec defaults in lib/swing/core.ts.
+model SwingAccount {
+  key           String   @id              // "50k" | "15k"
+  name          String
+  balance       Float
+  riskPerTrade  Float    @default(100)
+  monthlyStop   Float                     // positive dollars
+  monthlyTarget Float
+  gradesAllowed String[]
+  maxSlots      Int      @default(3)
+  updatedAt     DateTime @updatedAt
+
+  @@map("swing_accounts")
+}
+
+/// Per-instrument sizing and margin, entered by hand. Missing rows use the
+/// defaults in lib/swing/core.ts (defaultSpec).
+model InstrumentSpec {
+  instrument    String   @id
+  unit          String                    // "lot" | "share" | "contract" | "unit"
+  valuePerPoint Float                     // USD per 1.0 price move per unit
+  marginPerUnit Float?                    // USD; null = default % of price
+  sector        String?
+  updatedAt     DateTime @updatedAt
+
+  @@map("instrument_specs")
+}
+
+/// A swing trade you actually took. You enter the fills once; the evening
+/// refresh (lib/swing/trades.ts) fills in the tracked fields from Yahoo.
+model SwingTrade {
+  id              String    @id @default(cuid())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  account         String                  // SwingAccount.key
+  setupLogId      String?                 // SetupLog row it came from
+  market          String                  // "futures" | "forex"
+  instrument      String                  // basket symbol or forex pair
+  executeSymbol   String?
+  feed            String                  // "spot:EURUSD" | "yahoo:^GSPC" (lib/swing/feeds.ts)
+  side            String                  // EXECUTE direction: "long" | "short"
+  grade           String
+  // your order lines — the only numbers the maths uses
+  entryDate       String                  // YYYY-MM-DD
+  entryPrice      Float
+  initialStop     Float
+  currentStop     Float
+  capPrice        Float?
+  size            Float
+  riskUsd         Float
+  stopMoves       Json      @default("[]") // [{date, from, to, byRule}]
+  // the card's levels, for the mismatch flag
+  cardEntry       Float?
+  cardStop        Float?
+  cardCap         Float?
+  samePrices      Boolean   @default(false) // card and fill are in the same prices (stocks, spot FX)
+  cardEntryKind   String?                 // "limit" | "open" (market at the next open: entry is only a reference)
+  brokerBest      Float?                  // your broker's best print when the feed differs
+  plannedExitDate String?                 // exit before an event (set by the gate, step 3)
+  // evening maths
+  lastDate        String?
+  lastClose       Float?
+  bestPrice       Float?
+  bestDate        String?
+  rNow            Float?
+  peakR           Float?
+  touched1R       Boolean   @default(false)
+  suggestedStop   Float?
+  stopHitDate     String?
+  stopHitPrice    Float?
+  capHitDate      String?
+  daysHeld        Int?
+  moveDueSince    String?                 // bar date the rule stop first moved past yours
+  moveMissLoggedFor String?               // moveDueSince already logged as a Management break
+  exitMissLogged  Boolean   @default(false) // planned event exit missed, already logged
+  trackedAt       DateTime?
+  trackError      String?
+  // the close
+  status          String    @default("open") // "open" | "closed"
+  exitDate        String?
+  exitPrice       Float?
+  exitReason      String?                 // stop | trail | cap | event | effort-result | time | manual
+  resultR         Float?
+  pnlUsd          Float?
+  notes           String?
+
+  @@index([status])
+  @@index([account, entryDate])
+  @@map("swing_trades")
+}
+
+/// Rule-break log and skip log (Discipline page). Breaks are written by the
+/// gate, the evening refresh (missed stop moves / planned exits) or by hand.
+model DisciplineEvent {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  kind       String                     // "break" | "skip"
+  date       String                     // YYYY-MM-DD
+  instrument String
+  rule       String                     // spec rule (break) or skip reason
+  detail     String
+  tradeId    String?
+  setupLogId String?
+  costR      Float?                     // null = pending
+  auto       Boolean   @default(false)
+  reviewedAt DateTime?
+
+  @@index([date])
+  @@index([kind, reviewedAt])
+  @@map("discipline_events")
+}
+
+/// Hand-entered event dates the gate and trade actions read: earnings,
+/// delivery numbers, central-bank meetings (symbol = ticker or currency).
+model TradingEvent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  date      String                      // YYYY-MM-DD
+  symbol    String                      // "TSLA" | "USD" | "EURUSD"
+  type      String                      // earnings | deliveries | central-bank | data | other
+  note      String?
+
+  @@index([date])
+  @@index([symbol])
+  @@map("trading_events")
+}

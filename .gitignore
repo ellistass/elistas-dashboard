@@ -11,3 +11,5 @@ prisma/migrations/
 .env*.local
 startegy.md
 eleitas startegy.md
+
+_to_delete/

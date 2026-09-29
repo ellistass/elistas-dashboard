@@ -64,11 +64,15 @@ check("the better match is the one that claims it",
   `near=${two[1].matchedId} looser=${two[0].matchedId}`);
 
 console.log("\n── frozen rows ──");
-// A row carrying a locked read or an outcome is evidence. Its boundaries must
-// never be rewritten by a later detection.
+// A row carrying a locked read or an outcome is evidence. It still has to claim
+// its own re-detection so the scan does not create a clone; the frozen flag is
+// what tells the caller not to rewrite the evidence.
 const frozenRow = { id: "row-4", startDate: "2026-03-02", endDate: "2026-04-10", lo: 100, hi: 106, frozen: true };
-check("frozen rows are never matched",
-  assignRanges([todayDetected], [frozenRow])[0].matchedId === null);
+const frozenHit = assignRanges([todayDetected], [frozenRow])[0];
+check("frozen rows still claim their own re-detection",
+  frozenHit.matchedId === "row-4" && frozenHit.frozen === true);
+check("frozen matches are not reported as re-anchors",
+  frozenHit.reanchored === false);
 
 console.log("\n── scoring sanity ──");
 const identical = scoreMatch(yesterdayRow, yesterdayRow);

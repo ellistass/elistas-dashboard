@@ -100,7 +100,7 @@ export default function SetupChart({
         const [o, h, l, c, v] = b;
         const col = c >= o ? "var(--green)" : "var(--red)";
         return (
-          <g key={i} opacity={si >= 0 && i < si ? 0.4 : 1}>
+          <g key={i} opacity={si >= 0 && i < si ? 0.6 : 1}>
             <line x1={x(i)} y1={y(h)} x2={x(i)} y2={y(l)} stroke={col} strokeWidth={0.7} />
             <rect x={x(i) - cw / 2} y={y(Math.max(o, c))} width={cw} height={Math.max(0.8, Math.abs(y(o) - y(c)))} fill={col} />
             <rect x={x(i) - cw / 2} y={vy(v)} width={cw} height={PH + GAP + VH - vy(v)} fill={col} opacity={vol.alphaAt(i)} />

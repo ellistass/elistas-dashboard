@@ -36,6 +36,7 @@
 // Everything here is pure: bars in, setups out. No I/O, no clock.
 
 import { CFG, detectRanges, contextPct, engineVerdict, type Bar, type DetectedRange } from "@/lib/wyckoff/engine";
+import { rollMask, goodAvgVolume } from "./roll";
 
 export const RULES = {
   BREAK_WINDOW: 3,
@@ -46,6 +47,10 @@ export const RULES = {
   TEST_VOL_MAX: 1.0,
   TEST_DEPTH_MAX: 0.10,
   AGGR_STOP_TOL: 0.25,
+  /** Retest volume ≤ this × range avg = a quiet pullback (the real LPS/LPSY).
+   *  Fair-fill backtest, 84 futures & stocks: low +0.48R (n=99, halves +0.50/+0.48),
+   *  mid +0.17R, high +0.21R; low + reversal break +0.73R (n=48). */
+  RETEST_LOW_VOL: 0.8,
 } as const;
 
 export type Side = "long" | "short";
@@ -74,11 +79,26 @@ export interface OrderPlan {
   manage: string[];
 }
 
+/** The retest bar, read at its close (conservative, once filled). */
+export interface RetestRead {
+  /** Retest bar volume ÷ range average; null = unreadable (roll / bad print). */
+  vol: number | null;
+  /** vol ≤ RETEST_LOW_VOL. null when unreadable. */
+  low: boolean | null;
+  /** Closed back on the break side of the edge (the level held). */
+  held: boolean;
+  /** Confirmation entry (wait for the close, enter at the next open): held AND low.
+   *  Backtest: +0.36R (n=61) vs +0.27R for "held, any volume". */
+  confirmEntry: boolean;
+}
+
 export interface Setup {
   entry: Entry;
   side: Side;
   state: SetupState;
   grade: "A" | "B";
+  /** The deciding bar's volume couldn't be read (futures contract roll / bad print). */
+  volumeUnverified: boolean;
   rangeLo: number;
   rangeHi: number;
   rangeStart: string;
@@ -101,6 +121,8 @@ export interface Setup {
    *  Backtest: on the conservative entry, agrees +0.56R / neutral +0.43R /
    *  disagrees +0.38R. On the aggressive entry it did NOT help. */
   setupRead: { verdict: "accum" | "distrib" | "neutral"; agrees: boolean | null };
+  /** Conservative only, and only when the edge was touched on the last bar. */
+  retest: RetestRead | null;
   notes: string[];
 }
 
@@ -152,14 +174,19 @@ export function conservative(bars: Bar[], r: DetectedRange): Setup | null {
   const side: Side = long ? "long" : "short";
 
   const inR = bars.slice(r.start, r.end);
-  const avgV = avgOf(inR, (b) => b.v);
+  const mask = rollMask(bars);
+  const avgV = goodAvgVolume(bars, mask, r.start, r.end);
   if (!(avgV > 0)) return null;
 
   // First bar in the window that closed beyond the edge on 1–2× volume.
-  let bi = -1, bV = 0;
+  let bi = -1, bV = 0, unverified = false;
   for (let i = r.end; i < Math.min(r.end + RULES.BREAK_WINDOW, n); i++) {
     const b = bars[i], v = b.v / avgV;
-    if ((long ? b.c > r.hi : b.c < r.lo) && v >= RULES.BREAK_VOL_MIN && v < RULES.BREAK_VOL_MAX) { bi = i; bV = v; break; }
+    if (!(long ? b.c > r.hi : b.c < r.lo)) continue;
+    // Roll-week bar: the volume is fake, so the rule can't be checked. Keep the
+    // setup but mark it, rather than silently passing or failing it.
+    if (mask[i]) { bi = i; bV = NaN; unverified = true; break; }
+    if (v >= RULES.BREAK_VOL_MIN && v < RULES.BREAK_VOL_MAX) { bi = i; bV = v; break; }
   }
   if (bi < 0) return null;
 
@@ -172,12 +199,22 @@ export function conservative(bars: Bar[], r: DetectedRange): Setup | null {
   // Walk the bars after the break. First touch of the edge = the fill (or a
   // cancel if that day opened through the edge). Target first = missed it.
   let state: SetupState = "armed";
+  let retest: RetestRead | null = null;
   for (let k = bi + 1; k < n; k++) {
     const b = bars[k];
     if (long ? b.h >= target : b.l <= target) return null;           // ran away without a retest
     if (long ? b.l <= edge : b.h >= edge) {
       if (long ? b.o < edge : b.o > edge) return null;               // gapped through → order cancelled
-      if (k === n - 1) { state = "filled"; break; }
+      if (k === n - 1) {
+        state = "filled";
+        // The retest bar is COMPLETE (completedBars), so its volume is known now.
+        const vol = mask[k] ? null : b.v / avgV;
+        const low = vol == null ? null : vol <= RULES.RETEST_LOW_VOL;
+        const held = long ? b.c > edge : b.c < edge;
+        const stopped = long ? b.l <= stop : b.h >= stop;
+        retest = { vol: vol == null ? null : r6(vol), low, held, confirmEntry: held && low === true && !stopped };
+        break;
+      }
       return null;                                                    // filled earlier: it's a trade now, not a setup
     }
   }
@@ -191,13 +228,16 @@ export function conservative(bars: Bar[], r: DetectedRange): Setup | null {
   return {
     entry: "conservative", side, state,
     // Reversal ranges: +0.58R vs +0.17R with-trend (fixed exits); weekly with: +0.57R.
-    grade: daily === "reversal" && weekly !== "against" ? "A" : "B",
+    // A quiet retest also makes it A: low-volume retests +0.48R vs +0.23R for all.
+    grade: !unverified && ((daily === "reversal" && weekly !== "against") || retest?.low === true) ? "A" : "B",
+    volumeUnverified: unverified,
     rangeLo: r.lo, rangeHi: r.hi, rangeStart: bars[r.start].date, signalDate: bars[bi].date,
     entryPrice: r6(edge), stop: r6(stop),
     breakevenAt: r6(long ? edge + risk : edge - risk), target: r6(target),
     barsLeft: lastValid - (n - 1),
     context: { daily, weekly, monthly },
     setupRead: readOf(engineVerdict(bars, r.start, r.end), long),
+    retest,
     order: {
       entry: {
         kind: "limit", price: r6(edge), goodFor: lastValid - (n - 1),
@@ -208,14 +248,23 @@ export function conservative(bars: Bar[], r: DetectedRange): Setup | null {
     },
     checks: [
       { label: `closed ${long ? "above" : "below"} the range`, pass: true, value: bars[bi].date },
-      { label: "break volume 1.0–2.0× range avg", pass: true, value: `${bV.toFixed(2)}×` },
+      unverified
+        ? { label: "break volume — UNAVAILABLE (contract roll / bad print)", pass: false, value: "check manually" }
+        : { label: "break volume 1.0–2.0× range avg", pass: true, value: `${bV.toFixed(2)}×` },
       { label: "within 20 bars of the break", pass: true, value: `${n - 1 - r.end} bars` },
       { label: "range followed a move the other way (reversal)", pass: daily === "reversal" },
       { label: "weekly trend not against", pass: weekly !== "against", value: weekly },
+      ...(retest
+        ? [retest.vol == null
+            ? { label: "retest volume — UNAVAILABLE (contract roll / bad print)", pass: false, value: "check manually" }
+            : { label: `retest on LOW volume (≤ ${RULES.RETEST_LOW_VOL}× range avg)`, pass: retest.low === true, value: `${retest.vol.toFixed(2)}×` },
+           { label: `retest held the ${long ? "ceiling" : "floor"} at the close`, pass: retest.held }]
+        : []),
     ],
     notes: [
       `Limit ${long ? "buy" : "sell"} at the ${long ? "ceiling" : "floor"}. Cancel if the day opens ${long ? "below" : "above"} it.`,
-      "Retest volume is not a filter — it can't be known until after the fill.",
+      "Retest volume is read at the close of the fill day: a quiet retest is the stronger trade (+0.48R vs +0.2R).",
+      "Prefer confirmation? Skip the limit; if the retest day closes holding the edge on low volume, enter at the next open (+0.36R).",
     ],
   };
 }
@@ -243,12 +292,14 @@ export function aggressive(bars: Bar[], r: DetectedRange, side: Side): Setup | n
   if (k !== n - 1) return null;
 
   const b = bars[k];
-  const avgV = avgOf(bars.slice(r.start, k), (x) => x.v);
-  const tV = b.v / avgV;
+  const mask = rollMask(bars);
+  const avgV = goodAvgVolume(bars, mask, r.start, k);
+  const unverified = mask[k];
+  const tV = unverified ? NaN : b.v / avgV;
   const depth = (long ? r.lo - b.l : b.h - r.hi) / band;
   const monthly = htfTrend(bars, b.date, "monthly", side);
   const weekly = htfTrend(bars, b.date, "weekly", side);
-  if (!(tV <= RULES.TEST_VOL_MAX) || depth > RULES.TEST_DEPTH_MAX || monthly === "against") return null;
+  if ((!unverified && !(tV <= RULES.TEST_VOL_MAX)) || !(avgV > 0) || depth > RULES.TEST_DEPTH_MAX || monthly === "against") return null;
 
   const stop = long ? b.l - RULES.AGGR_STOP_TOL * tol : b.h + RULES.AGGR_STOP_TOL * tol;
   const ref = b.c;                                                   // the open will be near this; risk is re-measured from the fill
@@ -256,7 +307,8 @@ export function aggressive(bars: Bar[], r: DetectedRange, side: Side): Setup | n
   const ctx = contextPct(bars, r.start);
   return {
     entry: "aggressive", side, state: "trigger",
-    grade: weekly === "with" ? "A" : "B",
+    grade: !unverified && weekly === "with" ? "A" : "B",
+    volumeUnverified: unverified,
     rangeLo: r.lo, rangeHi: r.hi, rangeStart: bars[r.start].date, signalDate: b.date,
     entryPrice: r6(ref), stop: r6(stop),
     breakevenAt: r6(long ? ref + risk : ref - risk),
@@ -264,6 +316,7 @@ export function aggressive(bars: Bar[], r: DetectedRange, side: Side): Setup | n
     barsLeft: null,
     context: { daily: ctx == null ? "unknown" : (long ? ctx < 0 : ctx > 0) ? "reversal" : "with-trend", weekly, monthly },
     setupRead: readOf(engineVerdict(bars, r.start, k), long),
+    retest: null,
     order: {
       entry: { kind: "market-on-open", skipIf: `the open is already ${long ? "at or below" : "at or above"} the stop ${r6(stop)}` },
       stopLoss: r6(stop), takeProfit: r6(long ? r.hi + band : r.lo - band),
@@ -271,7 +324,9 @@ export function aggressive(bars: Bar[], r: DetectedRange, side: Side): Setup | n
     },
     checks: [
       { label: `${long ? "spring" : "upthrust"}: pierced and closed back inside`, pass: true, value: b.date },
-      { label: "test volume ≤ 1.0× range avg", pass: true, value: `${tV.toFixed(2)}×` },
+      unverified
+        ? { label: "test volume — UNAVAILABLE (contract roll / bad print)", pass: false, value: "check manually" }
+        : { label: "test volume ≤ 1.0× range avg", pass: true, value: `${tV.toFixed(2)}×` },
       { label: "shallow: ≤ 10% of the band", pass: true, value: `${(depth * 100).toFixed(0)}%` },
       { label: "monthly trend not against", pass: true, value: monthly },
       { label: "weekly trend with the trade", pass: weekly === "with", value: weekly },

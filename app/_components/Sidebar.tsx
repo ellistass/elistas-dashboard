@@ -10,48 +10,52 @@ import { useEffect, useState } from 'react'
 import {
   Gauge, Crosshair, CalendarDays, PenLine,
   TrendingUp, Trophy, History as HistoryIcon,
-  Wallet, Database, Pencil, LogOut, Menu, Frame, Target,
+  Wallet, Database, Pencil, LogOut, Menu, Frame, Target, Briefcase, ShieldCheck, Moon, CalendarRange, BookMarked,
   type LucideIcon,
 } from 'lucide-react'
 
 interface NavItem { href: string; label: string; icon: LucideIcon; input?: boolean }
 interface NavGroup { label: string; items: NavItem[] }
 
+// Swing trading restructure (spec: "Elistas Dashboard — Swing Trading Spec").
+// Every page on screen answers one question. The RFDM / day-trading pages are
+// HIDDEN, not deleted: their routes still work, and uncommenting a line in
+// HIDDEN_ITEMS below brings one back. Shared code (data feeds, accounts) stays.
 const GROUPS: NavGroup[] = [
   {
-    label: 'Trading',
+    label: 'Swing',
     items: [
-      // Wyckoff leads: it is the strategy, and the desk is the daily process.
-      // Dashboard is the morning glance; the desk is where the work happens.
-      { href: '/wyckoff',       label: 'Wyckoff',   icon: Frame, input: true },
-      // Mechanical triggers from the Sep 2026 backtest — separate from the read.
-      { href: '/setups',        label: 'Setups',    icon: Target },
-      { href: '/',              label: 'Dashboard', icon: Gauge },
-      { href: '/trades/active', label: 'Active',    icon: Crosshair },
-      { href: '/calendar',      label: 'Calendar',  icon: CalendarDays },
-      { href: '/journal',       label: 'Journal',   icon: PenLine, input: true },
+      { href: '/tonight',    label: 'Tonight',    icon: Moon },                          // what do I do right now?
+      { href: '/setups',     label: 'Setups',     icon: Target },                        // what's firing, and is it worth taking?
+      { href: '/trades',     label: 'Trades',     icon: Briefcase, input: true },        // where are my positions and stops?
+      { href: '/discipline', label: 'Discipline', icon: ShieldCheck },                   // am I following the rules?
+      { href: '/month',      label: 'Month',      icon: CalendarRange },                 // am I on plan this month?
+      { href: '/log',        label: 'Journal',    icon: BookMarked },                    // is the system working over time?
     ],
   },
   {
-    label: 'Analysis',
+    label: 'Wyckoff',
     items: [
-      // Screener (/scanner, H4 ADX trend sweep) retired 2026-07-26 — Wyckoff
-      // replaced it as the daily process. Route still exists; restore the line
-      // below (and TREND_LANE_ENABLED in api/cron/trade-scan) to bring it back.
-      // { href: '/scanner',    label: 'Screener',   icon: Radar },  // (re-add Radar to the lucide import too)
-      { href: '/analytics',  label: 'Stats',      icon: TrendingUp },
-      { href: '/scoreboard', label: 'Scoreboard', icon: Trophy },
-      { href: '/analysis',   label: 'History',    icon: HistoryIcon },
-    ],
-  },
-  {
-    label: 'Data',
-    items: [
-      { href: '/accounts',    label: 'Accounts',    icon: Wallet, input: true },
-      { href: '/data/latest', label: 'Market data', icon: Database },
+      { href: '/wyckoff',    label: 'Wyckoff desk', icon: Frame, input: true },          // blind reads and training
     ],
   },
 ]
+
+// Hidden from the sidebar 2026-09 (swing restructure). To restore one, move its
+// line back into GROUPS above.
+//   RFDM / day trading:
+//     { href: '/',              label: 'Dashboard',    icon: Gauge },       // "/" now redirects to /tonight (next.config.js)
+//     { href: '/trades/active', label: 'Active',       icon: Crosshair },
+//     { href: '/calendar',      label: 'Calendar',     icon: CalendarDays },
+//     { href: '/journal',       label: 'RFDM journal', icon: PenLine, input: true },
+//     { href: '/analytics',     label: 'Stats',        icon: TrendingUp },
+//     { href: '/scoreboard',    label: 'Scoreboard',   icon: Trophy },
+//     { href: '/analysis',      label: 'History',      icon: HistoryIcon },
+//     { href: '/accounts',      label: 'Accounts',     icon: Wallet, input: true },   // MT4 prop accounts; swing books are on Month → Settings
+//     { href: '/data/latest',   label: 'Market data',  icon: Database },
+//   H4 trend screener (retired 2026-07-26; also TREND_LANE_ENABLED in api/cron/trade-scan):
+//     { href: '/scanner',       label: 'Screener',     icon: Radar },       // re-add Radar to the lucide import
+// (Their icons stay in the lucide import above so a restore is a one-line edit.)
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -99,7 +103,10 @@ export function Sidebar() {
             }}>{group.label}</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               {group.items.map((item) => {
-                const active = pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href))
+                // Longest matching href wins, so /trades/active doesn't also light up /trades.
+                const matches = (h: string) => pathname === h || (h !== '/' && !!pathname?.startsWith(h + '/'))
+                const best = GROUPS.flatMap((g) => g.items.map((i) => i.href)).filter(matches).sort((x, y) => y.length - x.length)[0]
+                const active = best === item.href
                 const Icon = item.icon
                 return (
                   <Link key={item.href} href={item.href} style={{

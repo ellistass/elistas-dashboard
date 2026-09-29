@@ -1,0 +1,354 @@
+"use client";
+// app/setups/ForexSection.tsx — forex reversal-break RETESTS, on the Setups page.
+//
+// Rule (tested on NY-close candles, 28 pairs): a range at the end of a trend
+// breaks AGAINST that trend → buy/sell LIMIT at the broken edge. Retest only —
+// no entries on the break. The driver (strength index) is shown as a "go read
+// the news" flag, never as a filter: it didn't improve the retest.
+
+import { useCallback, useEffect, useState } from "react";
+import { Globe, RefreshCw, Clock, Zap, Eye, Newspaper } from "lucide-react";
+import { EmptyState, ErrorCard } from "../wyckoff/_components/ui";
+import type { DriverScan, DriverSetup, CurrencyAlert } from "@/lib/setups/forexDriver";
+import SetupChartFull from "./SetupChartFull";
+import TakeBar from "./TakeBar";
+import RiskBlock from "./RiskBlock";
+
+const mono = { fontFamily: "'DM Mono', monospace" } as const;
+const fmt = (x: number) => (Math.abs(x) >= 20 ? x.toFixed(3) : x.toFixed(5));
+
+const STATE: Record<DriverSetup["state"], { label: string; icon: JSX.Element; tone: string }> = {
+  filled: { label: "retest filled on the last bar — place the stop now", icon: <Zap size={11} />, tone: "var(--green)" },
+  armed: { label: "broke against the trend — limit order at the edge", icon: <Clock size={11} />, tone: "var(--text-2)" },
+  watch: { label: "pressing the edge — no break yet, no order", icon: <Eye size={11} />, tone: "var(--text-3)" },
+};
+
+export default function ForexSection() {
+  const [data, setData] = useState<DriverScan | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async (fresh = false) => {
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/setups/forex${fresh ? "?fresh=1" : ""}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? r.statusText);
+      setData(j);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const live = (data?.setups ?? []).filter((s) => s.state !== "watch");
+  const watch = (data?.setups ?? []).filter((s) => s.state === "watch");
+
+  return (
+    <section style={{ marginTop: 32 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderTop: "1px solid var(--border-subtle)", paddingTop: 16 }}>
+        <h2 style={{ ...mono, fontSize: 13, display: "flex", gap: 8, alignItems: "center" }}>
+          <Globe size={14} /> FOREX · reversal-break retests
+          <span style={{ fontSize: 9.5, padding: "1px 7px", borderRadius: 999, border: "1px solid var(--amber)", color: "var(--amber)" }}>FORWARD TEST — paper only</span>
+          <span style={{ color: "var(--text-3)", fontSize: 10 }}>
+            28 spot pairs · NY-close candles{data?.lastBarDate ? ` · data to ${data.lastBarDate}` : ""}
+          </span>
+        </h2>
+        <button onClick={() => load(true)} disabled={busy} style={{ ...mono, fontSize: 11, display: "flex", gap: 6, alignItems: "center" }}>
+          <RefreshCw size={11} className={busy ? "animate-spin" : ""} /> rescan
+        </button>
+      </div>
+
+      {error && <ErrorCard message={error} />}
+      {!data && !error && <p style={{ ...mono, fontSize: 11, color: "var(--text-3)" }}>scanning 28 pairs…</p>}
+      {data?.errors.length ? (
+        <p style={{ ...mono, fontSize: 10, color: "var(--amber)" }}>
+          feed errors ({data.errors.map((e) => e.pair).join(", ")}) — the strength index needs all 28 pairs, so nothing is shown rather than a skewed read.
+        </p>
+      ) : null}
+
+      {data && <Alerts alerts={data.alerts} />}
+      {data?.cotError && (
+        <p style={{ ...mono, fontSize: 10, color: "var(--amber)" }}>CFTC positioning unavailable right now ({data.cotError}) — cards show no positioning line.</p>
+      )}
+
+      {data && (
+        <>
+          <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>ORDERS · {live.length}</h3>
+          {live.length ? <Grid rows={live} /> : <EmptyState text="No reversal breaks waiting for a retest." small />}
+          <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>WATCH — PRESSING THE EDGE · {watch.length}</h3>
+          {watch.length ? <Grid rows={watch} /> : <EmptyState text="No ranges pressing a reversal edge." small />}
+          <ForexRules />
+        </>
+      )}
+    </section>
+  );
+}
+
+/** The "go check the fundamentals" row: currencies at a 20-day low/high against all seven others. */
+function Alerts({ alerts }: { alerts: CurrencyAlert[] }) {
+  return (
+    <div style={{ ...mono, fontSize: 11, margin: "12px 0", padding: "8px 10px", border: "1px solid var(--border-subtle)", borderRadius: 9 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", color: "var(--text-3)", fontSize: 9.5, marginBottom: 4 }}>
+        <Newspaper size={11} /> CHECK THE NEWS — currencies moving against all seven others (20-day low/high, last 5 days) · info only
+      </div>
+      {alerts.length ? (
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          {alerts.map((a) => (
+            <span key={a.ccy} style={{ color: a.move === "cracking" ? "var(--red)" : "var(--green)" }}>
+              <b>{a.ccy}</b> {a.move === "cracking" ? "▼ cracking" : "▲ surging"} since {a.date.slice(5)}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <span style={{ color: "var(--text-3)" }}>nothing unusual — no currency at a 20-day extreme</span>
+      )}
+    </div>
+  );
+}
+
+function Grid({ rows }: { rows: DriverSetup[] }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 12 }}>
+      {rows.map((s) => <Card key={`${s.pair}|${s.range.start}`} s={s} />)}
+    </div>
+  );
+}
+
+function Card({ s }: { s: DriverSetup }) {
+  const long = s.side === "long";
+  const st = STATE[s.state];
+  const [open, setOpen] = useState(false);
+  const buy = long ? "BUY" : "SELL", sell = long ? "SELL" : "BUY";
+  return (
+    <div style={{ border: "1px solid var(--border-subtle)", borderRadius: 12, padding: 14, background: "var(--surface-1)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <span style={{ fontWeight: 600, fontSize: 16 }}>{s.pair}</span>
+        <span style={{ ...mono, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${s.grade === "A" ? "var(--green)" : "var(--border-subtle)"}`, color: s.grade === "A" ? "var(--green)" : "var(--text-3)" }}>
+          {s.grade === "A" ? "A · quiet retest" : "B"} · {s.range.bars}-bar range
+        </span>
+      </div>
+      <div style={{ ...mono, fontSize: 11, marginTop: 6, color: long ? "var(--green)" : "var(--red)" }}>
+        {buy} {s.pair} · reversal of a {s.trendAtr.toFixed(1)} ATR {long ? "down" : "up"}trend
+      </div>
+      <div style={{ ...mono, fontSize: 10.5, marginTop: 4, color: st.tone, display: "flex", gap: 6, alignItems: "center" }}>
+        {st.icon} {st.label}
+      </div>
+
+      <button
+        onClick={() => setOpen(true)}
+        title="Click to expand"
+        style={{ display: "block", width: "100%", padding: 0, background: "none", border: "none", cursor: "zoom-in" }}
+      >
+        <MiniChart s={s} />
+      </button>
+      {open && <ForexChartModal s={s} onClose={() => setOpen(false)} />}
+
+      <div style={{ ...mono, fontSize: 10.5, marginTop: 10, padding: "8px 10px", borderRadius: 9, border: "1px solid var(--border-subtle)", lineHeight: 1.7 }}>
+        {s.state === "watch" ? (
+          <>
+            <div style={{ color: "var(--text-3)", fontSize: 9.5 }}>NO ORDER YET</div>
+            <div>Needs a daily close {long ? "above" : "below"} <b>{fmt(s.breakLevel)}</b> (NY 5pm = 22:00 Lagos)</div>
+            <div style={{ color: "var(--text-3)" }}>then: {buy} LIMIT {fmt(s.order.entry)} · stop {fmt(s.order.stopLoss)} · +1R {fmt(s.order.breakEven)}</div>
+          </>
+        ) : (
+          <>
+            <div style={{ color: "var(--text-3)", fontSize: 9.5 }}>ORDERS · broke {s.breakDate} ({s.barsSinceBreak} bars ago)</div>
+            {s.state === "filled"
+              ? <div style={{ color: "var(--green)" }}>Filled at {fmt(s.order.entry)} on the last bar.</div>
+              : <div><b>1. {buy} LIMIT</b> at {fmt(s.order.entry)} · good for {s.order.goodForBars} more bars</div>}
+            {s.retest && <RetestLine r={s.retest} buy={buy} />}
+            <div><b style={{ color: "var(--red)" }}>2. {sell} STOP</b> at {fmt(s.order.stopLoss)}</div>
+            <div style={{ color: "var(--text-3)" }}>no fixed take-profit — {s.order.manage.map((m) => <div key={m}>· {m} {m.startsWith("At +1R") ? `(${fmt(s.order.breakEven)})` : ""}</div>)}</div>
+          </>
+        )}
+      </div>
+
+      <RiskBlock instrument={s.pair} executeSymbol={null} side={s.side} grade={s.grade} entry={s.order.entry} stop={s.order.stopLoss} />
+
+      {s.positioning && <Positioning p={s.positioning} />}
+      <Driver s={s} />
+
+      {s.state !== "watch" && (
+        <TakeBar card={{
+          ref: { market: "forex", instrument: s.pair, side: s.side, entry: "forex", rangeLo: s.range.lo, rangeHi: s.range.hi },
+          instrument: s.pair, executeSymbol: null, side: s.side, grade: s.grade,
+          entry: s.order.entry, stop: s.order.stopLoss, cap: null, entryKind: "limit", samePrices: true,
+          readLocked: null, readAgrees: null,
+          entryDate: s.state === "filled" ? s.lastBarDate : new Date().toISOString().slice(0, 10),
+        }} />
+      )}
+    </div>
+  );
+}
+
+/** The retest day at its close — volume from the currency futures legs. */
+function RetestLine({ r, buy }: { r: NonNullable<DriverSetup["retest"]>; buy: string }) {
+  const tone = r.low === true ? "var(--green)" : r.low === false ? "var(--amber)" : "var(--text-3)";
+  return (
+    <div style={{ margin: "4px 0", padding: "4px 8px", borderRadius: 7, border: `1px solid ${tone}` }}>
+      <div style={{ color: tone }}>
+        retest volume (futures) {r.vol == null ? "unavailable" : `${r.vol.toFixed(2)}× range avg — ${r.low ? "LOW ✓ quiet retest" : "not low — heavier retest"}`}
+        {" · "}{r.held ? "held the edge" : "closed back inside"}
+      </div>
+      <div style={{ color: "var(--text-3)" }}>
+        confirmation entry: {r.confirmEntry ? <b style={{ color: "var(--green)" }}>{buy} at the next open</b> : "skip"}
+      </div>
+    </div>
+  );
+}
+
+/** Real money (CFTC asset managers) through the range. The SELL leg is the read. */
+function Positioning({ p }: { p: NonNullable<DriverSetup["positioning"]> }) {
+  const tone = p.tone === "good" ? "var(--green)" : p.tone === "warn" ? "var(--amber)" : "var(--text-3)";
+  const z = (x: number | null) => (x == null ? "–" : `${x > 0 ? "+" : ""}${x.toFixed(1)}`);
+  const leg = (l: typeof p.buy, side: string) =>
+    l.verdict === "n/a" ? `${l.ccy} (${side}): no futures positioning`
+    : `${l.ccy} (${side}): ${l.verdict === "trapped" ? "trapped on the old trend" : l.verdict === "late" ? "already on your side" : "quiet"} · z ${z(l.z)}`;
+  return (
+    <div style={{ ...mono, fontSize: 10, marginTop: 8, padding: "6px 8px", borderRadius: 8, border: `1px solid ${tone}` }}>
+      <div style={{ color: tone }}>{p.headline}</div>
+      <div style={{ color: "var(--text-3)", marginTop: 2 }}>
+        {leg(p.sell, "you sell")} · {leg(p.buy, "you buy — info only")}
+        {p.reportDate ? ` · CFTC as of ${p.reportDate} (weekly, out Fridays)` : ""}
+      </div>
+    </div>
+  );
+}
+
+/** Driver = information. Tells you which side is moving so you know which news to read. */
+function Driver({ s }: { s: DriverSetup }) {
+  const d = s.driver;
+  const pts = (v: number[], lo: number, hi: number) =>
+    v.map((x, i) => `${(i / Math.max(1, v.length - 1)) * 120},${24 - ((x - lo) / Math.max(1e-9, hi - lo)) * 22}`).join(" ");
+  const all = [...s.strength.loser, ...s.strength.winner];
+  const lo = Math.min(...all), hi = Math.max(...all);
+  const text = d.confirmed
+    ? `${d.loser} cracking against everyone (${d.loserLowDate}), ${d.winner} holding — read the ${d.loser} news`
+    : d.loserLowDate && d.winnerCracking
+      ? `${d.loser} and ${d.winner} both weak — no single story`
+      : `no driver — the move isn't one currency's story`;
+  return (
+    <div style={{ ...mono, fontSize: 10, marginTop: 8, color: "var(--text-3)", display: "flex", gap: 10, alignItems: "center" }}>
+      <svg width={120} height={26} role="img" aria-label={`strength: ${d.loser} vs ${d.winner}, last 60 days`}>
+        <polyline points={pts(s.strength.winner, lo, hi)} fill="none" stroke="var(--green)" strokeWidth={1.2} />
+        <polyline points={pts(s.strength.loser, lo, hi)} fill="none" stroke="var(--red)" strokeWidth={1.2} />
+      </svg>
+      <span>
+        <span style={{ color: "var(--green)" }}>{d.winner}</span> vs <span style={{ color: "var(--red)" }}>{d.loser}</span> · {text} · <i>info only</i>
+      </span>
+    </div>
+  );
+}
+
+/** Expanded chart — the same full chart as futures (D / W / M, crosshair, volume
+ *  tooltip), on NY-close candles with the currency futures' volume. */
+function ForexChartModal({ s, onClose }: { s: DriverSetup; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
+  }, [onClose]);
+  const long = s.side === "long";
+  const legs = [s.pair.slice(0, 3), s.pair.slice(3)].filter((c) => c !== "USD");
+  return (
+    <div role="dialog" aria-modal="true" aria-label={`${s.pair} chart`} onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ width: "min(1180px, 100%)", maxHeight: "100%", overflow: "auto", background: "var(--surface-1)", border: "1px solid var(--border-subtle)", borderRadius: 14, padding: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ ...mono, fontSize: 13 }}>
+            <b style={{ fontSize: 16 }}>{s.pair}</b>
+            <span style={{ marginLeft: 10, color: long ? "var(--green)" : "var(--red)" }}>
+              {long ? "BUY" : "SELL"} {s.pair} · retest · {s.grade === "A" ? "A · quiet retest" : "B"} · {STATE[s.state].label}
+            </span>
+          </div>
+          <button onClick={onClose} style={{ ...mono, fontSize: 11, color: "var(--text-3)" }}>close (esc)</button>
+        </div>
+        <div style={{ ...mono, fontSize: 11, color: "var(--text-2)", margin: "8px 0 12px", display: "flex", gap: 18, flexWrap: "wrap" }}>
+          <span>range {fmt(s.range.lo)}–{fmt(s.range.hi)} · {s.range.bars} bars</span>
+          {s.state === "watch" && <span>break needs a close {long ? "above" : "below"} {fmt(s.breakLevel)}</span>}
+          <span>entry {fmt(s.order.entry)}</span>
+          <span style={{ color: "var(--red)" }}>stop {fmt(s.order.stopLoss)}</span>
+          <span style={{ color: "var(--green)" }}>+1R → BE {fmt(s.order.breakEven)}</span>
+          <span style={{ color: "var(--text-3)" }}>no cap — trail 1R · {s.breakDate ? `broke ${s.breakDate}` : "not broken yet"} · data to {s.lastBarDate}</span>
+        </div>
+        {s.positioning && <Positioning p={s.positioning} />}
+        <div style={{ marginTop: 10 }}>
+          <SetupChartFull
+            instrument={s.pair} entry="conservative" long={long}
+            rangeLo={s.range.lo} rangeHi={s.range.hi} rangeStart={s.range.start}
+            signalDate={s.breakDate ?? s.lastBarDate}
+            entryPrice={s.order.entry} stop={s.order.stopLoss} breakevenAt={s.order.breakEven}
+            fmt={fmt}
+            dataUrl={`/api/setups/forex/chart?pair=${encodeURIComponent(s.pair)}`}
+            note={legs.length ? `volume = ${legs.join(" + ")} currency futures` : "no futures volume"}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Candles + range box + entry/stop/+1R. No volume: spot FX has none. */
+function MiniChart({ s }: { s: DriverSetup }) {
+  const bars = s.bars.slice(-90);
+  const W = 360, PH = 140, FUT = 40, plotW = W - 70, barsW = plotW - FUT;
+  const lvls = [s.order.entry, s.order.stopLoss, s.order.breakEven, s.breakLevel];
+  const pMin = Math.min(...bars.map((b) => b[2]), ...lvls), pMax = Math.max(...bars.map((b) => b[1]), ...lvls);
+  const pad = (pMax - pMin) * 0.05, lo = pMin - pad, span = pMax - pMin + 2 * pad;
+  const xw = barsW / bars.length, cw = Math.max(1, Math.min(5, xw * 0.62));
+  const x = (i: number) => i * xw + xw / 2, y = (p: number) => (1 - (p - lo) / span) * PH;
+  const si = bars.findIndex((b) => b[4] >= s.range.start);
+  const bi = s.breakDate ? bars.findIndex((b) => b[4] === s.breakDate) : -1;
+  const boxFrom = si >= 0 ? x(si) - xw / 2 : 0, boxTo = bi >= 0 ? x(bi) - xw / 2 : barsW;
+  const levels = [
+    { k: "entry", p: s.order.entry, c: "var(--accent)", d: "" },
+    { k: "stop", p: s.order.stopLoss, c: "var(--red)", d: "4 2" },
+    { k: "+1R", p: s.order.breakEven, c: "var(--green)", d: "1.5 2.5" },
+    ...(s.state === "watch" ? [{ k: "break", p: s.breakLevel, c: "var(--text-3)", d: "2 2" }] : []),
+  ];
+  return (
+    <svg viewBox={`0 0 ${W} ${PH}`} style={{ width: "100%", display: "block", marginTop: 8 }} role="img"
+      aria-label={`${s.pair} daily chart: range ${fmt(s.range.lo)}–${fmt(s.range.hi)}, entry ${fmt(s.order.entry)}, stop ${fmt(s.order.stopLoss)}`}>
+      <rect x={boxFrom} y={y(s.range.hi)} width={Math.max(2, boxTo - boxFrom)} height={Math.max(1, y(s.range.lo) - y(s.range.hi))} fill="var(--accent)" opacity={0.06} />
+      {bars.map((b, i) => {
+        const [o, h, l, c] = b, col = c >= o ? "var(--green)" : "var(--red)";
+        return (
+          <g key={i} opacity={si >= 0 && i < si ? 0.6 : 1}>
+            <line x1={x(i)} y1={y(h)} x2={x(i)} y2={y(l)} stroke={col} strokeWidth={0.7} />
+            <rect x={x(i) - cw / 2} y={y(Math.max(o, c))} width={cw} height={Math.max(0.8, Math.abs(y(o) - y(c)))} fill={col} />
+          </g>
+        );
+      })}
+      {levels.map((l) => (
+        <g key={l.k}>
+          <line x1={0} x2={plotW} y1={y(l.p)} y2={y(l.p)} stroke={l.c} strokeWidth={1} strokeDasharray={l.d} opacity={0.9} />
+          <text x={plotW + 4} y={y(l.p) + 3} fontSize={8} fill={l.c} style={mono}>{l.k} {fmt(l.p)}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function ForexRules() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ ...mono, fontSize: 10.5, marginTop: 16, color: "var(--text-3)" }}>
+      <button onClick={() => setOpen(!open)} style={{ ...mono, fontSize: 10.5, color: "var(--text-2)" }}>{open ? "▾" : "▸"} the forex rules & what was tested</button>
+      {open && (
+        <div style={{ lineHeight: 1.7, marginTop: 6 }}>
+          <div>· Range (≥15 bars) at the end of a 60-day trend breaks AGAINST it: a daily close beyond the edge ± 15% of the band.</div>
+          <div>· Entry: LIMIT at the broken edge, live 20 bars. Retest only — buying the break didn't pay.</div>
+          <div>· Stop 1.5 × tolerance back inside. Break-even at +1R, then trail 1R behind the best price. Out after 60 days.</div>
+          <div>· Tested (fair fills, 28 pairs, 2024–26): +0.19R gross / +0.14R after spread per trade, 129 trades — NOT yet a proven edge, hence paper only.</div>
+          <div>· Stronger: a QUIET retest (futures volume ≤ 0.8×) +0.34R, and normal-volatility markets +0.34R. High-vol markets lost (−0.11R).</div>
+          <div>· Real money (CFTC asset managers) through the RANGE, in the currency you SELL: still buying it = trapped, the Composite Man's counterparty → +0.48R / +0.34R. Already selling it = late → −0.39R / −0.16R. Two separate periods; small samples — a strong lead.</div>
+          <div>· Driver, news & rate cycle: shown for your read only. None improved the retest. With-trend breaks right after a central-bank move failed (−0.50R).</div>
+          <div>· Candles are rebuilt from hourly data with the New York 5pm close — Yahoo's daily FX close is stale.</div>
+        </div>
+      )}
+    </div>
+  );
+}

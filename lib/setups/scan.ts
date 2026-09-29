@@ -9,6 +9,8 @@ import { BASKET, type ScannerInstrument } from "@/lib/wyckoff/basket";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import type { Bar } from "@/lib/wyckoff/engine";
 import { findSetups, type Setup } from "./rules";
+import { CONTRACTS } from "@/lib/data/contracts";
+import { storedVolume, patchVolume } from "@/lib/data/futuresVolume";
 
 export interface InstrumentSetup extends Setup {
   instrument: string;
@@ -48,7 +50,13 @@ export async function scanSetups(force = false): Promise<SetupScan> {
       BASKET.slice(i, i + BATCH).map(async (inst) => {
         try {
           // 5y, not 2y: the monthly context needs 12+3 completed months before the signal.
-          const bars = completedBars(await fetchDailyBars(inst.yahoo, "5y"));
+          const raw = completedBars(await fetchDailyBars(inst.yahoo, "5y"));
+          // Futures: swap in the real (summed-contract) volume where it's stored.
+          // A DB hiccup must never kill the scan — fall back to Yahoo's numbers.
+          let bars = raw;
+          if (CONTRACTS[inst.symbol]) {
+            try { bars = patchVolume(raw, await storedVolume(inst.symbol)).bars; } catch { bars = raw; }
+          }
           if (bars.length < 120) return;
           for (const s of findSetups(bars)) {
             // Window for the EXPANDED chart: ~160 bars, reaching back to 20 bars before

@@ -18,6 +18,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { scanSetups } from "@/lib/setups/scan";
+import { cachedScan } from "@/lib/setups/scanCache";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -25,7 +26,8 @@ export async function GET(req: Request) {
 
   try {
     const fresh = new URL(req.url).searchParams.get("fresh") === "1";
-    const scan = await scanSetups(fresh);
+    // Stored once per completed day; "rescan" (?fresh=1) forces a live run.
+    const scan = await cachedScan("futures", () => scanSetups(true), fresh);
 
     // Desk rows for the same instruments: your locked reads, and ranges still
     // waiting for a read (for those the setup's engine read starts hidden).

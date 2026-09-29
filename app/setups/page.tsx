@@ -11,6 +11,11 @@ import { Target, RefreshCw, CheckCircle2, XCircle, Clock, Zap, BookOpen } from "
 import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "../wyckoff/_components/ui";
 import type { InstrumentSetup } from "@/lib/setups/scan";
 import SetupChart from "./SetupChart";
+import SetupChartFull from "./SetupChartFull";
+import ForexSection from "./ForexSection";
+import HistorySection from "./HistorySection";
+import TakeBar, { type TakeCard } from "./TakeBar";
+import RiskBlock from "./RiskBlock";
 
 type Row = InstrumentSetup & { yourRead: string | null; readAgrees: boolean | null; deskUnread: boolean };
 interface Payload { at: string; setups: Row[]; scanned: number; errors: { instrument: string; error: string }[] }
@@ -28,6 +33,7 @@ export default function SetupsPage() {
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [market, setMarket] = useState<"futures" | "forex" | "history">("futures");
   const [entry, setEntry] = useState<"all" | "conservative" | "aggressive">("all");
   const [gradeA, setGradeA] = useState(false);
 
@@ -42,9 +48,6 @@ export default function SetupsPage() {
     finally { setBusy(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
-
-  if (!data && !error) return <LoadingCard what="setups (scanning the basket — up to a minute on a cold start)" />;
-  if (error && !data) return <ErrorCard message={error} />;
 
   const rows = (data?.setups ?? []).filter((s) => (entry === "all" || s.entry === entry) && (!gradeA || s.grade === "A"));
   const live = rows.filter((s) => s.state !== "armed");
@@ -65,25 +68,46 @@ export default function SetupsPage() {
       />
 
       <div style={{ display: "flex", gap: 8, margin: "8px 0 16px", flexWrap: "wrap" }}>
-        {(["all", "conservative", "aggressive"] as const).map((e) => (
-          <Chip key={e} on={entry === e} onClick={() => setEntry(e)}>{e}</Chip>
-        ))}
-        <Chip on={gradeA} onClick={() => setGradeA(!gradeA)}>grade A only</Chip>
+        <Chip on={market === "futures"} onClick={() => setMarket("futures")}>futures / stocks</Chip>
+        <Chip on={market === "forex"} onClick={() => setMarket("forex")}>forex</Chip>
+        <Chip on={market === "history"} onClick={() => setMarket("history")}>history</Chip>
       </div>
 
-      <Rules />
+      {market === "history" ? (
+        <HistorySection />
+      ) : market === "forex" ? (
+        <ForexSection />
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 8, margin: "0 0 16px", flexWrap: "wrap" }}>
+            {(["all", "conservative", "aggressive"] as const).map((e) => (
+              <Chip key={e} on={entry === e} onClick={() => setEntry(e)}>{e}</Chip>
+            ))}
+            <Chip on={gradeA} onClick={() => setGradeA(!gradeA)}>grade A only</Chip>
+          </div>
 
-      <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>ACT NOW · {live.length}</h3>
-      {live.length ? <Grid rows={live} /> : <EmptyState text="Nothing triggered on the last completed bar." small />}
+          {!data && !error ? <LoadingCard what="setups (scanning the basket — up to a minute on a cold start)" /> : null}
+          {error && !data ? <ErrorCard message={error} /> : null}
 
-      <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>ARMED — ORDERS WAITING · {armed.length}</h3>
-      {armed.length ? <Grid rows={armed} /> : <EmptyState text="No qualified breaks waiting for a retest." small />}
+          {data ? (
+            <>
+              <Rules />
 
-      {data?.errors.length ? (
-        <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", marginTop: 16 }}>
-          feed errors: {data.errors.map((e) => e.instrument).join(", ")}
-        </p>
-      ) : null}
+              <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>ACT NOW · {live.length}</h3>
+              {live.length ? <Grid rows={live} /> : <EmptyState text="Nothing triggered on the last completed bar." small />}
+
+              <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>ARMED — ORDERS WAITING · {armed.length}</h3>
+              {armed.length ? <Grid rows={armed} /> : <EmptyState text="No qualified breaks waiting for a retest." small />}
+
+              {data.errors.length ? (
+                <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", marginTop: 16 }}>
+                  feed errors: {data.errors.map((e) => e.instrument).join(", ")}
+                </p>
+              ) : null}
+            </>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -100,6 +124,7 @@ function Card({ s }: { s: Row }) {
   const long = s.side === "long";
   // Inverted futures (6C/6J/6S): show the EXECUTE direction, never make the trader flip it.
   const execLong = s.inverted ? !long : long;
+  const tc = takeCard(s, execLong);   // the card's orders in the terms you execute
   const st = STATE[s.state];
   const [open, setOpen] = useState(false);
   const chartProps = {
@@ -125,6 +150,11 @@ function Card({ s }: { s: Row }) {
         {execLong ? "BUY" : "SELL"} {s.executeSymbol || s.instrument} · {s.entry}
         {s.entry === "aggressive" ? (long ? " (spring)" : " (upthrust)") : " (retest)"}
       </div>
+      {s.volumeUnverified && (
+        <div style={{ ...mono, fontSize: 10, color: "var(--amber)", marginTop: 4 }}>
+          ⚠ volume unavailable on the signal bar (futures contract roll or a bad print) — check volume on the live contract before trading
+        </div>
+      )}
       <div style={{ ...mono, fontSize: 10, color: st.tone, marginTop: 4, display: "flex", gap: 5, alignItems: "center" }}>
         {st.icon} {st.label}{s.barsLeft != null && s.state !== "filled" ? ` · ${s.barsLeft} bars left` : ""}
       </div>
@@ -147,6 +177,8 @@ function Card({ s }: { s: Row }) {
         <span style={{ color: "var(--text-3)" }}>then</span><span>trail 1R behind the best price</span>
         <span style={{ color: "var(--text-3)" }}>cap</span><span>{fmt(s.target)}</span>
       </div>
+      <RiskBlock instrument={tc.instrument} executeSymbol={tc.executeSymbol} side={tc.side} grade={tc.grade}
+        entry={tc.entry} stop={tc.stop} withTrend={s.context.daily === "with-trend"} />
       {s.inverted && (
         <p style={{ ...mono, fontSize: 9.5, color: "var(--amber)", marginTop: 6 }}>
           Prices are the FUTURE's. Execute {s.executeSymbol} in the opposite direction; translate levels on your chart.
@@ -179,8 +211,29 @@ function Card({ s }: { s: Row }) {
         <div>· range {fmt(s.rangeLo)}–{fmt(s.rangeHi)} from {s.rangeStart} · signal {s.signalDate} · data to {s.lastBarDate}
           {s.volumeQuality === "suspect" ? " · volume feed unverified" : ""}</div>
       </div>
+
+      <TakeBar card={tc} />
     </div>
   );
+}
+
+/** The card's orders in the terms you execute. Inverted futures (6C/6J/6S) quote
+ *  XXX/USD; the spot pair is USD/XXX, so every level is 1 ÷ the future's. */
+function takeCard(s: Row, execLong: boolean): TakeCard {
+  const px = (x: number) => (s.inverted ? 1 / x : x);
+  return {
+    ref: { market: "futures", instrument: s.instrument, side: s.side, entry: s.entry, rangeLo: s.rangeLo, rangeHi: s.rangeHi },
+    instrument: s.instrument,
+    executeSymbol: s.executeSymbol || null,
+    side: execLong ? "long" : "short",
+    grade: s.grade,
+    entry: px(s.entryPrice), stop: px(s.stop), cap: px(s.target),
+    entryKind: s.entry === "aggressive" ? "open" : "limit",
+    samePrices: s.assetClass === "stock",
+    readLocked: s.yourRead != null && s.yourRead !== "pass",
+    readAgrees: s.readAgrees,
+    entryDate: s.state === "filled" ? s.lastBarDate : new Date().toISOString().slice(0, 10),
+  };
 }
 
 /** The setup's own accumulation/distribution read (the engine's), next to yours. */
@@ -194,7 +247,7 @@ function SetupRead({ s }: { s: Row }) {
       <Target size={10} />
       {shown ? (
         <span>
-          setup read: <b>{word}</b>
+          <span style={{ color: "var(--text-3)" }}>info only · </span>setup read: <b>{word}</b>
           {r.agrees == null ? " — no lean" : r.agrees ? " — agrees with the trade" : " — against the trade"}
           {s.entry === "aggressive" && <span style={{ color: "var(--text-3)" }}> (didn't add edge on springs in the backtest)</span>}
         </span>
@@ -217,7 +270,10 @@ function OrderBox({ s, execLong }: { s: Row; execLong: boolean }) {
     <div style={{ ...mono, fontSize: 10.5, marginTop: 10, padding: "8px 10px", borderRadius: 9, border: "1px solid var(--border-subtle)", lineHeight: 1.7 }}>
       <div style={{ color: "var(--text-3)", fontSize: 9.5, marginBottom: 2 }}>ORDERS{s.inverted ? " — prices are the future's; translate to " + s.executeSymbol : ""}</div>
       {filled ? (
-        <div style={{ color: "var(--green)" }}>Entry filled on the last bar — place the stop and take-profit now.</div>
+        <>
+          <div style={{ color: "var(--green)" }}>Entry filled on the last bar — place the stop and take-profit now.</div>
+          {s.retest && <RetestLine s={s} buy={buy} />}
+        </>
       ) : o.entry.kind === "limit" ? (
         <div>
           <b>1. {buy} LIMIT</b> at {fmt(o.entry.price)} · good for {o.entry.goodFor} bars
@@ -232,6 +288,23 @@ function OrderBox({ s, execLong }: { s: Row; execLong: boolean }) {
       <div><b style={{ color: "var(--red)" }}>2. {sell} STOP</b> (stop-loss) at {fmt(o.stopLoss)}</div>
       <div><b style={{ color: "var(--green)" }}>3. {sell} LIMIT</b> (take-profit) at {fmt(o.takeProfit)}</div>
       <div style={{ color: "var(--text-3)", marginTop: 2 }}>{o.manage.map((m) => <div key={m}>· {m}</div>)}</div>
+    </div>
+  );
+}
+
+/** The retest day, read at its close: was it the quiet LPS/LPSY we want? */
+function RetestLine({ s, buy }: { s: Row; buy: string }) {
+  const r = s.retest!;
+  const tone = r.low === true ? "var(--green)" : r.low === false ? "var(--amber)" : "var(--text-3)";
+  return (
+    <div style={{ margin: "4px 0", padding: "4px 8px", borderRadius: 7, border: `1px solid ${tone}` }}>
+      <div style={{ color: tone }}>
+        retest volume {r.vol == null ? "unreadable (roll / bad print) — check the live contract" : `${r.vol.toFixed(2)}× range avg — ${r.low ? "LOW ✓ quiet pullback, the stronger trade" : "not low — heavier retest, weaker trade (still positive on average)"}`}
+        {" · "}{r.held ? "held the edge at the close" : "closed back inside the range"}
+      </div>
+      <div style={{ color: "var(--text-3)" }}>
+        waiting for confirmation instead? {r.confirmEntry ? <b style={{ color: "var(--green)" }}>{buy} at the next open</b> : "skip — needs a close that holds the edge on low volume"}
+      </div>
     </div>
   );
 }
@@ -279,7 +352,11 @@ function ChartModal({ s, onClose, chartProps, execLong }: {
           <span style={{ color: "var(--green)" }}>cap {fmt(s.target)}</span>
           <span style={{ color: "var(--text-3)" }}>signal {s.signalDate} · data to {s.lastBarDate}</span>
         </div>
-        <SetupChart {...chartProps} large />
+        <SetupChartFull
+          instrument={s.instrument} entry={s.entry} long={s.side === "long"}
+          rangeLo={s.rangeLo} rangeHi={s.rangeHi} rangeStart={s.rangeStart} signalDate={s.signalDate}
+          entryPrice={s.entryPrice} stop={s.stop} breakevenAt={s.breakevenAt} target={s.target} fmt={fmt}
+        />
       </div>
     </div>
   );
@@ -292,8 +369,8 @@ function Rules() {
       <button onClick={() => setOpen(!open)} style={{ ...mono, fontSize: 10.5 }}>{open ? "▾" : "▸"} the rules (daily, backtested on 84 instruments × 5y)</button>
       {open && (
         <div style={{ lineHeight: 1.7, marginTop: 6 }}>
-          <b>Conservative</b> — close beyond the range within 3 bars on 1.0–2.0× range volume · limit at the edge · cancel on a gap through it · stop 1.5 tol inside · valid 20 bars. Grade A = the range reversed the prior move and the weekly isn't against. Place the order after the break day closes (futures reopen the same evening).<br />
-          <b>Aggressive</b> — spring/upthrust once the range is established · test volume ≤ 1.0× · pierce ≤ 10% of the band · monthly not against · stop ¼ tol past the wick · enter at the NEXT OPEN (US stocks: the cash open), skip if it opens past the stop. Grade A = weekly with.<br />
+          <b>Conservative</b> — close beyond the range within 3 bars on 1.0–2.0× range volume · limit at the edge · cancel on a gap through it · stop 1.5 tol inside · valid 20 bars. Grade A = the range reversed the prior move and the weekly isn't against, OR the retest came in quiet (≤ 0.8× range volume, read at the fill day's close). Place the order after the break day closes (futures reopen the same evening). Fair-fill replay: all +0.12R · grade A +0.34R · quiet retest +0.48R · quiet retest on a reversal +0.73R. Grade B on its own earns ~0 — take A.<br />
+          <b>Aggressive</b> — spring/upthrust once the range is established · test volume ≤ 1.0× · pierce ≤ 10% of the band · monthly not against · stop ¼ tol past the wick · enter at the NEXT OPEN (US stocks: the cash open), skip if it opens past the stop. Grade A = weekly with. Replay +0.57R.<br />
           <b>Both</b> — stop to breakeven at +1R, then trail 1R behind the best price. Cap at far edge + one band.<br />
           Not advice from the engine: the read is yours. Daily bars, no costs; results are averages across many trades.
         </div>

@@ -35,6 +35,7 @@ import { evaluateOutcomes } from "@/lib/screener/outcomes";
 import { runWyckoffScan, backfillOutcomes, type Candidate, type WatchAlert } from "@/lib/wyckoff/scan";
 import { instrumentName } from "@/lib/wyckoff/basket";
 import { sendTelegramMessage } from "@/lib/telegram";
+import { collectFuturesVolume } from "@/lib/data/futuresVolume";
 
 // ── Trend lane kill-switch ────────────────────────────────────────────────────
 // RETIRED 2026-07-26 at the trader's request — the Wyckoff lane replaced it as
@@ -56,6 +57,19 @@ async function runTradeScanJob(req: Request) {
   const { searchParams } = new URL(req.url);
   const isMondayUtc = new Date().getUTCDay() === 1;
   const wantDigest = searchParams.get("digest") === "1" || isMondayUtc;
+
+  // ── Lane 0: real futures volume (sum of the live contracts) ────────────────
+  // Runs first so anything reading volume tonight sees the stored totals.
+  // Yahoo's continuous "=F" volume breaks around rolls; see lib/data/futuresVolume.
+  let futuresVolume: Record<string, unknown> | null = null;
+  let futuresVolumeError: string | null = null;
+  try {
+    const fv = await collectFuturesVolume();
+    futuresVolume = { stored: fv.written.length, failed: fv.errors };
+  } catch (e) {
+    futuresVolumeError = e instanceof Error ? e.message : String(e);
+    console.error("[trade-scan] futures volume lane failed:", e);
+  }
 
   // ── Lane 1: trend screener (retired — see TREND_LANE_ENABLED above) ────────
   let trend: Record<string, unknown> | null = null;
@@ -171,6 +185,8 @@ async function runTradeScanJob(req: Request) {
 
   return {
     ok: !trendError && !wyckoffError && !backfillError,
+    futuresVolume,
+    futuresVolumeError,
     trend,
     trendError,
     wyckoff,
