@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { kit as s, Btn, PageHead, RBars, Section, Tag, px, rr } from "../_components/swing/kit";
+import { kit as s, Btn, PageHead, RBars, Section, Tag, px, rr, useWidth } from "../_components/swing/kit";
 
 const MIN_N = 30;
 interface Stats { n: number; avgR: number | null; winPct: number | null; maxDD: number | null; longestLosing: number | null }
@@ -141,17 +141,18 @@ export default function JournalPage() {
 
 /** Each group: its backtest band (shaded) and your average R (dot, sized by n, grey under 30). */
 function BandChart({ groups }: { groups: Group[] }) {
-  const rowsH = 30, padL = 230, padR = 100, W = 980, H = groups.length * rowsH + 26;
+  const [ref, W] = useWidth<HTMLDivElement>(980);
+  const rowsH = 32, padL = Math.min(230, W * 0.34), padR = 110, H = groups.length * rowsH + 26;
   const vals = groups.flatMap((g) => [g.expLo, g.expHi, g.stats.avgR]).filter((v): v is number => v != null);
   const lo = Math.min(-0.5, ...vals) - 0.1, hi = Math.max(1, ...vals) + 0.1;
   const x = (v: number) => padL + ((v - lo) / (hi - lo)) * (W - padL - padR);
   const ticks = [-0.5, 0, 0.5, 1].filter((t) => t >= lo && t <= hi);
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className={s.chart} role="img" aria-label="Average R per group against the backtest expectation">
+    <div ref={ref} style={{ width: "100%" }}><svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }} role="img" aria-label="Average R per group against the backtest expectation">
       {ticks.map((t) => (
         <g key={t}>
           <line x1={x(t)} x2={x(t)} y1={4} y2={H - 20} strokeWidth={1} style={{ stroke: t === 0 ? "var(--border-strong)" : "var(--border-subtle)" }} />
-          <text x={x(t)} y={H - 6} textAnchor="middle" fontFamily="'DM Mono', monospace" fontSize={10} style={{ fill: "var(--text-3)" }}>{t > 0 ? "+" : ""}{t}R</text>
+          <text x={x(t)} y={H - 6} textAnchor="middle" fontFamily="'DM Mono', monospace" fontSize={11} style={{ fill: "var(--text-3)" }}>{t > 0 ? "+" : ""}{t}R</text>
         </g>
       ))}
       {groups.map((g, i) => {
@@ -160,16 +161,16 @@ function BandChart({ groups }: { groups: Group[] }) {
         const tone = a == null ? "var(--text-3)" : thin ? "var(--text-3)" : g.expLo == null ? (a >= 0 ? "var(--green)" : "var(--red)") : inBand || a > (g.expHi ?? 0) ? "var(--green)" : "var(--amber)";
         return (
           <g key={g.group}>
-            <text x={0} y={cy + 4} fontFamily="'DM Mono', monospace" fontSize={11} style={{ fill: thin ? "var(--text-3)" : "var(--text-1)" }}>{g.group}</text>
+            <text x={0} y={cy + 4} fontFamily="'DM Mono', monospace" fontSize={12} style={{ fill: thin ? "var(--text-3)" : "var(--text-1)" }}>{g.group}</text>
             <line x1={padL} x2={W - padR} y1={cy} y2={cy} strokeWidth={1} style={{ stroke: "var(--border-subtle)" }} />
             {g.expLo != null && g.expHi != null ? <rect x={x(g.expLo)} y={cy - 7} width={Math.max(3, x(g.expHi) - x(g.expLo))} height={14} rx={3} style={{ fill: "var(--accent-dim)", stroke: "var(--accent)" }} strokeWidth={1} /> : null}
             {a != null ? <circle cx={x(a)} cy={cy} r={thin ? 4.5 : 6} style={{ fill: tone }} /> : null}
-            <text x={W - padR + 8} y={cy + 4} fontFamily="'DM Mono', monospace" fontSize={10.5} style={{ fill: a == null ? "var(--text-3)" : tone }}>
+            <text x={W - padR + 8} y={cy + 4} fontFamily="'DM Mono', monospace" fontSize={11.5} style={{ fill: a == null ? "var(--text-3)" : tone }}>
               {a == null ? "no data" : `${rr(a)} n${g.stats.n}`}
             </text>
           </g>
         );
       })}
-    </svg>
+    </svg></div>
   );
 }

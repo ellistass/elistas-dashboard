@@ -6,7 +6,7 @@
 // R-per-trade chart. Colours come from the dashboard tokens, so SVG marks use
 // style={{ fill: "var(--…)" }} (presentation attributes can't read CSS vars).
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import s from "./kit.module.css";
 
 export { s as kit };
@@ -16,6 +16,22 @@ export const px = (x: number | null | undefined) =>
   x == null || !Number.isFinite(x) ? "—" : Math.abs(x) >= 2 ? x.toFixed(2) : x.toFixed(5);
 export const usd = (x: number) => `${x < 0 ? "−" : ""}$${Math.abs(x).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 export const rr = (x: number | null | undefined) => (x == null ? "—" : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(2)}R`);
+
+/** Width of the element in CSS pixels, so SVG charts draw 1 unit = 1 pixel (crisp text, no scaling). */
+export function useWidth<T extends HTMLElement>(initial = 560) {
+  const ref = useRef<T>(null);
+  const [w, setW] = useState(initial);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const set = () => { const x = Math.round(el.getBoundingClientRect().width); if (x > 0) setW(x); };
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w] as const;
+}
 
 export type Tone = "long" | "short" | "good" | "warn" | "bad" | "info" | "plain";
 const TONE_VAR: Record<string, string> = {
@@ -146,23 +162,24 @@ export function Clocks({ closes }: { closes: { label: string; at: string }[] }) 
 // ── Month bar: monthly stop ← $0 → target ───────────────────────────────────
 
 export function MonthBar({ stop, target, realised, worst }: { stop: number; target: number; realised: number; worst: number }) {
-  const W = 400, x0 = (W * stop) / (stop + target);
+  const [ref, W] = useWidth<HTMLDivElement>(400);
+  const x0 = (W * stop) / (stop + target);
   const sx = (v: number) => (v < 0 ? x0 + (Math.max(v, -stop) / stop) * x0 : x0 + (Math.min(v, target) / target) * (W - x0));
   const worstX = sx(Math.min(0, worst)), realX = sx(Math.max(0, realised));
   return (
-    <svg viewBox={`0 0 ${W} 46`} className={s.chart} role="img"
+    <div ref={ref} style={{ width: "100%" }}><svg width={W} height={46} viewBox={`0 0 ${W} 46`} style={{ display: "block" }} role="img"
       aria-label={`Realised ${usd(realised)}, worst case ${usd(worst)}, between a ${usd(-stop)} monthly stop and a ${usd(target)} target`}>
-      <text x={2} y={9} fontFamily={MONO} fontSize={10} style={{ fill: "var(--text-3)" }}>THIS MONTH</text>
+      <text x={2} y={9} fontFamily={MONO} fontSize={11} style={{ fill: "var(--text-3)" }}>THIS MONTH</text>
       <rect x={0} y={14} width={x0} height={10} rx={3} style={{ fill: "var(--red-dim)" }} />
       <rect x={x0} y={14} width={W - x0} height={10} rx={3} style={{ fill: "var(--green-dim)" }} />
       {worst < 0 ? <rect x={worstX} y={14} width={x0 - worstX} height={10} style={{ fill: "var(--red)" }} /> : null}
       {realised > 0 ? <rect x={x0} y={14} width={realX - x0} height={10} style={{ fill: "var(--green)" }} /> : null}
       {realised < 0 ? <line x1={sx(realised)} x2={sx(realised)} y1={10} y2={28} strokeWidth={2} style={{ stroke: "var(--amber)" }} /> : null}
       <line x1={x0} x2={x0} y1={8} y2={30} strokeWidth={2} style={{ stroke: "var(--text-1)" }} />
-      <text x={2} y={44} fontFamily={MONO} fontSize={10} style={{ fill: "var(--red)" }}>{usd(-stop)} stop</text>
-      <text x={x0} y={44} textAnchor="middle" fontFamily={MONO} fontSize={10} style={{ fill: "var(--text-2)" }}>$0</text>
-      <text x={W - 2} y={44} textAnchor="end" fontFamily={MONO} fontSize={10} style={{ fill: "var(--green)" }}>+{usd(target)} target</text>
-    </svg>
+      <text x={2} y={44} fontFamily={MONO} fontSize={11} style={{ fill: "var(--red)" }}>{usd(-stop)} stop</text>
+      <text x={x0} y={44} textAnchor="middle" fontFamily={MONO} fontSize={11} style={{ fill: "var(--text-2)" }}>$0</text>
+      <text x={W - 2} y={44} textAnchor="end" fontFamily={MONO} fontSize={11} style={{ fill: "var(--green)" }}>+{usd(target)} target</text>
+    </svg></div>
   );
 }
 
@@ -176,8 +193,9 @@ export interface ChartZone { from: number; to: number; tone: string; startIdx?: 
 export function CandleChart({ bars, lines, zones = [], height = 200, marks = [] }: {
   bars: Candle[]; lines: ChartLine[]; zones?: ChartZone[]; height?: number; marks?: { date: string; label: string; tone: string }[];
 }) {
+  const [ref, W] = useWidth<HTMLDivElement>(560);
   if (!bars.length) return <div className={s.empty}>no price data yet</div>;
-  const W = 560, H = height, padR = 66, padT = 10, padB = 18, cw = W - padR;
+  const H = height, padR = 76, padT = 10, padB = 18, cw = W - padR;
   const vals = lines.map((l) => l.value).filter(Number.isFinite);
   let lo = Math.min(...bars.map((b) => b[3]), ...vals), hi = Math.max(...bars.map((b) => b[2]), ...vals);
   const pad = (hi - lo) * 0.06 || 1; lo -= pad; hi += pad;
@@ -187,7 +205,7 @@ export function CandleChart({ bars, lines, zones = [], height = 200, marks = [] 
   const labels = lines.map((l) => ({ ...l, y: y(l.value) })).sort((a, b) => a.y - b.y);
   for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 17) labels[i].y = labels[i - 1].y + 17;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className={s.chart} role="img"
+    <div ref={ref} style={{ width: "100%" }}><svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }} role="img"
       aria-label={`Daily candles ${bars[0][0]} to ${bars[bars.length - 1][0]}; ${lines.map((l) => `${l.label} ${px(l.value)}`).join(", ")}`}>
       {[0, 1, 2, 3].map((i) => { const v = lo + ((hi - lo) * i) / 3; return <line key={i} x1={0} x2={cw} y1={y(v)} y2={y(v)} strokeWidth={1} style={{ stroke: "var(--border-subtle)" }} />; })}
       {zones.map((z, i) => {
@@ -208,18 +226,18 @@ export function CandleChart({ bars, lines, zones = [], height = 200, marks = [] 
         if (idx < 0) return null;
         const x = idx * bw + bw / 2;
         return <g key={i}><line x1={x} x2={x} y1={padT} y2={H - padB} strokeDasharray="2 3" style={{ stroke: tv(m.tone) }} />
-          <text x={x + 3} y={padT + 8} fontFamily={MONO} fontSize={9.5} style={{ fill: tv(m.tone) }}>{m.label}</text></g>;
+          <text x={x + 3} y={padT + 8} fontFamily={MONO} fontSize={10.5} style={{ fill: tv(m.tone) }}>{m.label}</text></g>;
       })}
       {lines.map((l, i) => <line key={i} x1={0} x2={cw} y1={y(l.value)} y2={y(l.value)} strokeWidth={1.3} strokeDasharray={l.dash ? "4 3" : undefined} style={{ stroke: tv(l.tone) }} />)}
       {labels.map((l, i) => (
         <g key={i}>
-          <rect x={cw + 4} y={l.y - 8} width={padR - 6} height={16} rx={3} style={{ fill: tv(l.tone) }} />
-          <text x={cw + 8} y={l.y + 4} fontFamily={MONO} fontSize={10} style={{ fill: "var(--bg-base)" }}>{px(l.value)}</text>
+          <rect x={cw + 4} y={l.y - 9} width={padR - 6} height={18} rx={4} style={{ fill: tv(l.tone) }} />
+          <text x={cw + 9} y={l.y + 4} fontFamily={MONO} fontSize={11} fontWeight={500} style={{ fill: "#0a0b0f" }}>{px(l.value)}</text>
         </g>
       ))}
-      <text x={0} y={H - 4} fontFamily={MONO} fontSize={10} style={{ fill: "var(--text-3)" }}>{bars[0][0].slice(5)}</text>
-      <text x={cw} y={H - 4} textAnchor="end" fontFamily={MONO} fontSize={10} style={{ fill: "var(--text-3)" }}>{bars[bars.length - 1][0].slice(5)}</text>
-    </svg>
+      <text x={0} y={H - 4} fontFamily={MONO} fontSize={11} style={{ fill: "var(--text-3)" }}>{bars[0][0].slice(5)}</text>
+      <text x={cw} y={H - 4} textAnchor="end" fontFamily={MONO} fontSize={11} style={{ fill: "var(--text-3)" }}>{bars[bars.length - 1][0].slice(5)}</text>
+    </svg></div>
   );
 }
 
@@ -267,8 +285,9 @@ export function Ring({ ok, total, label, target = 1 }: { ok: number; total: numb
 // ── R per trade + running total ──────────────────────────────────────────────
 
 export function RBars({ items, height = 170 }: { items: { r: number; label: string }[]; height?: number }) {
+  const [ref, W] = useWidth<HTMLDivElement>(900);
   if (!items.length) return <div className={s.empty}>no closed trades yet</div>;
-  const W = 900, H = height, padL = 40, padB = 16, cw = W - padL;
+  const H = height, padL = 40, padB = 16, cw = W - padL;
   let cum = 0;
   const cums = items.map((i) => (cum += i.r));
   const hi = Math.max(1, ...items.map((i) => i.r), ...cums), lo = Math.min(-1, ...items.map((i) => i.r), ...cums);
@@ -276,9 +295,9 @@ export function RBars({ items, height = 170 }: { items: { r: number; label: stri
   const bw = cw / items.length;
   const ticks = [lo, 0, hi].map((v) => Math.round(v * 10) / 10);
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className={s.chart} role="img" aria-label={`R per trade and running total, now ${rr(cum)}`}>
+    <div ref={ref} style={{ width: "100%" }}><svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }} role="img" aria-label={`R per trade and running total, now ${rr(cum)}`}>
       {ticks.map((t) => <g key={t}><line x1={padL} x2={W} y1={y(t)} y2={y(t)} strokeWidth={1} style={{ stroke: t === 0 ? "var(--border-strong)" : "var(--border-subtle)" }} />
-        <text x={padL - 4} y={y(t) + 3} textAnchor="end" fontFamily={MONO} fontSize={9.5} style={{ fill: "var(--text-3)" }}>{t}R</text></g>)}
+        <text x={padL - 4} y={y(t) + 3} textAnchor="end" fontFamily={MONO} fontSize={10.5} style={{ fill: "var(--text-3)" }}>{t}R</text></g>)}
       {items.map((i, k) => (
         <rect key={k} x={padL + k * bw + (bw - Math.min(bw * 0.64, 46)) / 2} width={Math.min(bw * 0.64, 46)} y={Math.min(y(0), y(i.r))} height={Math.max(1, Math.abs(y(i.r) - y(0)))}
           style={{ fill: i.r >= 0 ? "var(--green)" : "var(--red)", opacity: 0.8 }}><title>{i.label}: {rr(i.r)}</title></rect>
@@ -286,8 +305,8 @@ export function RBars({ items, height = 170 }: { items: { r: number; label: stri
       <polyline fill="none" strokeWidth={2} style={{ stroke: "var(--accent)" }}
         points={cums.map((v, k) => `${padL + k * bw + bw / 2},${y(v)}`).join(" ")} />
       <circle cx={padL + (items.length - 1) * bw + bw / 2} cy={y(cum)} r={3.5} style={{ fill: "var(--accent)" }} />
-      <text x={W - 2} y={Math.max(12, y(cum) - 8)} textAnchor="end" fontFamily={MONO} fontSize={10.5} style={{ fill: "var(--accent)" }}>{rr(cum)} total</text>
-    </svg>
+      <text x={W - 2} y={Math.max(12, y(cum) - 8)} textAnchor="end" fontFamily={MONO} fontSize={12} style={{ fill: "var(--accent)" }}>{rr(cum)} total</text>
+    </svg></div>
   );
 }
 
