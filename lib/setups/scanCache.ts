@@ -9,7 +9,7 @@
 //   futures & stocks: completedBars() drops bars dated today in UTC, so the
 //                     scan's input changes at 00:00 UTC (01:00 Lagos).
 //   forex:            our NY-close candles roll at 17:00 New York (21:00 or
-//                     22:00 UTC depending on US daylight saving).
+//                     22:00 UTC depending on US daylight saving); we cut at 17:30.
 // A stored scan made BEFORE the latest cutoff is stale; after it, it's current.
 
 import { db } from "@/lib/db";
@@ -33,10 +33,11 @@ export function lastCutoff(key: ScanKey, now = new Date()): Date {
     const c = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 5));   // 00:05 UTC
     return c <= now ? c : new Date(c.getTime() - 864e5);
   }
-  // forex: 17:05 New York, DST-aware
+  // forex: 17:30 New York, DST-aware — 30 min after the close so Yahoo's final
+  // hourly bar (16:00–17:00) is in before the day counts as complete
   const off = nyOffsetMin(now);
   const nyNow = new Date(now.getTime() - off * 60000);                  // NY wall clock expressed as UTC
-  let c = Date.UTC(nyNow.getUTCFullYear(), nyNow.getUTCMonth(), nyNow.getUTCDate(), 17, 5) + off * 60000;
+  let c = Date.UTC(nyNow.getUTCFullYear(), nyNow.getUTCMonth(), nyNow.getUTCDate(), 17, 30) + off * 60000;
   if (c > now.getTime()) c -= 864e5;
   return new Date(c);
 }

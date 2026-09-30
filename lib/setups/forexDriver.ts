@@ -37,11 +37,11 @@
 // Separate from lib/setups/rules.ts (volume-based) and from the Wyckoff desk.
 
 import axios from "axios";
-import { detectRanges, contextPct, CFG, type Bar, type DetectedRange } from "@/lib/wyckoff/engine";
+import { detectRanges, contextPct, engineVerdict, CFG, type Bar, type DetectedRange } from "@/lib/wyckoff/engine";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { rollMask } from "./roll";
 import { storedVolume, patchVolume } from "@/lib/data/futuresVolume";
-import { fetchCot, positioningRead, type PositioningRead } from "@/lib/data/cot";
+import { fetchCot, positioningRead, type PositioningRead, type CotSeries } from "@/lib/data/cot";
 
 export const CCY = ["EUR", "GBP", "AUD", "NZD", "USD", "CAD", "CHF", "JPY"] as const;
 export type Ccy = (typeof CCY)[number];
@@ -64,7 +64,16 @@ export interface DriverSetup {
   pair: string;                // "EURAUD" — trade the spot pair as-is, never inverted
   side: "long" | "short";
   state: DriverState;
+  /** A = COT trapped z≥1 — the only tradeable forex grade (set by scanForexDrivers). */
   grade: "A" | "B";
+  /** Why not to trade it (COT not trapped, selling USD, no COT). null = tradeable. */
+  skip: string | null;
+  /** Wyckoff effort read over the range on the currency futures volume (legs averaged).
+   *  Tested as a WARNING only: disagrees → −0.33R / −0.49R on the retest. */
+  wyckoffRead: { verdict: "accum" | "distrib" | "neutral" | "n/a"; agrees: boolean | null };
+  /** COT on the SELL leg: the break evening, then each new weekly report up to the
+   *  evening before the fill (or today while the limit waits). */
+  cotPath: CotStep[];
   range: { start: string; end: string; lo: number; hi: number; bars: number };
   /** Size of the trend before the range, in ATRs (negative = down). */
   trendAtr: number;
@@ -98,6 +107,19 @@ export interface DriverSetup {
   /** Chart window: the range plus context, [o,h,l,c,date] on NY-close candles. */
   bars: [number, number, number, number, string][];
   lastBarDate: string;
+}
+
+export interface CotStep { at: string; state: "A" | "B" | "flat" | "late" | "n/a"; z: number | null }
+
+const cotState = (l: PositioningRead["sell"]): CotStep["state"] =>
+  l.verdict === "trapped" ? ((l.z ?? 0) >= 1 ? "A" : "B") : l.verdict;
+
+/** Break evening + one step per report that became known after it, up to `until`. */
+function cotPathFor(cot: CotSeries, buy: string, sell: string, rangeStart: string, breakDate: string, until: string): CotStep[] {
+  const step = (at: string): CotStep => { const l = positioningRead(cot, buy, sell, rangeStart, at).sell; return { at, state: cotState(l), z: l.z }; };
+  const out = [step(breakDate)];
+  for (const p of cot[sell] ?? []) if (p.known > breakDate && p.known <= until) out.push(step(p.known));
+  return out;
 }
 
 // ── Strength index ────────────────────────────────────────────────────────────
@@ -187,6 +209,23 @@ function legVolRatio(pair: string, fv: FutVol | undefined, rangeDates: string[],
   return rs.length ? rs.reduce((a, x) => a + x, 0) / rs.length : null;
 }
 
+/** Wyckoff effort read (lib/wyckoff/engine.engineVerdict) with the futures legs' volume
+ *  averaged onto the spot bars, over bars[start, end) — the range only, as tested. */
+function wyckoffReadFor(pair: string, bars: Bar[], fv: FutVol | undefined, start: number, end: number, up: boolean): DriverSetup["wyckoffRead"] {
+  if (!fv) return { verdict: "n/a", agrees: null };
+  const legs = [pair.slice(0, 3), pair.slice(3)].map((c) => fv[c as Ccy]).filter((m): m is Map<string, number> => !!m);
+  if (!legs.length) return { verdict: "n/a", agrees: null };
+  let have = 0;
+  const vb = bars.slice(start, end).map((b) => {
+    const vs = legs.map((m) => m.get(b.date)).filter((x): x is number => x != null);
+    if (vs.length) have++;
+    return { ...b, v: vs.length ? vs.reduce((a, x) => a + x, 0) / vs.length : 0 };
+  });
+  if (vb.length < 5 || have < vb.length * 0.8) return { verdict: "n/a", agrees: null };
+  const verdict = engineVerdict(vb, 0, vb.length);
+  return { verdict, agrees: verdict === "neutral" ? null : verdict === (up ? "accum" : "distrib") };
+}
+
 // ── One pair ──────────────────────────────────────────────────────────────────
 function atr20(bars: Bar[], end: number): number {
   let a = 0;
@@ -257,7 +296,10 @@ export function driverSetupFor(pair: string, bars: Bar[], si: StrengthIndex, fv?
   // A = the retest came in QUIET (futures volume). Fair-fill backtest, forex:
   // low-vol retest +0.34R (n=26, 2023–26) / +0.28R (n=47, 2021–26) vs +0.22 / +0.13
   // otherwise. Small samples — the same direction as futures & stocks (+0.48 vs +0.2).
-  const grade: "A" | "B" = retest?.low === true ? "A" : "B";
+  // The GRADE is COT (set in scanForexDrivers): trapped z≥1 = A, trapped = B, else skip.
+  // The quiet retest stays on the card as information only.
+  const grade: "A" | "B" = "B";
+  const wyckoffRead = wyckoffReadFor(pair, bars, fv, r.start, r.status === "broken" ? r.end : n, up);
   const stopLoss = up ? edge - DRIVER.STOP_TOL * tol : edge + DRIVER.STOP_TOL * tol;
   const risk = Math.abs(edge - stopLoss);
   const barsSinceBreak = breakIdx == null ? null : last - breakIdx;
@@ -266,7 +308,7 @@ export function driverSetupFor(pair: string, bars: Bar[], si: StrengthIndex, fv?
   const rebase = (c: Ccy) => si.idx[c].slice(w, t + 1).map((v) => v - si.idx[c][w]);
 
   return {
-    pair, side, state, grade,
+    pair, side, state, grade, skip: "COT unavailable, no grade", wyckoffRead, cotPath: [],
     range: { start: bars[r.start].date, end: bars[Math.min(r.end, last)].date, lo: r.lo, hi: r.hi, bars: barsLen },   // open range: end = bars.length
     trendAtr,
     breakDate: breakIdx == null ? null : bars[breakIdx].date,
@@ -318,6 +360,11 @@ const nyParts = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23",
 });
 /** The FX session date a UTC timestamp belongs to: NY time + 7h, so 17:00 NY rolls to the next day. */
+function nyHour(tsSec: number): number {
+  const p = Object.fromEntries(nyParts.formatToParts(new Date(tsSec * 1000)).map((x) => [x.type, x.value]));
+  return +p.hour % 24;
+}
+
 function sessionDate(tsSec: number): string {
   const p = Object.fromEntries(nyParts.formatToParts(new Date(tsSec * 1000)).map((x) => [x.type, x.value]));
   const ny = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour);          // NY wall clock, as if UTC
@@ -333,20 +380,25 @@ export async function fetchSpot(pair: string): Promise<Bar[]> {
   const res = data?.chart?.result?.[0];
   if (!res?.timestamp?.length) throw new Error(`Yahoo ${pair}=X: empty response`);
   const q = res.indicators.quote[0];
-  const days = new Map<string, Bar & { n: number }>();
+  const days = new Map<string, Bar & { n: number; lastHour: boolean }>();
   for (let i = 0; i < res.timestamp.length; i++) {
     const [o, h, l, c] = [q.open[i], q.high[i], q.low[i], q.close[i]];
     if (![o, h, l, c].every((x) => typeof x === "number" && Number.isFinite(x))) continue;
     const date = sessionDate(res.timestamp[i]);
+    const isLast = nyHour(res.timestamp[i]) === 16;                     // the 16:00–17:00 NY bar = the close
     const d = days.get(date);
-    if (!d) days.set(date, { o, h, l, c, v: 0, date, n: 1 });
-    else { d.h = Math.max(d.h, h); d.l = Math.min(d.l, l); d.c = c; d.n++; }
+    if (!d) days.set(date, { o, h, l, c, v: 0, date, n: 1, lastHour: isLast });
+    else { d.h = Math.max(d.h, h); d.l = Math.min(d.l, l); d.c = c; d.n++; d.lastHour ||= isLast; }
   }
   const today = sessionDate(Date.now() / 1000);                        // the session still trading
-  return [...days.values()]
+  const done = [...days.values()]
     .filter((d) => d.date < today && d.n >= 12 && new Date(d.date + "T12:00:00Z").getUTCDay() % 6 !== 0)
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .map(({ n: _n, ...b }) => b);
+    .sort((a, b) => a.date.localeCompare(b.date));
+  // The newest day only counts once Yahoo has delivered its final hour — otherwise
+  // its close would be the 15:00 price. Older days are left alone (a rare missing
+  // hour in history mustn't shift the ranges).
+  if (done.length && !done[done.length - 1].lastHour) done.pop();
+  return done.map(({ n: _n, lastHour: _l, ...b }) => b);
 }
 
 /** Trusted daily volume of the 7 currency futures (real summed-contract totals where
@@ -406,9 +458,32 @@ export async function scanForexDrivers(force = false): Promise<DriverScan> {
     for (const s of setups) {
       const B = s.pair.slice(0, 3), Q = s.pair.slice(3);
       const [buy, sell] = s.side === "long" ? [B, Q] : [Q, B];
-      s.positioning = positioningRead(cot, buy, sell, s.range.start, s.lastBarDate);
+      // Frozen at the break (tested that way); a "watch" setup reads up to today.
+      s.positioning = positioningRead(cot, buy, sell, s.range.start, s.breakDate ?? s.lastBarDate);
+      const z = s.positioning.sell.z, v = s.positioning.sell.verdict;
+      if (sell === "USD") s.skip = "selling USD: no COT edge (tested −0.19R / −0.23R, rarely runs)";
+      else if (v === "trapped" && z != null && z >= 1) { s.grade = "A"; s.skip = null; }
+      // A-only on forex: B (trapped z 0.5–1) tested −0.49R / +0.15R, and no better when the path moved.
+      else if (v === "trapped") s.skip = `COT only mildly trapped in ${sell} (z ${z?.toFixed(2)}): A-only, B tested −0.49R / +0.15R`;
+      else s.skip = v === "late" ? `COT late: real money already selling ${sell}`
+        : v === "flat" ? `COT quiet: real money not trapped in ${sell}`
+        : `no COT history for ${sell}`;
+      // After the break: re-check every new report. Tested (2021–26): still trapped at the
+      // retest +0.63R / +0.25R; turned flat before the fill −0.73R / −0.48R (7 of 10 full
+      // stops). The grade only ever goes DOWN — the one B → A lost.
+      if (!s.skip && s.breakDate) {
+        // "filled" = filled on the last bar → judge on the evening before, as tested
+        const until = s.state === "filled" ? (s.bars.at(-2)?.[4] ?? s.lastBarDate) : s.lastBarDate;
+        s.cotPath = cotPathFor(cot, buy, sell, s.range.start, s.breakDate, until);
+        const now = s.cotPath[s.cotPath.length - 1];
+        if (now.state === "flat" || now.state === "late" || now.state === "n/a")
+          s.skip = `COT no longer trapped: real money turned on ${sell} since the break (${now.at}). Cancel the limit (tested −0.73R / −0.48R)`;
+        else if (now.state === "B") s.skip = `COT eased to B since the break (${now.at}): A-only, cancel the limit`;
+      }
     }
   } catch (e) { cotError = e instanceof Error ? e.message : String(e); }
+  const rank = { filled: 0, armed: 1, watch: 2 } as const;
+  setups.sort((a, b) => Number(!!a.skip) - Number(!!b.skip) || rank[a.state] - rank[b.state] || a.grade.localeCompare(b.grade));
   const alerts = currencyAlerts(strengthIndex(pairs));
   const scan = { at: new Date().toISOString(), setups, alerts, lastBarDate: pairs.EURUSD?.at(-1)?.date ?? null, errors, cotError };
   cache = { at: Date.now(), scan };

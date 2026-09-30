@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Globe, RefreshCw, Clock, Zap, Eye, Newspaper } from "lucide-react";
 import { EmptyState, ErrorCard } from "../wyckoff/_components/ui";
-import type { DriverScan, DriverSetup, CurrencyAlert } from "@/lib/setups/forexDriver";
+import type { DriverScan, DriverSetup, CurrencyAlert, CotStep } from "@/lib/setups/forexDriver";
 import SetupChartFull from "./SetupChartFull";
 import TakeBar from "./TakeBar";
 import RiskBlock from "./RiskBlock";
@@ -114,6 +114,8 @@ function Grid({ rows }: { rows: DriverSetup[] }) {
   );
 }
 
+const gradeLabel = (s: DriverSetup) => s.skip ? "SKIP" : s.grade === "A" ? "A · trapped z≥1" : "B · trapped";
+
 function Card({ s }: { s: DriverSetup }) {
   const long = s.side === "long";
   const st = STATE[s.state];
@@ -123,8 +125,8 @@ function Card({ s }: { s: DriverSetup }) {
     <div style={{ border: "1px solid var(--border-subtle)", borderRadius: 12, padding: 14, background: "var(--surface-1)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <span style={{ fontWeight: 600, fontSize: 16 }}>{s.pair}</span>
-        <span style={{ ...mono, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${s.grade === "A" ? "var(--green)" : "var(--border-subtle)"}`, color: s.grade === "A" ? "var(--green)" : "var(--text-3)" }}>
-          {s.grade === "A" ? "A · quiet retest" : "B"} · {s.range.bars}-bar range
+        <span style={{ ...mono, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${s.skip ? "var(--amber)" : s.grade === "A" ? "var(--green)" : "var(--border-subtle)"}`, color: s.skip ? "var(--amber)" : s.grade === "A" ? "var(--green)" : "var(--text-3)" }}>
+          {gradeLabel(s)} · {s.range.bars}-bar range
         </span>
       </div>
       <div style={{ ...mono, fontSize: 11, marginTop: 6, color: long ? "var(--green)" : "var(--red)" }}>
@@ -133,6 +135,16 @@ function Card({ s }: { s: DriverSetup }) {
       <div style={{ ...mono, fontSize: 10.5, marginTop: 4, color: st.tone, display: "flex", gap: 6, alignItems: "center" }}>
         {st.icon} {st.label}
       </div>
+      {s.skip && (
+        <div style={{ ...mono, fontSize: 11, marginTop: 8, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--amber)", color: "var(--amber)" }}>
+          SKIP: {s.skip}. Card kept for the record only; no order.
+        </div>
+      )}
+      {s.wyckoffRead?.agrees === false && (
+        <div style={{ ...mono, fontSize: 11, marginTop: 8, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--red)", color: "var(--red)" }}>
+          ⚠ Wyckoff read (futures volume) says {s.wyckoffRead.verdict === "accum" ? "accumulation" : "distribution"}, against this trade. Tested −0.33R / −0.49R. Skip or size down.
+        </div>
+      )}
 
       <button
         onClick={() => setOpen(true)}
@@ -163,12 +175,13 @@ function Card({ s }: { s: DriverSetup }) {
         )}
       </div>
 
-      <RiskBlock instrument={s.pair} executeSymbol={null} side={s.side} grade={s.grade} entry={s.order.entry} stop={s.order.stopLoss} />
+      {!s.skip && <RiskBlock instrument={s.pair} executeSymbol={null} side={s.side} grade={s.grade} entry={s.order.entry} stop={s.order.stopLoss} />}
 
       {s.positioning && <Positioning p={s.positioning} />}
+      {s.cotPath?.length ? <CotPathLine path={s.cotPath} /> : null}
       <Driver s={s} />
 
-      {s.state !== "watch" && (
+      {!s.skip && s.state !== "watch" && (
         <TakeBar card={{
           ref: { market: "forex", instrument: s.pair, side: s.side, entry: "forex", rangeLo: s.range.lo, rangeHi: s.range.hi },
           instrument: s.pair, executeSymbol: null, side: s.side, grade: s.grade,
@@ -177,6 +190,47 @@ function Card({ s }: { s: DriverSetup }) {
           entryDate: s.state === "filled" ? s.lastBarDate : new Date().toISOString().slice(0, 10),
         }} />
       )}
+    </div>
+  );
+}
+
+/** Tested result for each COT path an A can take between the break and the fill
+ *  (reversal-break retests, 28 pairs, 2021–26, after a 2-pip spread; recent = Dec 2023–). */
+type PathKind = "none" | "held" | "eased" | "turned";
+const PATH_PROOF: Record<PathKind, { label: string; proof: string; tone: string }> = {
+  none:   { label: "A · no new report yet",      proof: "tested 35 trades · +0.81R · win 63% (recent +1.11 / earlier +0.14)", tone: "var(--green)" },
+  held:   { label: "A · held A through reports", proof: "tested 17 trades · +0.61R · win 71% (recent +0.85 / earlier +0.44)", tone: "var(--green)" },
+  eased:  { label: "A → eased to B",             proof: "untested (0 cases): cancelled as a precaution, A-only", tone: "var(--amber)" },
+  turned: { label: "A → turned flat/late",       proof: "tested 4 trades · −0.60R · win 25%: cancel the limit", tone: "var(--red)" },
+};
+const pathKind = (p: CotStep[]): PathKind =>
+  p.length === 1 ? "none"
+  : p.every((s) => s.state === "A") ? "held"
+  : p.some((s) => s.state === "flat" || s.state === "late" || s.state === "n/a") ? "turned"
+  : "eased";
+
+/** How the sell-leg COT moved since the break. Flat/late before the fill = cancel. */
+function CotPathLine({ path }: { path: NonNullable<DriverSetup["cotPath"]> }) {
+  const tone = (st: string) => st === "A" ? "var(--green)" : st === "B" ? "var(--text-1)" : "var(--red)";
+  const last = path[path.length - 1];
+  const turned = last.state !== "A" && last.state !== "B";
+  const pp = path[0].state === "A" ? PATH_PROOF[pathKind(path)] : null;
+  return (
+    <div style={{ ...mono, fontSize: 11, marginTop: 8, padding: "6px 10px", borderRadius: 8, border: `1px solid ${turned ? "var(--red)" : "var(--border-subtle)"}`, lineHeight: 1.7 }}>
+      <div style={{ color: "var(--text-3)", fontSize: 10 }}>COT SINCE THE BREAK (sell leg, each weekly report)</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "baseline" }}>
+        {path.map((p, i) => (
+          <span key={p.at}>
+            {i > 0 && <span style={{ color: "var(--text-3)" }}>→ </span>}
+            <b style={{ color: tone(p.state) }}>{p.state}</b>
+            <span style={{ color: "var(--text-2)" }}> z{p.z == null ? "—" : p.z.toFixed(2)}</span>
+            <span style={{ color: "var(--text-3)" }}> ({p.at.slice(5)})</span>
+          </span>
+        ))}
+      </div>
+      {pp && <div style={{ color: pp.tone }}>{pp.label}: {pp.proof}</div>}
+      {path.length === 1 && <div style={{ color: "var(--text-3)" }}>no new report since the break yet; next one lands Friday 20:30 Lagos</div>}
+      {turned && <div style={{ color: "var(--red)" }}>turned before the fill → cancel the limit</div>}
     </div>
   );
 }
@@ -261,7 +315,7 @@ function ForexChartModal({ s, onClose }: { s: DriverSetup; onClose: () => void }
           <div style={{ ...mono, fontSize: 13 }}>
             <b style={{ fontSize: 16 }}>{s.pair}</b>
             <span style={{ marginLeft: 10, color: long ? "var(--green)" : "var(--red)" }}>
-              {long ? "BUY" : "SELL"} {s.pair} · retest · {s.grade === "A" ? "A · quiet retest" : "B"} · {STATE[s.state].label}
+              {long ? "BUY" : "SELL"} {s.pair} · retest · {gradeLabel(s)} · {STATE[s.state].label}
             </span>
           </div>
           <button onClick={onClose} style={{ ...mono, fontSize: 11, color: "var(--text-3)" }}>close (esc)</button>
@@ -345,6 +399,22 @@ function ForexRules() {
           <div>· Tested (fair fills, 28 pairs, 2024–26): +0.19R gross / +0.14R after spread per trade, 129 trades — NOT yet a proven edge, hence paper only.</div>
           <div>· Stronger: a QUIET retest (futures volume ≤ 0.8×) +0.34R, and normal-volatility markets +0.34R. High-vol markets lost (−0.11R).</div>
           <div>· Real money (CFTC asset managers) through the RANGE, in the currency you SELL: still buying it = trapped, the Composite Man's counterparty → +0.48R / +0.34R. Already selling it = late → −0.39R / −0.16R. Two separate periods; small samples — a strong lead.</div>
+          <div>· GRADE (graded at the break, 2021–26, after spread): A = COT trapped z≥1 → +0.98R / +0.19R, win 63%. A ONLY: B (trapped z 0.5–1) = SKIP (−0.49R / +0.15R). Quiet or late COT = SKIP (−0.19R / −0.16R).</div>
+          <div>· Selling USD = SKIP: no USD read helps (DXY / other leg tested) and those setups lost (−0.19R / −0.23R, 1 in 43 reached +2R).</div>
+          <div>· COT re-checked on every new report after the break: turned flat/late before the fill → cancel (−0.73R / −0.48R). An A that eases to B or turns flat/late before the fill = cancel. Once filled, COT changes don't matter (tested: no gain from exiting on them); the stop and trail manage the exit.</div>
+          <div style={{ margin: "4px 0 6px" }}>· COT path after an A break → what it did (2021–26):
+            <table style={{ borderCollapse: "collapse", marginTop: 4 }}>
+              <tbody>
+                {(Object.keys(PATH_PROOF) as PathKind[]).map((k) => (
+                  <tr key={k}>
+                    <td style={{ padding: "2px 12px 2px 0", color: PATH_PROOF[k].tone }}>{PATH_PROOF[k].label}</td>
+                    <td style={{ padding: "2px 0", color: "var(--text-2)" }}>{PATH_PROOF[k].proof}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div>· Wyckoff read (futures volume over the range) DISAGREES with the trade → −0.33R / −0.49R: warning, skip or size down. Agreeing adds nothing.</div>
           <div>· Driver, news & rate cycle: shown for your read only. None improved the retest. With-trend breaks right after a central-bank move failed (−0.50R).</div>
           <div>· Candles are rebuilt from hourly data with the New York 5pm close — Yahoo's daily FX close is stale.</div>
         </div>

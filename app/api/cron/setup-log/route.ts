@@ -21,13 +21,15 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const out: Record<string, unknown> = {};
+  // Forex is always rescanned here: a page visit just after the close may have
+  // stored a scan built before Yahoo's final hour landed — the nightly one is final.
   const lanes = [
-    ["futures", () => scanSetups(true)],
-    ["forex", () => scanForexDrivers(true)],
+    ["futures", () => scanSetups(true), false],
+    ["forex", () => scanForexDrivers(true), true],
   ] as const;
-  for (const [key, run] of lanes) {
+  for (const [key, run, force] of lanes) {
     try {
-      const s: any = await cachedScan(key, run as () => Promise<object>);
+      const s: any = await cachedScan(key, run as () => Promise<object>, force);
       out[key] = { setups: s.setups?.length ?? 0, from: s.cachedAt ? `stored ${s.cachedAt}` : "computed now" };
     } catch (e) {
       out[key] = { error: e instanceof Error ? e.message : String(e) };

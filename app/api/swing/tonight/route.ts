@@ -88,6 +88,7 @@ export async function GET() {
     }
 
     for (const s of (fx?.payload as any)?.setups ?? []) {
+      if (s.skip) continue;                                             // COT not trapped / selling USD: not a trade
       const candles = toCandles(s.bars);
       const last = candles[candles.length - 1]?.[4] ?? null;
       const base = { market: "forex", instrument: s.pair, executeSymbol: null, side: s.side, grade: s.grade, inverted: false, inTrade: inTrade.has(s.pair), last };
