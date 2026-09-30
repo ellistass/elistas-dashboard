@@ -22,10 +22,12 @@ interface ActNow {
   market: string; instrument: string; executeSymbol: string | null; side: string; grade: string; inverted: boolean; inTrade: boolean;
   state: string; entryKind: string; entry: number; stop: number; cap: number | null; breakeven: number; candles: Candle[];
   rNow: number | null; risk: number; accounts: string[]; reward: number | null; take: TakeCard;
+  priority: { rank: number; label: string };
 }
 interface Working {
   market: string; instrument: string; side: string; grade: string; inverted: boolean; inTrade: boolean;
   kind: "limit" | "close"; level: number; stop: number; left: number; total: number; closes: number[]; away: number | null; last: number | null;
+  priority: { rank: number; label: string };
 }
 interface Payload {
   today: string; closes: { label: string; at: string }[];
@@ -124,13 +126,13 @@ export default function TonightPage() {
         ) : <div className={`${s.card} ${s.empty}`}>Nothing filled or triggering on the last bar.</div>}
       </Section>
 
-      <Section title="Orders working" count={data.working.length} hint="closest to filling first">
+      <Section title="Orders working" count={data.working.length} hint="best edge first (forex → indices → commodities → stocks), then closest to filling">
         {data.working.length ? (
           <div className={s.list}>
             {data.working.map((w, i) => (
               <div key={i} className={`${s.listRow} ${s.ord}`} style={{ opacity: w.inTrade ? 0.5 : 1 }}>
                 <Grade g={w.grade} />
-                <span style={{ fontWeight: 700 }}>{w.instrument}</span>
+                <span style={{ fontWeight: 700 }}>{w.instrument}{w.priority ? <span className={s.small} style={{ fontWeight: 400, color: "var(--text-2)" }}> · {w.priority.label}</span> : null}</span>
                 <Tag tone={w.side === "long" ? "long" : "short"}>{w.side === "long" ? "BUY" : "SELL"}</Tag>
                 <div className={s.fullNarrow}>
                   <DistBar near={(w.away ?? 99) < 2} pct={w.away ?? 99}
@@ -190,6 +192,7 @@ function ActCard({ a }: { a: ActNow }) {
         <span className={s.sym}>{a.instrument}</span>
         <SideTag side={a.side} />
         <Tag>grade {a.grade} · {a.accounts.join(" & ") || "no account"} · {usd(a.risk)}</Tag>
+        {a.priority ? <Tag>{a.priority.label}</Tag> : null}
         <span className={s.mono} style={{ marginLeft: "auto", fontSize: 12, color: a.rNow == null ? "var(--text-2)" : a.rNow >= 0 ? "var(--green)" : "var(--red)" }}>
           {a.state === "filled" ? `${rr(a.rNow)} now` : "enter at the next open"}
         </span>

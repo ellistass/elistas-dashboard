@@ -32,6 +32,16 @@ function closeTimes(now = new Date()) {
   return [{ label: "Stocks close", at: lagos(16) }, { label: "Forex close", at: lagos(17) }];
 }
 
+/** Which setups to take first when slots are full: tested avg R per A trade, 2022–26
+ *  (forex = the COT-graded retest; the rest = the Setups page conservative A). */
+function priorityOf(market: string, instrument: string) {
+  if (market === "forex") return { rank: 1, label: "1 · forex COT A ≈ +0.7R" };
+  const c = specClass(instrument);
+  return c === "index" ? { rank: 2, label: "2 · index ≈ +0.4R" }
+    : c === "commodity" ? { rank: 3, label: "3 · commodity ≈ +0.25R" }
+    : { rank: 4, label: "4 · stock ≈ +0.13R" };
+}
+
 type Candle = [string, number, number, number, number];
 /** Futures bars are [o,h,l,c,v,date]; forex bars are [o,h,l,c,date]. → [date,o,h,l,c] */
 const toCandles = (bars: any[] = [], n = 40): Candle[] =>
@@ -58,12 +68,16 @@ export async function GET() {
     const working: any[] = [];
 
     for (const s of (fut?.payload as any)?.setups ?? []) {
+      // Currency futures (6E, 6B …) are only there for the volume/COT reads — not traded
+      // (the volume rule on them tested −8.5R). Forex is traded via the COT forex setups.
+      if (specClass(s.instrument) === "forex") continue;
       const long = s.inverted ? s.side !== "long" : s.side === "long";
       const candles = toCandles(s.bars);
       const last = candles[candles.length - 1]?.[4] ?? null;
       const base = {
         market: "futures", instrument: s.instrument, executeSymbol: s.executeSymbol || null, side: long ? "long" : "short",
         grade: s.grade, inverted: !!s.inverted, inTrade: inTrade.has(s.instrument), last,
+        priority: priorityOf("futures", s.instrument),
       };
       if (s.state === "armed") {
         working.push({ ...base, kind: "limit", level: s.entryPrice, stop: s.stop, left: s.barsLeft ?? 0, total: s.order?.entry?.goodFor ?? s.barsLeft ?? 0,
@@ -91,7 +105,7 @@ export async function GET() {
       if (s.skip) continue;                                             // COT not trapped / selling USD: not a trade
       const candles = toCandles(s.bars);
       const last = candles[candles.length - 1]?.[4] ?? null;
-      const base = { market: "forex", instrument: s.pair, executeSymbol: null, side: s.side, grade: s.grade, inverted: false, inTrade: inTrade.has(s.pair), last };
+      const base = { market: "forex", instrument: s.pair, executeSymbol: null, side: s.side, grade: s.grade, inverted: false, inTrade: inTrade.has(s.pair), last, priority: priorityOf("forex", s.pair) };
       if (s.state === "watch" || s.state === "armed") {
         const level = s.state === "watch" ? s.breakLevel : s.order.entry;
         working.push({ ...base, kind: s.state === "watch" ? "close" : "limit", level, stop: s.order.stopLoss,
@@ -112,8 +126,8 @@ export async function GET() {
       });
     }
 
-    actNow.sort((a, b) => a.grade.localeCompare(b.grade));
-    working.sort((a, b) => (a.away ?? 99) - (b.away ?? 99));
+    actNow.sort((a, b) => a.grade.localeCompare(b.grade) || a.priority.rank - b.priority.rank);
+    working.sort((a, b) => a.priority.rank - b.priority.rank || (a.away ?? 99) - (b.away ?? 99));
 
     // Event housekeeping
     const upcoming: string[] = [];
