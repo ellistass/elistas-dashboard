@@ -42,6 +42,7 @@ import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { rollMask } from "./roll";
 import { storedVolume, patchVolume } from "@/lib/data/futuresVolume";
 import { fetchCot, positioningRead, type PositioningRead, type CotSeries } from "@/lib/data/cot";
+import { abcdFor, type AbcdSetup } from "./abcd";
 
 export const CCY = ["EUR", "GBP", "AUD", "NZD", "USD", "CAD", "CHF", "JPY"] as const;
 export type Ccy = (typeof CCY)[number];
@@ -428,7 +429,7 @@ export async function forexChartBars(pair: string): Promise<{ bars: Bar[]; legs:
   return { bars, legs: legs.map((c) => FUT[c]!) };
 }
 
-export interface DriverScan { at: string; setups: DriverSetup[]; alerts: CurrencyAlert[]; lastBarDate: string | null; errors: { pair: string; error: string }[]; cotError?: string | null }
+export interface DriverScan { at: string; setups: DriverSetup[]; abcd?: AbcdSetup[]; alerts: CurrencyAlert[]; lastBarDate: string | null; errors: { pair: string; error: string }[]; cotError?: string | null }
 let cache: { at: number; scan: DriverScan } | null = null;
 const TTL_MS = 15 * 60 * 1000;
 
@@ -450,6 +451,8 @@ export async function scanForexDrivers(force = false): Promise<DriverScan> {
   // retest shows "volume unavailable" and nothing is graded A.
   const fv = await futuresLegVolume();
   const setups = findDriverSetups(pairs, fv);
+  // AB=CD (paper only): same bars, no extra fetch.
+  const abcd = PAIRS.map((p) => (pairs[p]?.length ? abcdFor(p, pairs[p]) : null)).filter((x): x is AbcdSetup => !!x);
   let cotError: string | null = null;
   // Real-money positioning over each range (weekly CFTC). Best-effort: without it
   // the card just shows no positioning line.
@@ -481,11 +484,18 @@ export async function scanForexDrivers(force = false): Promise<DriverScan> {
         else if (now.state === "B") s.skip = `COT eased to B since the break (${now.at}): A-only, cancel the limit`;
       }
     }
+    // AB=CD: COT attached for information only (it flipped between periods on this pattern).
+    for (const a of abcd) {
+      const B = a.pair.slice(0, 3), Q = a.pair.slice(3);
+      const [buy, sell] = a.side === "long" ? [B, Q] : [Q, B];
+      a.positioning = positioningRead(cot, buy, sell, a.b.date, a.lastBarDate);
+    }
   } catch (e) { cotError = e instanceof Error ? e.message : String(e); }
+  abcd.sort((x, y) => (x.state === "filled" ? 0 : 1) - (y.state === "filled" ? 0 : 1) || x.barsLeft - y.barsLeft);
   const rank = { filled: 0, armed: 1, watch: 2 } as const;
   setups.sort((a, b) => Number(!!a.skip) - Number(!!b.skip) || rank[a.state] - rank[b.state] || a.grade.localeCompare(b.grade));
   const alerts = currencyAlerts(strengthIndex(pairs));
-  const scan = { at: new Date().toISOString(), setups, alerts, lastBarDate: pairs.EURUSD?.at(-1)?.date ?? null, errors, cotError };
+  const scan = { at: new Date().toISOString(), setups, abcd, alerts, lastBarDate: pairs.EURUSD?.at(-1)?.date ?? null, errors, cotError };
   cache = { at: Date.now(), scan };
   return scan;
 }

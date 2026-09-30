@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Globe, RefreshCw, Clock, Zap, Eye, Newspaper } from "lucide-react";
 import { EmptyState, ErrorCard } from "../wyckoff/_components/ui";
 import type { DriverScan, DriverSetup, CurrencyAlert, CotStep } from "@/lib/setups/forexDriver";
+import type { AbcdSetup } from "@/lib/setups/abcd";
 import SetupChartFull from "./SetupChartFull";
 import TakeBar from "./TakeBar";
 import RiskBlock from "./RiskBlock";
@@ -77,6 +78,7 @@ export default function ForexSection() {
           {live.length ? <Grid rows={live} /> : <EmptyState text="No reversal breaks waiting for a retest." small />}
           <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>WATCH — PRESSING THE EDGE · {watch.length}</h3>
           {watch.length ? <Grid rows={watch} /> : <EmptyState text="No ranges pressing a reversal edge." small />}
+          <AbcdSection rows={data.abcd ?? []} />
           <ForexRules />
         </>
       )}
@@ -191,6 +193,103 @@ function Card({ s }: { s: DriverSetup }) {
         }} />
       )}
     </div>
+  );
+}
+
+/** Pesavento AB=CD at D: paper only. No Take button, no risk block, never on Tonight; logged to the Journal. */
+function AbcdSection({ rows }: { rows: AbcdSetup[] }) {
+  return (
+    <>
+      <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "28px 0 4px", display: "flex", gap: 8, alignItems: "center" }}>
+        AB=CD AT D · {rows.length}
+        <span style={{ fontSize: 9.5, padding: "1px 7px", borderRadius: 999, border: "1px solid var(--amber)", color: "var(--amber)" }}>PAPER ONLY — not traded</span>
+      </h3>
+      <div style={{ ...mono, fontSize: 10.5, color: "var(--text-3)", marginBottom: 8, lineHeight: 1.6 }}>
+        Larry Pesavento AB=CD on 2 × ATR swings: C retraces 0.618–0.786 of AB, limit at D = C ∓ AB, stop at the 1.272 extension, target the 0.618 retrace of CD (≈ +2.3R), no trail.
+        Tested +0.32R / +0.34R per trade (222 trades 2021–26, win 41%, worst drawdown −8.3R), but fragile: only this swing size held up. COT shown for information (it didn't help AB=CD).
+        Never coincided with a COT retest. Logged to the Journal so the live result decides.
+      </div>
+      {rows.length
+        ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 12 }}>{rows.map((a) => <AbcdCard key={`${a.pair}|${a.c.date}`} a={a} />)}</div>
+        : <EmptyState text="No AB=CD waiting at D." small />}
+    </>
+  );
+}
+
+function AbcdCard({ a }: { a: AbcdSetup }) {
+  const long = a.side === "long";
+  const R = Math.abs(a.entry - a.stop), tR = Math.abs(a.target - a.entry) / R;
+  return (
+    <div style={{ border: "1px dashed var(--border-subtle)", borderRadius: 12, padding: 14, background: "var(--surface-1)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <span style={{ fontWeight: 600, fontSize: 16 }}>{a.pair}</span>
+        <span style={{ ...mono, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: "1px solid var(--amber)", color: "var(--amber)" }}>PAPER · BC/AB {a.retrace.toFixed(3)}</span>
+      </div>
+      <div style={{ ...mono, fontSize: 11, marginTop: 6, color: long ? "var(--green)" : "var(--red)" }}>
+        {long ? "BUY" : "SELL"} {a.pair} at D · {a.state === "filled" ? "D reached on the last bar" : `limit live ${a.barsLeft} more bars`}
+      </div>
+      <AbcdChart a={a} />
+      <div style={{ ...mono, fontSize: 10.5, marginTop: 10, padding: "8px 10px", borderRadius: 9, border: "1px solid var(--border-subtle)", lineHeight: 1.7 }}>
+        <div style={{ color: "var(--text-3)", fontSize: 9.5 }}>PAPER ORDER · pattern known {a.knownDate}</div>
+        <div><b>1. {long ? "BUY" : "SELL"} LIMIT</b> at D {fmt(a.entry)}{a.state === "armed" ? ` · cancel if price breaks C (${fmt(a.c.price)})` : ""}</div>
+        <div><b style={{ color: "var(--red)" }}>2. STOP</b> at {fmt(a.stop)} (1.272 extension)</div>
+        <div><b style={{ color: "var(--green)" }}>3. TARGET</b> at {fmt(a.target)} (0.618 of CD, +{tR.toFixed(1)}R) · no trail</div>
+        <div style={{ color: "var(--text-3)" }}>A {fmt(a.a.price)} ({a.a.date}) · B {fmt(a.b.price)} ({a.b.date}) · C {fmt(a.c.price)} ({a.c.date})</div>
+      </div>
+      {a.positioning && (
+        <div style={{ ...mono, fontSize: 10.5, marginTop: 8, color: "var(--text-3)" }}>
+          COT (info only): {a.positioning.sell.ccy} you sell · {a.positioning.sell.verdict} · z {a.positioning.sell.z == null ? "—" : a.positioning.sell.z.toFixed(2)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Candles with the A-B-C swing, the projected C-D leg, and entry / stop / target. */
+function AbcdChart({ a }: { a: AbcdSetup }) {
+  const bars = a.bars.slice(-120);
+  const W = 360, PH = 150, FUT = 50, plotW = W - 70, barsW = plotW - FUT;
+  const lvls = [a.entry, a.stop, a.target, a.a.price, a.b.price, a.c.price];
+  const pMin = Math.min(...bars.map((b) => b[2]), ...lvls), pMax = Math.max(...bars.map((b) => b[1]), ...lvls);
+  const pad = (pMax - pMin) * 0.05, lo = pMin - pad, span = pMax - pMin + 2 * pad;
+  const xw = barsW / bars.length, cw = Math.max(1, Math.min(4, xw * 0.62));
+  const x = (i: number) => i * xw + xw / 2, y = (p: number) => (1 - (p - lo) / span) * PH;
+  const xi = (d: string) => { const i = bars.findIndex((b) => b[4] >= d); return i < 0 ? 0 : x(i); };
+  const pts = [
+    { k: "A", x: xi(a.a.date), p: a.a.price }, { k: "B", x: xi(a.b.date), p: a.b.price },
+    { k: "C", x: xi(a.c.date), p: a.c.price }, { k: "D", x: barsW + FUT / 2, p: a.entry },
+  ];
+  const levels = [
+    { k: "D", p: a.entry, c: "var(--accent)", d: "" },
+    { k: "stop", p: a.stop, c: "var(--red)", d: "4 2" },
+    { k: "target", p: a.target, c: "var(--green)", d: "1.5 2.5" },
+  ];
+  return (
+    <svg viewBox={`0 0 ${W} ${PH}`} style={{ width: "100%", display: "block", marginTop: 8 }} role="img"
+      aria-label={`${a.pair} AB=CD: D ${fmt(a.entry)}, stop ${fmt(a.stop)}, target ${fmt(a.target)}`}>
+      {bars.map((b, i) => {
+        const [o, h, l, c] = b, col = c >= o ? "var(--green)" : "var(--red)";
+        return (
+          <g key={i} opacity={0.75}>
+            <line x1={x(i)} y1={y(h)} x2={x(i)} y2={y(l)} stroke={col} strokeWidth={0.7} />
+            <rect x={x(i) - cw / 2} y={y(Math.max(o, c))} width={cw} height={Math.max(0.8, Math.abs(y(o) - y(c)))} fill={col} />
+          </g>
+        );
+      })}
+      <polyline points={pts.map((p) => `${p.x},${y(p.p)}`).join(" ")} fill="none" stroke="var(--accent)" strokeWidth={1.4} strokeDasharray="0" opacity={0.9} />
+      {pts.map((p) => (
+        <g key={p.k}>
+          <circle cx={p.x} cy={y(p.p)} r={2.5} fill="var(--accent)" />
+          <text x={p.x} y={y(p.p) + (p.k === "B" || p.k === "D" ? (a.side === "long" ? 12 : -6) : (a.side === "long" ? -6 : 12))} textAnchor="middle" fontSize={10} fontWeight={600} fill="var(--text-1)" style={mono}>{p.k}</text>
+        </g>
+      ))}
+      {levels.map((l) => (
+        <g key={l.k}>
+          <line x1={0} x2={plotW} y1={y(l.p)} y2={y(l.p)} stroke={l.c} strokeWidth={1} strokeDasharray={l.d} />
+          <text x={plotW + 4} y={y(l.p) + 3.5} fontSize={10} fill={l.c} style={mono}>{l.k} {fmt(l.p)}</text>
+        </g>
+      ))}
+    </svg>
   );
 }
 

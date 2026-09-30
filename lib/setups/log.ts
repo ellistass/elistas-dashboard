@@ -13,6 +13,7 @@
 import { db } from "@/lib/db";
 import type { InstrumentSetup, SetupScan } from "./scan";
 import type { DriverScan, DriverSetup } from "./forexDriver";
+import type { AbcdSetup } from "./abcd";
 import type { ScanKey } from "./scanCache";
 
 /** A setup that drops off and comes back within this many days is the same row. */
@@ -39,6 +40,15 @@ const fromForex = (s: DriverSetup): LogEntry => ({
   barDate: s.lastBarDate, snapshot: s,
 });
 
+/** AB=CD (paper): logged under forex with entry "abcd" and grade "paper"; the A–C swing is its band. */
+const fromAbcd = (s: AbcdSetup): LogEntry => ({
+  instrument: s.pair, side: s.side, entry: "abcd", grade: "paper", state: s.state,
+  rangeLo: Math.min(s.a.price, s.b.price, s.c.price), rangeHi: Math.max(s.a.price, s.b.price, s.c.price),
+  rangeStart: s.a.date, signalDate: s.knownDate,
+  entryPrice: s.entry, stop: s.stop, breakevenAt: s.entry + (s.entry - s.stop), target: s.target,
+  barDate: s.lastBarDate, snapshot: s,
+});
+
 type Band = { rangeLo: number; rangeHi: number };
 const overlaps = (a: Band, b: Band) =>
   Math.min(a.rangeHi, b.rangeHi) - Math.max(a.rangeLo, b.rangeLo) >
@@ -49,7 +59,10 @@ export async function logScan(key: ScanKey, payload: unknown): Promise<{ added: 
     key === "futures"
       ? ((payload as SetupScan).setups ?? []).map(fromFutures)
       // "watch" = pressing the edge, not broken yet — not a setup, so not logged.
-      : ((payload as DriverScan).setups ?? []).filter((s) => s.state !== "watch").map(fromForex);
+      : [
+          ...((payload as DriverScan).setups ?? []).filter((s) => s.state !== "watch").map(fromForex),
+          ...((payload as DriverScan).abcd ?? []).map(fromAbcd),
+        ];
 
   // Instruments whose fetch failed tonight: their setups are unknown, not gone.
   const failed = new Set<string>(

@@ -21,6 +21,8 @@ export interface SimInput {
   firstBarDate: string;       // the last completed bar when the setup was first seen
   goodFor: number;            // bars a limit stays valid
   maxHold?: number;
+  /** false = no breakeven/trail: stop and cap only (AB=CD, as tested). Default true. */
+  trail?: boolean;
 }
 
 export type SimOutcome = "win" | "loss" | "be" | "expired" | "open";
@@ -97,7 +99,7 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
     held++;
     if (held >= maxHold) return done(b.date, b.c, "time");
     // Adjusted once a day after the close.
-    if (r(best) >= 1) {
+    if (p.trail !== false && r(best) >= 1) {
       const trail = best - d * R;
       stop = d > 0 ? Math.max(stop, trail) : Math.min(stop, trail);
     }

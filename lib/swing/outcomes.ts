@@ -17,6 +17,13 @@ const L = () => (db as any).setupLog;
 /** The simulation input from a frozen snapshot (futures InstrumentSetup or forex DriverSetup). */
 export function simInputFor(row: any): SimInput | null {
   const s = row.snapshot ?? {};
+  if (row.market === "forex" && row.entry === "abcd") {
+    return {
+      side: row.side, entryKind: row.firstState === "filled" ? "filled" : "limit",
+      entryPrice: s.entry, stop: s.stop, cap: s.target, firstBarDate: row.firstBarDate,
+      goodFor: s.barsLeft ?? 5, trail: false,
+    };
+  }
   if (row.market === "forex") {
     const o = s.order;
     if (!o) return null;
@@ -37,8 +44,8 @@ export function simInputFor(row: any): SimInput | null {
 export function tagsFor(row: any) {
   const s = row.snapshot ?? {};
   return {
-    context: s.context?.daily ?? (row.market === "forex" ? "reversal" : null),   // forex setups are reversal breaks by construction
-    cot: s.positioning?.sell?.verdict ?? null,
+    context: s.context?.daily ?? (row.market === "forex" && row.entry !== "abcd" ? "reversal" : null),   // forex setups are reversal breaks by construction
+    cot: row.entry === "abcd" ? null : s.positioning?.sell?.verdict ?? null,   // AB=CD: COT is info only, never a group
     quietRetest: typeof s.retest?.low === "boolean" ? s.retest.low : null,
   };
 }
@@ -91,7 +98,9 @@ const byExit = (a: any, b: any) => String(a.exitDate).localeCompare(String(b.exi
 
 /** Groups from the spec's Journal table. Only closed setups count; expired ones never filled. */
 export function resultsTable(rows: any[], taken: any[]): ResultRow[] {
-  const done = rows.filter(closed).sort(byExit);
+  const all = rows.filter(closed).sort(byExit);
+  const done = all.filter((r) => r.entry !== "abcd");                // AB=CD is paper: its own row, kept out of the rest
+  const paper = stats(all.filter((r) => r.entry === "abcd").map((r) => r.resultR));
   const g = (pred: (r: any) => boolean) => stats(done.filter(pred).map((r) => r.resultR));
   const cot = (r: any) => r.cot;
   const quiet = (r: any) => r.quietRetest === true;
@@ -104,6 +113,7 @@ export function resultsTable(rows: any[], taken: any[]): ResultRow[] {
     { group: "Forex: COT trapped", expectation: "+0.34 to +0.48R", expLo: 0.34, expHi: 0.48, stats: g((r) => r.market === "forex" && cot(r) === "trapped") },
     { group: "Forex: COT late", expectation: "−0.16 to −0.39R", expLo: -0.39, expHi: -0.16, stats: g((r) => r.market === "forex" && cot(r) === "late") },
     { group: "Quiet retest", expectation: "+0.28 to +0.48R", expLo: 0.28, expHi: 0.48, stats: g(quiet) },
+    { group: "Forex: AB=CD (paper)", expectation: "+0.32R / +0.34R, win 41%", expLo: 0.25, expHi: 0.4, stats: paper },
     {
       group: "Taken by you", expectation: "—", expLo: null, expHi: null,
       stats: stats(taken.filter((t) => t.status === "closed" && t.resultR != null).sort((a, b) => String(a.exitDate).localeCompare(String(b.exitDate))).map((t) => t.resultR)),
