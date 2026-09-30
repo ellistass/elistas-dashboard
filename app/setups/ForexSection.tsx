@@ -24,7 +24,7 @@ const STATE: Record<DriverSetup["state"], { label: string; icon: JSX.Element; to
   watch: { label: "pressing the edge — no break yet, no order", icon: <Eye size={11} />, tone: "var(--text-3)" },
 };
 
-export default function ForexSection() {
+export default function ForexSection({ view = "retest" }: { view?: "retest" | "abcd" }) {
   const [data, setData] = useState<DriverScan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -48,7 +48,7 @@ export default function ForexSection() {
     <section style={{ marginTop: 32 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderTop: "1px solid var(--border-subtle)", paddingTop: 16 }}>
         <h2 style={{ ...mono, fontSize: 13, display: "flex", gap: 8, alignItems: "center" }}>
-          <Globe size={14} /> FOREX · reversal-break retests
+          <Globe size={14} /> {view === "abcd" ? "FOREX · AB=CD at D" : "FOREX · reversal-break retests"}
           <span style={{ fontSize: 9.5, padding: "1px 7px", borderRadius: 999, border: "1px solid var(--amber)", color: "var(--amber)" }}>FORWARD TEST — paper only</span>
           <span style={{ color: "var(--text-3)", fontSize: 10 }}>
             28 spot pairs · NY-close candles{data?.lastBarDate ? ` · data to ${data.lastBarDate}` : ""}
@@ -67,18 +67,18 @@ export default function ForexSection() {
         </p>
       ) : null}
 
-      {data && <Alerts alerts={data.alerts} />}
+      {data && view === "retest" && <Alerts alerts={data.alerts} />}
       {data?.cotError && (
         <p style={{ ...mono, fontSize: 10, color: "var(--amber)" }}>CFTC positioning unavailable right now ({data.cotError}) — cards show no positioning line.</p>
       )}
 
-      {data && (
+      {data && view === "abcd" && <AbcdSection rows={data.abcd ?? []} />}
+      {data && view === "retest" && (
         <>
           <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>ORDERS · {live.length}</h3>
           {live.length ? <Grid rows={live} /> : <EmptyState text="No reversal breaks waiting for a retest." small />}
           <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>WATCH — PRESSING THE EDGE · {watch.length}</h3>
           {watch.length ? <Grid rows={watch} /> : <EmptyState text="No ranges pressing a reversal edge." small />}
-          <AbcdSection rows={data.abcd ?? []} />
           <ForexRules />
         </>
       )}
@@ -200,7 +200,7 @@ function Card({ s }: { s: DriverSetup }) {
 function AbcdSection({ rows }: { rows: AbcdSetup[] }) {
   return (
     <>
-      <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "28px 0 4px", display: "flex", gap: 8, alignItems: "center" }}>
+      <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 4px", display: "flex", gap: 8, alignItems: "center" }}>
         AB=CD AT D · {rows.length}
         <span style={{ fontSize: 9.5, padding: "1px 7px", borderRadius: 999, border: "1px solid var(--amber)", color: "var(--amber)" }}>PAPER ONLY — not traded</span>
       </h3>

@@ -68,7 +68,7 @@ export function SentIcon({ sent, size = 15 }: { sent: boolean; size?: number }) 
 }
 
 export function CurrencyChips({ currencies, tone }: { currencies: string[]; tone: "green" | "red" }) {
-  const c = tone === "green" ? "#23e0a0" : "#ff5470";
+  const c = tone === "green" ? "var(--green)" : "var(--red)";
   const bg = tone === "green" ? "rgba(35,224,160,0.09)" : "rgba(255,84,112,0.09)";
   const border = tone === "green" ? "rgba(35,224,160,0.22)" : "rgba(255,84,112,0.22)";
   if (!currencies.length) return <span style={{ color: "var(--text-3)" }}>—</span>;

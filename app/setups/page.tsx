@@ -33,7 +33,7 @@ export default function SetupsPage() {
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [market, setMarket] = useState<"futures" | "forex" | "history">("futures");
+  const [market, setMarket] = useState<"futures" | "forex" | "abcd" | "history">("futures");
   const [entry, setEntry] = useState<"all" | "conservative" | "aggressive">("all");
   const [gradeA, setGradeA] = useState(false);
 
@@ -70,13 +70,16 @@ export default function SetupsPage() {
       <div style={{ display: "flex", gap: 8, margin: "8px 0 16px", flexWrap: "wrap" }}>
         <Chip on={market === "futures"} onClick={() => setMarket("futures")}>futures / stocks</Chip>
         <Chip on={market === "forex"} onClick={() => setMarket("forex")}>forex</Chip>
+        <Chip on={market === "abcd"} onClick={() => setMarket("abcd")}>AB=CD (paper)</Chip>
         <Chip on={market === "history"} onClick={() => setMarket("history")}>history</Chip>
       </div>
 
       {market === "history" ? (
         <HistorySection />
       ) : market === "forex" ? (
-        <ForexSection />
+        <ForexSection view="retest" />
+      ) : market === "abcd" ? (
+        <ForexSection view="abcd" />
       ) : (
         <>
           <div style={{ display: "flex", gap: 8, margin: "0 0 16px", flexWrap: "wrap" }}>

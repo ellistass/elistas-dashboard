@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: dark;
   /* ── v2 design tokens (redesign handoff, July 2026) ── */
   --bg-base:        #0a0b0f;
   --bg-sidebar:     #0b0d13;
@@ -43,6 +44,49 @@
   --blue:           #a78bfa;
   --blue-dim:       rgba(167, 139, 250, 0.1);
   --blue-border:    rgba(167, 139, 250, 0.28);
+}
+
+/* ── Light mode: same tokens, darker hues so green/red/amber read on white ── */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-base:        #f4f6fa;
+  --bg-sidebar:     #eceff5;
+  --bg-card:        #ffffff;
+  --bg-card-raised: #ffffff;
+  --bg-card-2:      #eef1f6;
+  --bg-inset:       #f2f4f8;
+  --bg-elevated:    #ffffff;
+  --bg-drawer:      #ffffff;
+  --border:         #d5dae5;
+  --border-subtle:  #e3e7ef;
+  --border-faint:   #edf0f5;
+  --border-strong:  #bfc6d6;
+  --text-1:         #0f1320;
+  --text-body:      #262b3d;
+  --text-2:         #454c63;
+  --text-label:     #525a75;
+  --text-3:         #767e98;
+  --accent:         #0786a6;
+  --accent-on:      #ffffff;
+  --accent-dim:     rgba(7, 134, 166, 0.09);
+  --accent-border:  rgba(7, 134, 166, 0.3);
+  --accent-glow:    0 0 0 transparent;
+  --green:          #07966a;
+  --green-dim:      rgba(7, 150, 106, 0.09);
+  --green-border:   rgba(7, 150, 106, 0.3);
+  --red:            #d42a48;
+  --red-dim:        rgba(212, 42, 72, 0.08);
+  --red-border:     rgba(212, 42, 72, 0.3);
+  --amber:          #b37412;
+  --amber-dim:      rgba(179, 116, 18, 0.1);
+  --amber-border:   rgba(179, 116, 18, 0.3);
+  --purple:         #6d4ce0;
+  --purple-accent:  #5b4bf0;
+  --purple-dim:     rgba(109, 76, 224, 0.08);
+  --purple-border:  rgba(109, 76, 224, 0.3);
+  --blue:           #6d4ce0;
+  --blue-dim:       rgba(109, 76, 224, 0.08);
+  --blue-border:    rgba(109, 76, 224, 0.3);
 }
 
 * { box-sizing: border-box; }

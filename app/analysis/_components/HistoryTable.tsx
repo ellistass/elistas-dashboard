@@ -34,8 +34,8 @@ export default function HistoryTable({ items, selectedId, onSelect }: Props) {
   return (
     <>
       <style>{`
-        .ah-row:hover { background: #12141d !important; }
-        .ah-card:hover { background: #12141d !important; }
+        .ah-row:hover { background: var(--bg-inset) !important; }
+        .ah-card:hover { background: var(--bg-inset) !important; }
         .ah-cards { display: none; }
         @media (max-width: 860px) {
           .ah-table-wrap { display: none; }
@@ -56,7 +56,7 @@ export default function HistoryTable({ items, selectedId, onSelect }: Props) {
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 900 }}>
             <thead>
-              <tr style={{ background: "#0c0e15" }}>
+              <tr style={{ background: "var(--bg-sidebar)" }}>
                 <th style={TH}>Run</th>
                 <th style={TH}>Strongest</th>
                 <th style={TH}>Weakest</th>

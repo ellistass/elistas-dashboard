@@ -55,8 +55,8 @@ type Phase = 'all' | 'phase1' | 'phase2' | 'funded'
 
 const PHASE_TABS: Array<{ v: Phase; label: string; color: string }> = [
   { v: 'all',    label: 'All',      color: 'var(--text-1)' },
-  { v: 'phase1', label: 'Phase 1',  color: '#3ad4ec' },
-  { v: 'phase2', label: 'Phase 2',  color: '#a78bfa' },
+  { v: 'phase1', label: 'Phase 1',  color: 'var(--accent)' },
+  { v: 'phase2', label: 'Phase 2',  color: 'var(--purple)' },
   { v: 'funded', label: 'Funded',   color: 'var(--green)' },
 ]
 

@@ -232,7 +232,7 @@ export function CandleChart({ bars, lines, zones = [], height = 200, marks = [] 
       {labels.map((l, i) => (
         <g key={i}>
           <rect x={cw + 4} y={l.y - 9} width={padR - 6} height={18} rx={4} style={{ fill: tv(l.tone) }} />
-          <text x={cw + 9} y={l.y + 4} fontFamily={MONO} fontSize={11} fontWeight={500} style={{ fill: "#0a0b0f" }}>{px(l.value)}</text>
+          <text x={cw + 9} y={l.y + 4} fontFamily={MONO} fontSize={11} fontWeight={500} style={{ fill: "var(--bg-base)" }}>{px(l.value)}</text>
         </g>
       ))}
       <text x={0} y={H - 4} fontFamily={MONO} fontSize={11} style={{ fill: "var(--text-3)" }}>{bars[0][0].slice(5)}</text>

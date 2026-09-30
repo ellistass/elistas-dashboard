@@ -21,12 +21,12 @@ const EMPTY: ModelStats = {
 const MODEL_META: Record<string, { tag: string; accent: string; chipBg: string; chipBorder: string; bg: string; border: string; Glyph: typeof TrendingUp }> = {
   A: {
     tag: 'Spring off session low', Glyph: TrendingUp,
-    accent: '#23e0a0', chipBg: 'rgba(35,224,160,0.12)', chipBorder: 'rgba(35,224,160,0.35)',
+    accent: 'var(--green)', chipBg: 'rgba(35,224,160,0.12)', chipBorder: 'rgba(35,224,160,0.35)',
     bg: 'rgba(35,224,160,0.04)', border: 'rgba(35,224,160,0.22)',
   },
   B: {
     tag: 'Fade the stop hunt', Glyph: Waves,
-    accent: '#f6b73c', chipBg: 'rgba(246,183,60,0.12)', chipBorder: 'rgba(246,183,60,0.35)',
+    accent: 'var(--amber)', chipBg: 'rgba(246,183,60,0.12)', chipBorder: 'rgba(246,183,60,0.35)',
     bg: 'rgba(246,183,60,0.04)', border: 'rgba(246,183,60,0.22)',
   },
 }

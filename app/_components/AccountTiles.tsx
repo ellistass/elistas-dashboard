@@ -44,8 +44,8 @@ interface AccountTile {
 interface Props { accounts: AccountTile[] }
 
 const STATUS_STYLES: Record<string, { bg: string; fg: string; border: string }> = {
-  Phase1:   { bg: 'rgba(58,212,236,0.12)',  fg: '#3ad4ec', border: 'rgba(58,212,236,0.28)' },
-  Phase2:   { bg: 'rgba(167,139,250,0.12)', fg: '#a78bfa', border: 'rgba(167,139,250,0.25)' },
+  Phase1:   { bg: 'rgba(58,212,236,0.12)',  fg: 'var(--accent)', border: 'rgba(58,212,236,0.28)' },
+  Phase2:   { bg: 'rgba(167,139,250,0.12)', fg: 'var(--purple)', border: 'rgba(167,139,250,0.25)' },
   Funded:   { bg: 'var(--green-dim)',       fg: 'var(--green)',  border: 'var(--green-border)' },
   Live:     { bg: 'var(--green-dim)',       fg: 'var(--green)',  border: 'var(--green-border)' },
   Passed:   { bg: 'var(--green-dim)',       fg: 'var(--green)',  border: 'var(--green-border)' },

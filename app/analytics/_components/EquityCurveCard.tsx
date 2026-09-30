@@ -21,7 +21,7 @@ export function EquityCurveCard({ data }: { data: AnalyticsResponse }) {
             Real {signed(realR, 1)}R
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-label)' }}>
-            <span style={{ width: 14, height: 0, borderTop: '2px dashed #565d78' }} />
+            <span style={{ width: 14, height: 0, borderTop: '2px dashed var(--text-3)' }} />
             If rules followed {signed(discR, 1)}R
           </span>
         </div>
@@ -31,11 +31,11 @@ export function EquityCurveCard({ data }: { data: AnalyticsResponse }) {
           <div style={{ width: '100%', height: 210 }}>
             <ResponsiveContainer width="100%" height={210}>
               <LineChart data={curve} margin={{ top: 10, right: 4, bottom: 2, left: 0 }}>
-                <CartesianGrid horizontal vertical={false} stroke="#161925" />
+                <CartesianGrid horizontal vertical={false} stroke="var(--border-faint)" />
                 <XAxis dataKey="date" hide />
                 <YAxis
                   width={34} axisLine={false} tickLine={false}
-                  tick={{ fontSize: 10, fill: '#565d78', fontFamily: MONO }}
+                  tick={{ fontSize: 10, fill: 'var(--text-3)', fontFamily: MONO }}
                 />
                 <Tooltip
                   contentStyle={{
@@ -47,9 +47,9 @@ export function EquityCurveCard({ data }: { data: AnalyticsResponse }) {
                   formatter={(v: number) => `${signed(v, 2)}R`}
                 />
                 <Line type="monotone" dataKey="real" name="Real"
-                      stroke="#23e0a0" strokeWidth={2} dot={false} />
+                      stroke="var(--green)" strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="disciplined" name="If rules followed"
-                      stroke="#565d78" strokeWidth={1} strokeDasharray="5 5" dot={false} />
+                      stroke="var(--text-3)" strokeWidth={1} strokeDasharray="5 5" dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>

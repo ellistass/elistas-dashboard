@@ -10,11 +10,36 @@ import { useEffect, useState } from 'react'
 import {
   Gauge, Crosshair, CalendarDays, PenLine,
   TrendingUp, Trophy, History as HistoryIcon,
-  Wallet, Database, Pencil, LogOut, Menu, Frame, Target, Briefcase, ShieldCheck, Moon, CalendarRange, BookMarked,
+  Wallet, Database, Pencil, LogOut, Menu, Frame, Target, Briefcase, ShieldCheck, Moon, Sun, CalendarRange, BookMarked,
   type LucideIcon,
 } from 'lucide-react'
 
 interface NavItem { href: string; label: string; icon: LucideIcon; input?: boolean }
+
+/** Light / dark switch. The choice lives in localStorage; layout.tsx applies it before first paint. */
+function ThemeToggle() {
+  const [light, setLight] = useState(false)
+  useEffect(() => { setLight(document.documentElement.dataset.theme === 'light') }, [])
+  const flip = () => {
+    const next = !light
+    setLight(next)
+    if (next) document.documentElement.dataset.theme = 'light'
+    else delete document.documentElement.dataset.theme
+    try { localStorage.setItem('theme', next ? 'light' : 'dark') } catch { /* private mode: session only */ }
+  }
+  return (
+    <button onClick={flip} aria-label={light ? 'Switch to dark mode' : 'Switch to light mode'} style={{
+      width: '100%', padding: '7px 10px', fontSize: 11, marginBottom: 6,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+      background: 'transparent', color: 'var(--text-2)',
+      border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer',
+      fontFamily: 'Sora, sans-serif',
+    }}>
+      {light ? <Moon size={12} strokeWidth={2} /> : <Sun size={12} strokeWidth={2} />}
+      {light ? 'Dark mode' : 'Light mode'}
+    </button>
+  )
+}
 interface NavGroup { label: string; items: NavItem[] }
 
 // Swing trading restructure (spec: "Elistas Dashboard — Swing Trading Spec").
@@ -139,6 +164,7 @@ export function Sidebar() {
                title={session.user.email ?? undefined}>
             {session.user.email}
           </div>
+          <ThemeToggle />
           <button onClick={() => signOut({ callbackUrl: '/login' })} style={{
             width: '100%', padding: '7px 10px', fontSize: 11,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,

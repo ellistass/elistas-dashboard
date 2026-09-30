@@ -412,7 +412,7 @@ export default function DetailDrawer({
                     <pre
                       style={{
                         margin: 0,
-                        background: "#0a0c12",
+                        background: "var(--bg-inset)",
                         border: "1px solid var(--bg-elevated)",
                         borderRadius: 10,
                         padding: 15,
@@ -445,7 +445,7 @@ export default function DetailDrawer({
             gap: 10,
             padding: "16px 22px",
             borderTop: "1px solid var(--border-subtle)",
-            background: "#0b0d13",
+            background: "var(--bg-sidebar)",
           }}
         >
           <button
@@ -514,7 +514,7 @@ function StrengthCol({
   rows: { cur: string; score: number }[];
   max: number;
 }) {
-  const c = tone === "green" ? "#23e0a0" : "#ff5470";
+  const c = tone === "green" ? "var(--green)" : "var(--red)";
   const border = tone === "green" ? "rgba(35,224,160,0.22)" : "rgba(255,84,112,0.22)";
   const bg = tone === "green" ? "rgba(35,224,160,0.04)" : "rgba(255,84,112,0.04)";
   return (

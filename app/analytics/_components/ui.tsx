@@ -43,10 +43,10 @@ export function SectionCard({ children, style, className }: { children: ReactNod
 }
 
 export const GRADE_META: Record<string, { c: string; bg: string; b: string }> = {
-  'A+':   { c: '#23e0a0', bg: 'rgba(35,224,160,0.1)', b: 'rgba(35,224,160,0.28)' },
-  'B':    { c: '#f6b73c', bg: 'rgba(246,183,60,0.1)', b: 'rgba(246,183,60,0.28)' },
-  'C':    { c: '#8b93b0', bg: '#1e2130',              b: '#333850' },
-  'Skip': { c: '#ff5470', bg: 'rgba(255,84,112,0.1)', b: 'rgba(255,84,112,0.28)' },
+  'A+':   { c: 'var(--green)', bg: 'rgba(35,224,160,0.1)', b: 'rgba(35,224,160,0.28)' },
+  'B':    { c: 'var(--amber)', bg: 'rgba(246,183,60,0.1)', b: 'rgba(246,183,60,0.28)' },
+  'C':    { c: 'var(--text-label)', bg: 'var(--bg-elevated)', b: 'var(--border-strong)' },
+  'Skip': { c: 'var(--red)', bg: 'rgba(255,84,112,0.1)', b: 'rgba(255,84,112,0.28)' },
 }
 
 /** Small grade pill — DM Mono 12px, 6px radius. */
