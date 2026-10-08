@@ -16,6 +16,14 @@
     {
       "path": "/api/cron/setup-log",
       "schedule": "30 0 * * 2-6"
+    },
+    {
+      "path": "/api/cron/setup-alert?run=1",
+      "schedule": "45 21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/setup-alert?run=2",
+      "schedule": "45 22 * * 1-5"
     }
   ]
 }

@@ -6,8 +6,10 @@
 // instance, which is why the page used to rescan on almost every visit.
 //
 // When is a new bar complete?
-//   futures & stocks: completedBars() drops bars dated today in UTC, so the
-//                     scan's input changes at 00:00 UTC (01:00 Lagos).
+//   futures & stocks: completedBars() counts a session finished 15 min after the
+//                     17:00 New York close, so the input changes at 17:15 NY
+//                     (22:15 Lagos in US summer, 23:15 in winter) — before the
+//                     18:00 NY futures reopen an aggressive entry is placed at.
 //   forex:            our NY-close candles roll at 17:00 New York (21:00 or
 //                     22:00 UTC depending on US daylight saving); we cut at 17:30.
 // A stored scan made BEFORE the latest cutoff is stale; after it, it's current.
@@ -29,15 +31,17 @@ function nyOffsetMin(d: Date): number {
 
 /** The most recent moment the scan's input could have changed. */
 export function lastCutoff(key: ScanKey, now = new Date()): Date {
-  if (key === "futures") {
-    const c = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 5));   // 00:05 UTC
-    return c <= now ? c : new Date(c.getTime() - 864e5);
-  }
-  // forex: 17:30 New York, DST-aware — 30 min after the close so Yahoo's final
-  // hourly bar (16:00–17:00) is in before the day counts as complete
+  // futures & stocks: 17:15 New York (matches completedBars in scan.ts).
+  // forex: 17:30 New York — 30 min after the close so Yahoo's final hourly bar
+  // (16:00–17:00) is in before the day counts as complete.
+  return key === "futures" ? nyCutoff(now, 17, 15) : nyCutoff(now, 17, 30);
+}
+
+/** The most recent hh:mm New York wall-clock time at or before `now` (DST-aware). */
+export function nyCutoff(now: Date, h: number, m: number): Date {
   const off = nyOffsetMin(now);
   const nyNow = new Date(now.getTime() - off * 60000);                  // NY wall clock expressed as UTC
-  let c = Date.UTC(nyNow.getUTCFullYear(), nyNow.getUTCMonth(), nyNow.getUTCDate(), 17, 30) + off * 60000;
+  let c = Date.UTC(nyNow.getUTCFullYear(), nyNow.getUTCMonth(), nyNow.getUTCDate(), h, m) + off * 60000;
   if (c > now.getTime()) c -= 864e5;
   return new Date(c);
 }

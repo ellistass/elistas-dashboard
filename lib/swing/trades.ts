@@ -8,10 +8,11 @@
 
 import { db } from "@/lib/db";
 import {
-  DEFAULT_ACCOUNTS, MAX_HOLD, addDays, fmtPx, levelMismatch, specFor, trackTrade,
+  DEFAULT_ACCOUNTS, MAX_HOLD, addDays, fmtPx, levelMismatch, specClass, specFor, trackTrade,
   type InstrumentSpecCfg, type StopMove, type SwingAccountCfg, type Side, type Tracked,
 } from "./core";
 import { fetchFeedBars } from "./feeds";
+import { INDEX_TRAIL_ATR } from "./vol";
 import { logBreak } from "./discipline";
 
 const T = () => (db as any).swingTrade;
@@ -65,6 +66,7 @@ export const mismatch = (t: any) =>
 export const trackInput = (t: any) => ({
   side: t.side as Side, entryDate: t.entryDate, entryPrice: t.entryPrice, initialStop: t.initialStop,
   currentStop: t.currentStop, capPrice: t.capPrice, brokerBest: t.brokerBest, stopMoves: (t.stopMoves ?? []) as StopMove[],
+  trailAtr: specClass(t.instrument) === "index" ? INDEX_TRAIL_ATR : null,
 });
 
 const trackedFields = (k: Tracked) => ({

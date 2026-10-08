@@ -23,6 +23,8 @@ export interface SimInput {
   maxHold?: number;
   /** false = no breakeven/trail: stop and cap only (AB=CD, as tested). Default true. */
   trail?: boolean;
+  /** Trail distance after +1R as a multiple of ATR(20); absent = 1R. Indices use 2. */
+  trailAtr?: number | null;
 }
 
 export type SimOutcome = "win" | "loss" | "be" | "expired" | "open";
@@ -100,7 +102,12 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
     if (held >= maxHold) return done(b.date, b.c, "time");
     // Adjusted once a day after the close.
     if (p.trail !== false && r(best) >= 1) {
-      const trail = best - d * R;
+      let gap = R;
+      if (p.trailAtr) {
+        const k = bars.indexOf(b);
+        if (k > 20) { let a = 0; for (let j = k - 19; j <= k; j++) a += Math.max(bars[j].h, bars[j - 1].c) - Math.min(bars[j].l, bars[j - 1].c); gap = p.trailAtr * (a / 20); }
+      }
+      const trail = best - d * gap;
       stop = d > 0 ? Math.max(stop, trail) : Math.min(stop, trail);
     }
   }

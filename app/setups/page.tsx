@@ -16,6 +16,7 @@ import ForexSection from "./ForexSection";
 import HistorySection from "./HistorySection";
 import TakeBar, { type TakeCard } from "./TakeBar";
 import RiskBlock from "./RiskBlock";
+import VolLine from "./VolLine";
 
 type Row = InstrumentSetup & { yourRead: string | null; readAgrees: boolean | null; deskUnread: boolean };
 interface Payload { at: string; setups: Row[]; scanned: number; errors: { instrument: string; error: string }[] }
@@ -158,6 +159,13 @@ function Card({ s }: { s: Row }) {
           ⚠ volume unavailable on the signal bar (futures contract roll or a bad print) — check volume on the live contract before trading
         </div>
       )}
+      {s.feedGap && (
+        <div style={{ ...mono, fontSize: 10, color: s.entry === "aggressive" ? "var(--red)" : "var(--amber)", marginTop: 4 }}>
+          {s.entry === "aggressive"
+            ? `✕ stale: Yahoo has no bar for ${s.feedGap}, so the next open has already passed — don't enter (or a market holiday: check)`
+            : `⚠ Yahoo has no bar for ${s.feedGap} (bad print or holiday) — check the live chart before placing`}
+        </div>
+      )}
       <div style={{ ...mono, fontSize: 10, color: st.tone, marginTop: 4, display: "flex", gap: 5, alignItems: "center" }}>
         {st.icon} {st.label}{s.barsLeft != null && s.state !== "filled" ? ` · ${s.barsLeft} bars left` : ""}
       </div>
@@ -177,9 +185,10 @@ function Card({ s }: { s: Row }) {
         <span style={{ color: "var(--text-3)" }}>entry</span><span>{s.entry === "aggressive" ? `next open (ref ${fmt(s.entryPrice)})` : fmt(s.entryPrice)}</span>
         <span style={{ color: "var(--text-3)" }}>stop</span><span>{fmt(s.stop)}</span>
         <span style={{ color: "var(--text-3)" }}>+1R → breakeven</span><span>{fmt(s.breakevenAt)}</span>
-        <span style={{ color: "var(--text-3)" }}>then</span><span>trail 1R behind the best price</span>
+        <span style={{ color: "var(--text-3)" }}>then</span><span>{s.trailAtr ? `trail ${s.trailAtr} × ATR behind the best price` : "trail 1R behind the best price"}</span>
         <span style={{ color: "var(--text-3)" }}>cap</span><span>{fmt(s.target)}</span>
       </div>
+      <VolLine v={s.vol} fmt={fmt} trailAtr={s.trailAtr} />
       <RiskBlock instrument={tc.instrument} executeSymbol={tc.executeSymbol} side={tc.side} grade={tc.grade}
         entry={tc.entry} stop={tc.stop} withTrend={s.context.daily === "with-trend"} />
       {s.inverted && (
@@ -374,7 +383,7 @@ function Rules() {
         <div style={{ lineHeight: 1.7, marginTop: 6 }}>
           <b>Conservative</b> — close beyond the range within 3 bars on 1.0–2.0× range volume · limit at the edge · cancel on a gap through it · stop 1.5 tol inside · valid 20 bars. Grade A = the range reversed the prior move and the weekly isn't against, OR the retest came in quiet (≤ 0.8× range volume, read at the fill day's close). Place the order after the break day closes (futures reopen the same evening). Fair-fill replay: all +0.12R · grade A +0.34R · quiet retest +0.48R · quiet retest on a reversal +0.73R. Grade B on its own earns ~0 — take A.<br />
           <b>Aggressive</b> — spring/upthrust once the range is established · test volume ≤ 1.0× · pierce ≤ 10% of the band · monthly not against · stop ¼ tol past the wick · enter at the NEXT OPEN (US stocks: the cash open), skip if it opens past the stop. Grade A = weekly with. Replay +0.57R.<br />
-          <b>Both</b> — stop to breakeven at +1R, then trail 1R behind the best price. Cap at far edge + one band.<br />
+          <b>Both</b> — stop to breakeven at +1R, then trail 1R behind the best price (indices: from +1R, trail 2 × ATR(20) behind the best instead — tested +0.64R / +0.96R vs +0.37 / +0.42). Cap at far edge + one band.<br />
           Not advice from the engine: the read is yours. Daily bars, no costs; results are averages across many trades.
         </div>
       )}

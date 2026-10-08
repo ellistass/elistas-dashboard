@@ -2,7 +2,7 @@
 // day's setups, then refresh the open swing trades from Yahoo.
 //
 // Schedule: 00:30 UTC Tue–Sat (01:30 Lagos), after both cutoffs in scanCache:
-// futures/stocks 00:05 UTC, forex 17:05 New York. If the page was already
+// futures/stocks 17:15 New York, forex 17:30 New York. If the page was already
 // opened after the cutoff the stored scan is current and was logged then, so
 // this does nothing; otherwise it computes, stores and logs.
 

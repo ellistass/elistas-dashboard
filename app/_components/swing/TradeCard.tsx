@@ -7,6 +7,7 @@ import { useState } from "react";
 import {
   kit as s, Btn, CandleChart, Do, Legend, SideTag, Tag, px, rr, usd, type Candle, type ChartLine,
 } from "./kit";
+import { specClass } from "@/lib/swing/core";
 
 export interface Action { tradeId: string; instrument: string; kind: string; text: string; urgent: boolean }
 
@@ -27,6 +28,8 @@ export default function TradeCard({ t, actions, patch, editable = false, onDelet
   const by = (k: string) => actions.find((a) => a.kind === k);
   const strip = (x?: Action) => x?.text.replace(`${t.instrument}: `, "") ?? "";
   let instr: { what: string; why?: string; tone: "info" | "warn" | "bad" };
+  // Indices trail 2 × ATR(20) after +1R (tested +0.64R / +0.96R vs 1R +0.37 / +0.42); everything else 1R.
+  const trailTxt = specClass(t.instrument) === "index" ? "2 × ATR" : "1R";
   if (t.stopHitDate) instr = { what: `Your stop ${px(t.stopHitPrice ?? t.currentStop)} traded on ${t.stopHitDate}`, why: "Record the exit with your broker's fill.", tone: "bad" };
   else if (t.capHitDate) instr = { what: `Cap ${px(t.capPrice)} reached on ${t.capHitDate}`, why: "Record the exit at the cap.", tone: "info" };
   else if (by("event-exit")) instr = { what: strip(by("event-exit")), why: "Planned exit before the event — the only manual close besides effort/result.", tone: "warn" };
@@ -34,11 +37,11 @@ export default function TradeCard({ t, actions, patch, editable = false, onDelet
     what: `After the close, move your stop to ${px(t.suggestedStop)}`,
     why: t.touched1R && Math.abs(t.suggestedStop - t.entryPrice) <= R * 0.01
       ? "+1R touched: stop to breakeven. From here it trails 1R behind the best price."
-      : `New ${long ? "high" : "low"} (${px(t.bestPrice)}). Rule: trail 1R ${long ? "below" : "above"} the best. Only moves in your favour.`,
+      : `New ${long ? "high" : "low"} (${px(t.bestPrice)}). Rule: trail ${trailTxt} ${long ? "below" : "above"} the best. Only moves in your favour.`,
     tone: "info",
   };
   else if (by("time-exit")) instr = { what: strip(by("time-exit")), tone: "warn" };
-  else instr = { what: `Nothing to do tonight — stop stays at ${px(t.currentStop)}`, why: t.touched1R ? "Trailing 1R behind the best price." : `Breakeven once price reaches ${px(t.entryPrice + d * R)} (+1R).`, tone: "info" };
+  else instr = { what: `Nothing to do tonight — stop stays at ${px(t.currentStop)}`, why: t.touched1R ? `Trailing ${trailTxt} behind the best price.` : `Breakeven once price reaches ${px(t.entryPrice + d * R)} (+1R).`, tone: "info" };
   const mismatch = by("mismatch");
 
   const lines: ChartLine[] = [

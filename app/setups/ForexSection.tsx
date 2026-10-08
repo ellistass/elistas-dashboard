@@ -14,6 +14,7 @@ import type { AbcdSetup } from "@/lib/setups/abcd";
 import SetupChartFull from "./SetupChartFull";
 import TakeBar from "./TakeBar";
 import RiskBlock from "./RiskBlock";
+import VolLine from "./VolLine";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const fmt = (x: number) => (Math.abs(x) >= 20 ? x.toFixed(3) : x.toFixed(5));
@@ -177,6 +178,7 @@ function Card({ s }: { s: DriverSetup }) {
         )}
       </div>
 
+      <VolLine v={s.vol} fmt={fmt} />
       {!s.skip && <RiskBlock instrument={s.pair} executeSymbol={null} side={s.side} grade={s.grade} entry={s.order.entry} stop={s.order.stopLoss} />}
 
       {s.positioning && <Positioning p={s.positioning} />}

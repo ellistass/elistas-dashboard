@@ -19,7 +19,7 @@ const RULES: [string, string][] = [
   ["Exposure", "Max 3 trades at risk per account; correlated trades count as one"],
   ["Monthly stop", "50k: −$500 (5R). 15k: −$400 (4R). Hit it = done until the 1st"],
   ["House money", "New risk ≤ half the pot (realised profit + locked stops − open risk)"],
-  ["Management", "Stop to breakeven the day +1R is touched; trail 1R behind the best; stops only move in your favour; adjusted once a day after the close"],
+  ["Management", "Stop to breakeven the day +1R is touched; trail 1R behind the best (indices: 2 × ATR); stops only move in your favour; adjusted once a day after the close"],
   ["Exits", "Trail or cap decides; planned event exits (earnings, deliveries) and the David Paul effort/result exit are the only manual closes"],
   ["Size after wins", "Unchanged. One big winner is not a reason to size up"],
 ];

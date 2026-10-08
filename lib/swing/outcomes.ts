@@ -9,7 +9,8 @@ import { instrumentInfo } from "@/lib/wyckoff/basket";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { fetchSpot } from "@/lib/setups/forexDriver";
 import { completedBars } from "@/lib/setups/scan";
-import { addDays, todayUtc, type DayBar } from "./core";
+import { addDays, specClass, todayUtc, type DayBar } from "./core";
+import { INDEX_TRAIL_ATR } from "./vol";
 import { simulate, stats, type GroupStats, type SimInput } from "./simulate";
 
 const L = () => (db as any).setupLog;
@@ -36,6 +37,7 @@ export function simInputFor(row: any): SimInput | null {
   const kind = row.firstState === "filled" ? "filled" : e?.kind === "market-on-open" || row.firstState === "trigger" ? "open" : "limit";
   return {
     side: row.side, entryKind: kind, entryPrice: row.entryPrice, stop: row.stop, cap: row.target ?? null,
+    trailAtr: specClass(row.instrument) === "index" ? INDEX_TRAIL_ATR : null,
     firstBarDate: row.firstBarDate, goodFor: s.barsLeft ?? e?.goodFor ?? 5,
   };
 }

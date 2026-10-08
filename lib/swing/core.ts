@@ -163,6 +163,8 @@ export interface StopMove { date: string; from: number; to: number; byRule: bool
 
 export interface TrackInput {
   side: Side;
+  /** Trail distance after +1R as a multiple of ATR(20); absent = trail 1R. Indices use 2. */
+  trailAtr?: number | null;
   entryDate: string;
   entryPrice: number;
   initialStop: number;
@@ -223,7 +225,14 @@ export function trackTrade(t: TrackInput, bars: DayBar[]): Tracked {
 
   const peakR = R > 0 ? (d * (best - t.entryPrice)) / R : 0;
   const touched1R = peakR >= 1;
-  const ruleStop = touched1R ? best - d * R : t.initialStop;
+  // Indices: trail 2 × ATR(20) behind the best (tested +0.64R / +0.96R vs +0.37 / +0.42); the rest 1R.
+  let gap = R;
+  if (t.trailAtr && bars.length > 21) {
+    const k = bars.length - 1;
+    let a = 0; for (let j = k - 19; j <= k; j++) a += Math.max(bars[j].h, bars[j - 1].c) - Math.min(bars[j].l, bars[j - 1].c);
+    gap = t.trailAtr * (a / 20);
+  }
+  const ruleStop = touched1R ? best - d * gap : t.initialStop;
   const suggestedStop = d > 0 ? Math.max(t.currentStop, ruleStop) : Math.min(t.currentStop, ruleStop);
   const last = after[after.length - 1] ?? null;
   return {

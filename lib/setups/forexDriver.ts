@@ -43,6 +43,7 @@ import { rollMask } from "./roll";
 import { storedVolume, patchVolume } from "@/lib/data/futuresVolume";
 import { fetchCot, positioningRead, type PositioningRead, type CotSeries } from "@/lib/data/cot";
 import { abcdFor, type AbcdSetup } from "./abcd";
+import { volRead, type VolRead } from "@/lib/swing/vol";
 
 export const CCY = ["EUR", "GBP", "AUD", "NZD", "USD", "CAD", "CHF", "JPY"] as const;
 export type Ccy = (typeof CCY)[number];
@@ -75,6 +76,8 @@ export interface DriverSetup {
   /** COT on the SELL leg: the break evening, then each new weekly report up to the
    *  evening before the fill (or today while the limit waits). */
   cotPath: CotStep[];
+  /** How volatile the pair is now — information only (no consistent effect on COT A). */
+  vol: VolRead | null;
   range: { start: string; end: string; lo: number; hi: number; bars: number };
   /** Size of the trend before the range, in ATRs (negative = down). */
   trendAtr: number;
@@ -309,7 +312,7 @@ export function driverSetupFor(pair: string, bars: Bar[], si: StrengthIndex, fv?
   const rebase = (c: Ccy) => si.idx[c].slice(w, t + 1).map((v) => v - si.idx[c][w]);
 
   return {
-    pair, side, state, grade, skip: "COT unavailable, no grade", wyckoffRead, cotPath: [],
+    pair, side, state, grade, skip: "COT unavailable, no grade", wyckoffRead, cotPath: [], vol: volRead(bars, edge, stopLoss),
     range: { start: bars[r.start].date, end: bars[Math.min(r.end, last)].date, lo: r.lo, hi: r.hi, bars: barsLen },   // open range: end = bars.length
     trendAtr,
     breakDate: breakIdx == null ? null : bars[breakIdx].date,
