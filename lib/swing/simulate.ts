@@ -42,6 +42,8 @@ export interface SimResult {
   stopNow?: number | null;
   lastDate?: string | null;
   lastClose?: number | null;
+  /** The stop in force on each bar from the fill on (the trail, step by step). */
+  stops?: { date: string; stop: number }[];
 }
 
 export function simulate(p: SimInput, bars: DayBar[]): SimResult {
@@ -80,16 +82,18 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
 
   // ── Manage ────────────────────────────────────────────────────────────────
   let stop = p.stop, best = fill, held = 0;
+  const path: { date: string; stop: number }[] = [];
   const done = (date: string, px: number, why: SimResult["exitReason"]): SimResult => {
     const res = r(px);
     return {
       outcome: res > 0.05 ? "win" : res < -0.05 ? "loss" : "be",
       fillDate, fillPrice: fill, exitDate: date, exitPrice: px, exitReason: why,
-      resultR: +res.toFixed(3), peakR: +r(best).toFixed(3),
+      resultR: +res.toFixed(3), peakR: +r(best).toFixed(3), stops: path,
     };
   };
   for (let i = manageFrom; i < after.length; i++) {
     const b = after[i];
+    path.push({ date: b.date, stop });
     const isFillBar = i === fillIdx;
     // Stop: a gap through it fills at the open. On the fill bar the open is before the fill, so use the stop.
     if (d > 0 ? b.l <= stop : b.h >= stop) {
@@ -119,7 +123,7 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
   return {
     outcome: "open", fillDate, fillPrice: fill, exitDate: null, exitPrice: null, exitReason: null,
     resultR: last ? +r(last.c).toFixed(3) : 0, peakR: +r(best).toFixed(3),
-    stopNow: stop, lastDate: last?.date ?? null, lastClose: last?.c ?? null,
+    stopNow: stop, lastDate: last?.date ?? null, lastClose: last?.c ?? null, stops: path,
   };
 }
 
