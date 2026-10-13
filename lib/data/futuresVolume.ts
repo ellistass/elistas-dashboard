@@ -28,12 +28,19 @@ export async function collectFuturesVolume(now = new Date()) {
       try {
         const syms = liveContracts(inst.symbol, now, 3);
         const perDay = new Map<string, Record<string, number>>();
+        // Yahoo sometimes repeats the previous session's volume on a contract
+        // (every future on 12 Oct 2026, Columbus Day: prices right, volume = 9 Oct's).
+        // A sum containing a repeat looks plausible and slips past rollMask once
+        // patched in, so such a date is never stored, and is deleted if it was.
+        const copied = new Set<string>();
         for (const s of syms) {
           let bars: Bar[] = [];
           try { bars = await fetchDailyBars(s, "3mo"); } catch { continue; }   // not listed yet / not on Yahoo
-          for (const b of bars) {
+          for (let k = 0; k < bars.length; k++) {
+            const b = bars[k];
             const row = perDay.get(b.date) ?? {};
             row[s] = b.v; perDay.set(b.date, row);
+            if (k > 0 && b.v > 1 && b.v === bars[k - 1].v) copied.add(b.date);
           }
         }
         if (!perDay.size) throw new Error(`no live contracts returned (${syms.join(", ")})`);
@@ -45,9 +52,13 @@ export async function collectFuturesVolume(now = new Date()) {
         const mask = rollMask(cont);
         const contV = new Map(cont.map((b, k) => [b.date, { v: b.v, bad: mask[k] }]));
         for (const [date, contracts] of perDay) {
+          if (date >= now.toISOString().slice(0, 10)) continue;          // today's session isn't final yet
+          if (copied.has(date)) {
+            await (db as any).futuresVolume.deleteMany({ where: { instrument: inst.symbol, date } });
+            continue;
+          }
           const total = Object.values(contracts).reduce((a, v) => a + v, 0);
           const c = contV.get(date);
-          if (date >= now.toISOString().slice(0, 10)) continue;          // today's session isn't final yet
           if (c && !c.bad && total < 0.8 * c.v) continue;             // incomplete sum — keep Yahoo's number
           await (db as any).futuresVolume.upsert({
             where: { instrument_date: { instrument: inst.symbol, date } },
