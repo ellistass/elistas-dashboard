@@ -19,7 +19,7 @@ export interface FilledRow {
   id: string; market: string; instrument: string; executeSymbol: string; inverted: boolean;
   side: string; entry: string; grade: string; status: FilledStatus;
   rangeLo: number; rangeHi: number; rangeStart: string; signalDate: string | null; firstBarDate: string;
-  entryPrice: number; origStop: number; target: number | null;
+  entryPrice: number; origStop: number; breakevenAt: number; target: number | null;
   fillDate: string | null; fillPrice: number | null;
   /** Stop for the next session; stopPrev = what it was before the last close. null = n/a. */
   stopNow: number | null; stopPrev: number | null; stopMoved: boolean; newFill: boolean;
@@ -33,7 +33,6 @@ export interface FilledRow {
 
 export interface FilledChart {
   row: FilledRow;
-  candles: [string, number, number, number, number][];
   /** The stop in force on each bar from the fill on (the trail, step by step). */
   stops: { date: string; stop: number }[];
 }
@@ -58,7 +57,7 @@ function evaluate(row: any, bars: DayBar[], taken: FilledRow["taken"]): { r: Fil
       executeSymbol: inst?.executeSymbol || row.instrument, inverted: inst?.inverted ?? false,
       side: row.side, entry: row.entry, grade: row.grade, status: sim.outcome,
       rangeLo: row.rangeLo, rangeHi: row.rangeHi, rangeStart: row.rangeStart, signalDate: row.signalDate, firstBarDate: row.firstBarDate,
-      entryPrice: input.entryPrice, origStop: input.stop, target: input.cap,
+      entryPrice: input.entryPrice, origStop: input.stop, breakevenAt: row.breakevenAt, target: input.cap,
       fillDate, fillPrice: sim.fillPrice,
       stopNow, stopPrev,
       stopMoved: stopNow != null && stopPrev != null && Math.abs(stopNow - stopPrev) > 1e-9,
@@ -108,7 +107,7 @@ export async function filledSetups(): Promise<{ rows: FilledRow[]; errors: { ins
   return { rows, errors };
 }
 
-/** One setup with its chart: ~10 bars before the range through the exit (+8), capped at 160. */
+/** One setup's stop trail for its chart (the chart loads its own bars, like /setups). */
 export async function filledChart(id: string): Promise<FilledChart | null> {
   const row = await (db as any).setupLog.findUnique({ where: { id } });
   if (!row) return null;
@@ -116,12 +115,5 @@ export async function filledChart(id: string): Promise<FilledChart | null> {
   const takenBy = await takenFor([id]);
   const ev = evaluate(row, bars, takenBy.get(id) ?? null);
   if (!ev) return null;
-  const idx = (date: string) => { const i = bars.findIndex((b) => b.date >= date); return i < 0 ? bars.length - 1 : i; };
-  const end = ev.r.exitDate ? Math.min(bars.length, idx(ev.r.exitDate) + 9) : bars.length;
-  const from = Math.max(0, end - 160, Math.min(idx(row.rangeStart) - 10, end - 40));
-  return {
-    row: ev.r,
-    candles: bars.slice(from, end).map((b) => [b.date, b.o, b.h, b.l, b.c]),
-    stops: ev.sim.stops ?? [],
-  };
+  return { row: ev.r, stops: ev.sim.stops ?? [] };
 }

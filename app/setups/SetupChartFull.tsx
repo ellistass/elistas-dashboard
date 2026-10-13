@@ -35,6 +35,12 @@ export interface PlanProps {
   dataUrl?: string;
   /** Small note under the timeframe buttons (e.g. where the volume comes from). */
   note?: string;
+  /** After the fact (Filled page): how it played out under the rules. */
+  played?: {
+    fillDate: string | null; fillPrice: number | null;
+    exitDate: string | null; exitPrice: number | null; win: boolean | null;
+    stops: { date: string; stop: number }[];
+  };
 }
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
@@ -99,7 +105,9 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan }: {
   const sigIdx = shift(at(plan.signalDate));
   const n = bars.length;
 
-  const levels = [plan.target, plan.breakevenAt, plan.entryPrice, plan.stop].filter((p): p is number => p != null);
+  const pl = plan.played;
+  const levels = [plan.target, plan.breakevenAt, plan.entryPrice, plan.stop, pl?.exitPrice ?? undefined, ...(pl?.stops.map((s) => s.stop) ?? [])]
+    .filter((p): p is number => p != null);
   const pMin = Math.min(...bars.map((b) => b.l), rangeLo, ...levels);
   const pMax = Math.max(...bars.map((b) => b.h), rangeHi, ...levels);
   const pSpan = Math.max(pMax - pMin, 1e-9);
@@ -141,6 +149,17 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan }: {
   ].sort((a, b) => y(a.p) - y(b.p));
   const ly: number[] = [];
   for (const l of lv) { let v = y(l.p) + 4; if (ly.length && v - ly[ly.length - 1] < 14) v = ly[ly.length - 1] + 14; ly.push(Math.min(v, PH - 2)); }
+
+  // Stop trail: one step per bar; on weekly/monthly the last stop in each bar wins.
+  const stopPts = (() => {
+    const byIdx = new Map<number, number>();
+    for (const s of pl?.stops ?? []) { const i = shift(at(s.date)); if (i != null) byIdx.set(i, s.stop); }
+    return [...byIdx].sort((a, b) => a[0] - b[0]);
+  })();
+  const stopPath = stopPts.map(([i, v], k) => `${k ? "L" : "M"}${x(i) - xw / 2} ${y(v)} H${x(i) + xw / 2}`).join(" ");
+  const fillIdx = pl?.fillDate ? shift(at(pl.fillDate)) : null;
+  const exitIdx = pl?.exitDate ? shift(at(pl.exitDate)) : null;
+  const exitCol = pl?.win ? "var(--green)" : pl?.win === false ? "var(--red)" : "var(--text-2)";
 
   const sigLabel = plan.entry === "conservative" ? "B" : plan.long ? "S" : "U";
   const sigTitle = plan.entry === "conservative" ? "the break that qualified" : plan.long ? "spring" : "upthrust";
@@ -196,6 +215,22 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan }: {
           <g>
             <line x1={x(sigIdx)} y1={0} x2={x(sigIdx)} y2={PH} stroke="var(--text-2)" strokeWidth={0.9} strokeDasharray="3 3" opacity={0.6} />
             <Marker x={x(sigIdx)} y={sigLabel === "S" ? y(bars[sigIdx].l) + 13 : y(bars[sigIdx].h) - 7} label={sigLabel} title={sigTitle} />
+          </g>
+        )}
+
+        {/* how it played out (Filled page) */}
+        {stopPath && <path d={stopPath} fill="none" stroke="var(--amber)" strokeWidth={1.8} />}
+        {fillIdx != null && pl?.fillPrice != null && (
+          <g>
+            <circle cx={x(fillIdx)} cy={y(pl.fillPrice)} r={4} fill="var(--accent)" />
+            <text x={x(fillIdx) + 6} y={y(pl.fillPrice) - 6} fontSize={10} fill="var(--accent)" {...mono}>in {fmt(pl.fillPrice)}</text>
+          </g>
+        )}
+        {exitIdx != null && pl?.exitPrice != null && (
+          <g>
+            <line x1={x(exitIdx)} y1={0} x2={x(exitIdx)} y2={PH} stroke={exitCol} strokeWidth={0.9} strokeDasharray="3 3" opacity={0.7} />
+            <circle cx={x(exitIdx)} cy={y(pl.exitPrice)} r={4} fill={exitCol} />
+            <text x={x(exitIdx) + 6} y={y(pl.exitPrice) + 14} fontSize={10} fill={exitCol} {...mono}>out {fmt(pl.exitPrice)}</text>
           </g>
         )}
 

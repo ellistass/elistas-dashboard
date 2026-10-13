@@ -190,15 +190,13 @@ export type Candle = [string, number, number, number, number];
 export interface ChartLine { label: string; value: number; tone: string; dash?: boolean }
 export interface ChartZone { from: number; to: number; tone: string; startIdx?: number }
 
-export function CandleChart({ bars, lines, zones = [], height = 200, marks = [], paths = [] }: {
+export function CandleChart({ bars, lines, zones = [], height = 200, marks = [] }: {
   bars: Candle[]; lines: ChartLine[]; zones?: ChartZone[]; height?: number; marks?: { date: string; label: string; tone: string }[];
-  /** Step lines through a price that changes bar by bar (e.g. a trailing stop). */
-  paths?: { tone: string; points: { date: string; value: number }[] }[];
 }) {
   const [ref, W] = useWidth<HTMLDivElement>(560);
   if (!bars.length) return <div className={s.empty}>no price data yet</div>;
   const H = height, padR = 76, padT = 10, padB = 18, cw = W - padR;
-  const vals = [...lines.map((l) => l.value), ...paths.flatMap((p) => p.points.map((q) => q.value))].filter(Number.isFinite);
+  const vals = lines.map((l) => l.value).filter(Number.isFinite);
   let lo = Math.min(...bars.map((b) => b[3]), ...vals), hi = Math.max(...bars.map((b) => b[2]), ...vals);
   const pad = (hi - lo) * 0.06 || 1; lo -= pad; hi += pad;
   const y = (v: number) => padT + ((hi - v) / (hi - lo)) * (H - padT - padB);
@@ -229,12 +227,6 @@ export function CandleChart({ bars, lines, zones = [], height = 200, marks = [],
         const x = idx * bw + bw / 2;
         return <g key={i}><line x1={x} x2={x} y1={padT} y2={H - padB} strokeDasharray="2 3" style={{ stroke: tv(m.tone) }} />
           <text x={x + 3} y={padT + 8} fontFamily={MONO} fontSize={10.5} style={{ fill: tv(m.tone) }}>{m.label}</text></g>;
-      })}
-      {paths.map((p, i) => {
-        const segs = p.points.map((q) => ({ i: bars.findIndex((b) => b[0] === q.date), v: q.value })).filter((q) => q.i >= 0);
-        if (!segs.length) return null;
-        const d = segs.map((q, k) => `${k ? "L" : "M"}${q.i * bw} ${y(q.v)} H${(q.i + 1) * bw}`).join(" ");
-        return <path key={i} d={d} fill="none" strokeWidth={1.6} style={{ stroke: tv(p.tone) }} />;
       })}
       {lines.map((l, i) => <line key={i} x1={0} x2={cw} y1={y(l.value)} y2={y(l.value)} strokeWidth={1.3} strokeDasharray={l.dash ? "4 3" : undefined} style={{ stroke: tv(l.tone) }} />)}
       {labels.map((l, i) => (
