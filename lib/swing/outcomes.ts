@@ -52,7 +52,7 @@ export function tagsFor(row: any) {
   };
 }
 
-async function barsFor(market: string, instrument: string): Promise<DayBar[]> {
+export async function barsFor(market: string, instrument: string): Promise<DayBar[]> {
   if (market === "forex") return fetchSpot(instrument);
   const inst = instrumentInfo(instrument);
   if (!inst) throw new Error(`${instrument} is not in the basket`);

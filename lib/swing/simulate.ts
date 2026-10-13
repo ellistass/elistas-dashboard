@@ -38,6 +38,10 @@ export interface SimResult {
   exitReason: "stop" | "trail" | "cap" | "time" | null;
   resultR: number | null;     // mark-to-market for "open"
   peakR: number | null;
+  /** Open only: the stop in force for the NEXT session (after the last close's adjustment). */
+  stopNow?: number | null;
+  lastDate?: string | null;
+  lastClose?: number | null;
 }
 
 export function simulate(p: SimInput, bars: DayBar[]): SimResult {
@@ -115,6 +119,7 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
   return {
     outcome: "open", fillDate, fillPrice: fill, exitDate: null, exitPrice: null, exitReason: null,
     resultR: last ? +r(last.c).toFixed(3) : 0, peakR: +r(best).toFixed(3),
+    stopNow: stop, lastDate: last?.date ?? null, lastClose: last?.c ?? null,
   };
 }
 

@@ -8,7 +8,7 @@ import { usePathname } from 'next/navigation'
 import { signOut, useSession } from 'next-auth/react'
 import { useEffect, useState } from 'react'
 import {
-  Gauge, Crosshair, CalendarDays, PenLine,
+  ListChecks, Gauge, Crosshair, CalendarDays, PenLine,
   TrendingUp, Trophy, History as HistoryIcon,
   Wallet, Database, Pencil, LogOut, Menu, Frame, Target, Briefcase, ShieldCheck, Moon, Sun, CalendarRange, BookMarked,
   type LucideIcon,
@@ -52,6 +52,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: '/tonight',    label: 'Tonight',    icon: Moon },                          // what do I do right now?
       { href: '/setups',     label: 'Setups',     icon: Target },                        // what's firing, and is it worth taking?
+      { href: '/filled',     label: 'Filled',     icon: ListChecks },                    // what are the stops on filled setups tonight?
       { href: '/trades',     label: 'Trades',     icon: Briefcase, input: true },        // where are my positions and stops?
       { href: '/discipline', label: 'Discipline', icon: ShieldCheck },                   // am I following the rules?
       { href: '/month',      label: 'Month',      icon: CalendarRange },                 // am I on plan this month?
