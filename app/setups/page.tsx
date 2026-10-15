@@ -17,6 +17,7 @@ import HistorySection from "./HistorySection";
 import TakeBar, { type TakeCard } from "./TakeBar";
 import RiskBlock from "./RiskBlock";
 import VolLine from "./VolLine";
+import type { ValRead } from "@/lib/setups/valuation";
 
 type Row = InstrumentSetup & { yourRead: string | null; readAgrees: boolean | null; deskUnread: boolean };
 interface Payload { at: string; setups: Row[]; scanned: number; errors: { instrument: string; error: string }[] }
@@ -208,6 +209,7 @@ function Card({ s }: { s: Row }) {
       </div>
 
       <SetupRead s={s} />
+      <ValuationLine v={s.valuation ?? null} entry={s.entry} />
 
       <div style={{ ...mono, fontSize: 10, marginTop: 6, display: "flex", gap: 6, alignItems: "center",
         color: s.readAgrees == null ? "var(--text-3)" : s.readAgrees ? "var(--green)" : "var(--red)" }}>
@@ -246,6 +248,22 @@ function takeCard(s: Row, execLong: boolean): TakeCard {
     readAgrees: s.readAgrees,
     entryDate: s.state === "filled" ? s.lastBarDate : new Date().toISOString().slice(0, 10),
   };
+}
+
+/** Stocks only: P/E vs the stock's own last 2 years (Yahoo EPS). */
+function ValuationLine({ v, entry }: { v: ValRead | null; entry: string }) {
+  if (!v) return null;
+  if (v.val === "no data" || v.val === "loss-making")
+    return <div style={{ ...mono, fontSize: 10, marginTop: 6, color: "var(--text-3)" }}>valuation: {v.val === "no data" ? "not enough EPS history yet" : "loss-making (no P/E)"}</div>;
+  const col = v.vsTrade === "against" ? "var(--red)" : v.vsTrade === "aligned" ? "var(--green)" : "var(--text-3)";
+  return (
+    <div style={{ ...mono, fontSize: 10, marginTop: 6, color: col }}>
+      valuation: <b>{v.val.toUpperCase()}</b> · P/E {v.pe} ({Math.round((v.pct ?? 0) * 100)}th pct of its 2y)
+      {v.vsTrade === "against" && (entry === "conservative"
+        ? " — against the trade → graded B (retests buying expensive: 17% win, −0.71R)"
+        : " — against the trade · warning only (aggressive: fewer losers but skipping it cost −7.8R)")}
+    </div>
+  );
 }
 
 /** The setup's own accumulation/distribution read (the engine's), next to yours. */

@@ -778,3 +778,14 @@ model TradingEvent {
   @@index([symbol])
   @@map("trading_events")
 }
+
+/// Quarterly diluted EPS from Yahoo, kept so the P/E history builds up over time.
+model EpsQuarter {
+  symbol    String
+  asOf      String   // quarter end, YYYY-MM-DD
+  eps       Float
+  updatedAt DateTime @updatedAt
+
+  @@id([symbol, asOf])
+  @@map("eps_quarters")
+}

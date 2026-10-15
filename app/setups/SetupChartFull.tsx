@@ -35,6 +35,14 @@ export interface PlanProps {
   dataUrl?: string;
   /** Small note under the timeframe buttons (e.g. where the volume comes from). */
   note?: string;
+  /** AB=CD: the swing points to draw (A, B, C) — the leg to D is drawn into the plan strip. */
+  swing?: { date: string; price: number; label: string }[];
+  /** No breakeven step (AB=CD exits at its target only). */
+  hideBreakeven?: boolean;
+  /** No range box (patterns that aren't ranges). */
+  hideBox?: boolean;
+  /** Letter on the signal bar (default B / S / U). */
+  signalLabel?: string;
   /** After the fact (Filled page): how it played out under the rules. */
   played?: {
     fillDate: string | null; fillPrice: number | null;
@@ -143,7 +151,7 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan }: {
 
   const lv = [
     ...(plan.target != null ? [{ key: "cap", p: plan.target, col: "var(--green)", dash: "6 4", w: 1.2 }] : []),
-    { key: "+1R→BE", p: plan.breakevenAt, col: "var(--green)", dash: "2 3", w: 1.2 },
+    ...(plan.hideBreakeven ? [] : [{ key: "+1R→BE", p: plan.breakevenAt, col: "var(--green)", dash: "2 3", w: 1.2 }]),
     { key: plan.entry === "aggressive" ? "entry~" : "entry", p: plan.entryPrice, col: "var(--accent)", dash: "", w: 1.8 },
     { key: "stop", p: plan.stop, col: "var(--red)", dash: "5 3", w: 1.5 },
   ].sort((a, b) => y(a.p) - y(b.p));
@@ -161,7 +169,7 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan }: {
   const exitIdx = pl?.exitDate ? shift(at(pl.exitDate)) : null;
   const exitCol = pl?.win ? "var(--green)" : pl?.win === false ? "var(--red)" : "var(--text-2)";
 
-  const sigLabel = plan.entry === "conservative" ? "B" : plan.long ? "S" : "U";
+  const sigLabel = plan.signalLabel ?? (plan.entry === "conservative" ? "B" : plan.long ? "S" : "U");
   const sigTitle = plan.entry === "conservative" ? "the break that qualified" : plan.long ? "spring" : "upthrust";
 
   return (
@@ -169,8 +177,8 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan }: {
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block", touchAction: "none", cursor: "crosshair" }}
         onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => { setHover(null); setPos(null); }}>
         {/* range edges + prices */}
-        <rect x={x(startIdx) - xw / 2} y={y(rangeHi)} width={Math.max(2, x(boxEnd) - x(startIdx))} height={Math.max(1, y(rangeLo) - y(rangeHi))} fill="var(--accent)" opacity={0.05} />
-        {[rangeHi, rangeLo].map((p, i) => (
+        {!plan.hideBox && <rect x={x(startIdx) - xw / 2} y={y(rangeHi)} width={Math.max(2, x(boxEnd) - x(startIdx))} height={Math.max(1, y(rangeLo) - y(rangeHi))} fill="var(--accent)" opacity={0.05} />}
+        {!plan.hideBox && [rangeHi, rangeLo].map((p, i) => (
           <g key={i}>
             <line x1={x(startIdx)} y1={y(p)} x2={x(boxEnd)} y2={y(p)} stroke="var(--accent)" strokeWidth={1} strokeDasharray="4 3" opacity={0.7} />
             <text x={4} y={y(p) + 3} fontSize={10} fill="var(--text-3)" {...mono}>{fmt(p)}</text>
@@ -179,7 +187,7 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan }: {
 
         {/* plan zones from the signal bar into the plan strip */}
         <rect x={planFrom} y={Math.min(y(plan.entryPrice), y(plan.stop))} width={plotRight - planFrom} height={Math.abs(y(plan.stop) - y(plan.entryPrice))} fill="var(--red)" opacity={0.1} />
-        <rect x={planFrom} y={Math.min(y(plan.entryPrice), y(plan.breakevenAt))} width={plotRight - planFrom} height={Math.abs(y(plan.breakevenAt) - y(plan.entryPrice))} fill="var(--green)" opacity={0.08} />
+        {!plan.hideBreakeven && <rect x={planFrom} y={Math.min(y(plan.entryPrice), y(plan.breakevenAt))} width={plotRight - planFrom} height={Math.abs(y(plan.breakevenAt) - y(plan.entryPrice))} fill="var(--green)" opacity={0.08} />}
 
         {bars.map((b, i) => {
           const col = b.c >= b.o ? "var(--green)" : "var(--red)";
@@ -217,6 +225,21 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan }: {
             <Marker x={x(sigIdx)} y={sigLabel === "S" ? y(bars[sigIdx].l) + 13 : y(bars[sigIdx].h) - 7} label={sigLabel} title={sigTitle} />
           </g>
         )}
+
+        {/* AB=CD swing: A-B-C, then the projected leg to D in the plan strip */}
+        {plan.swing && (() => {
+          const pts = plan.swing.map((p) => ({ ...p, i: shift(at(p.date)) })).filter((p) => p.i != null) as { date: string; price: number; label: string; i: number }[];
+          if (pts.length < 2) return null;
+          const dX = plotRight - 20, last = pts[pts.length - 1];
+          return (
+            <g>
+              <polyline fill="none" stroke="var(--accent)" strokeWidth={1.6} points={pts.map((p) => `${x(p.i)},${y(p.price)}`).join(" ")} />
+              <line x1={x(last.i)} y1={y(last.price)} x2={dX} y2={y(plan.entryPrice)} stroke="var(--accent)" strokeWidth={1.4} strokeDasharray="5 4" />
+              {pts.map((p) => <text key={p.label} x={x(p.i) + 4} y={y(p.price) + ((p.label !== "B") === plan.long ? -6 : 14)} fontSize={11} fill="var(--accent)" {...mono}>{p.label}</text>)}
+              <text x={dX + 4} y={y(plan.entryPrice) - 6} fontSize={11} fill="var(--accent)" {...mono}>D</text>
+            </g>
+          );
+        })()}
 
         {/* how it played out (Filled page) */}
         {stopPath && <path d={stopPath} fill="none" stroke="var(--amber)" strokeWidth={1.8} />}

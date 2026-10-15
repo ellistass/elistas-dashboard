@@ -13,6 +13,8 @@ import { CONTRACTS } from "@/lib/data/contracts";
 import { storedVolume, patchVolume } from "@/lib/data/futuresVolume";
 import { volRead, INDEX_TRAIL_ATR, type VolRead } from "@/lib/swing/vol";
 import { specClass } from "@/lib/swing/core";
+import { epsFor, ETF } from "@/lib/data/eps";
+import { valuationRead, type ValRead, type EpsReport } from "./valuation";
 
 export interface InstrumentSetup extends Setup {
   instrument: string;
@@ -29,6 +31,8 @@ export interface InstrumentSetup extends Setup {
   vol: VolRead | null;
   /** Trail after +1R as × ATR (indices); null = 1R. */
   trailAtr: number | null;
+  /** Stocks only: P/E vs its own 2y. Conservative "against" → grade B; aggressive → warning only. */
+  valuation: ValRead | null;
   /** Chart window: the range plus a little context, as [o,h,l,c,v,date] tuples. */
   bars: [number, number, number, number, number, string][];
 }
@@ -102,6 +106,8 @@ export async function scanSetups(force = false): Promise<SetupScan> {
           if (bars.length < 120) return;
           const expected = expectedLastSession();
           const feedGap = bars[bars.length - 1].date < expected ? expected : null;
+          const eps = specClass(inst.symbol) === "stock" && !ETF.has(inst.symbol)
+            ? await epsFor(inst.symbol).catch(() => [] as EpsReport[]) : null;
           for (const s of findSetups(bars)) {
             // Window for the EXPANDED chart: ~160 bars, reaching back to 20 bars before
             // the range if it started earlier (cap 250). The card trims its own view.
@@ -111,8 +117,14 @@ export async function scanSetups(force = false): Promise<SetupScan> {
             const trailAtr = specClass(inst.symbol) === "index" ? INDEX_TRAIL_ATR : null;
             if (trailAtr) s.order.manage = s.order.manage.map((m) => m.startsWith("After that: trail")
               ? `After that: trail the stop ${trailAtr} × ATR behind the best price (indices: tested +0.64R / +0.96R vs 1R +0.37 / +0.42).` : m);
+            const valuation = eps ? valuationRead(bars, eps, s.side) : null;
+            if (valuation && s.entry === "conservative" && valuation.vsTrade === "against") {
+              s.grade = "B";
+              s.checks.push({ label: "valuation not against the trade", pass: false, value: `${valuation.val} · P/E ${valuation.pe}` });
+            }
             setups.push({
               bars: win,
+              valuation,
               vol: volRead(bars, s.entryPrice, s.stop),
               trailAtr,
               ...s,

@@ -219,6 +219,7 @@ function AbcdSection({ rows }: { rows: AbcdSetup[] }) {
 }
 
 function AbcdCard({ a }: { a: AbcdSetup }) {
+  const [open, setOpen] = useState(false);
   const long = a.side === "long";
   const R = Math.abs(a.entry - a.stop), tR = Math.abs(a.target - a.entry) / R;
   return (
@@ -230,7 +231,11 @@ function AbcdCard({ a }: { a: AbcdSetup }) {
       <div style={{ ...mono, fontSize: 11, marginTop: 6, color: long ? "var(--green)" : "var(--red)" }}>
         {long ? "BUY" : "SELL"} {a.pair} at D · {a.state === "filled" ? "D reached on the last bar" : `limit live ${a.barsLeft} more bars`}
       </div>
-      <AbcdChart a={a} />
+      <button onClick={() => setOpen(true)} title="Click to expand"
+        style={{ display: "block", width: "100%", padding: 0, background: "none", border: "none", cursor: "zoom-in" }}>
+        <AbcdChart a={a} />
+      </button>
+      {open && <AbcdChartModal a={a} onClose={() => setOpen(false)} />}
       <div style={{ ...mono, fontSize: 10.5, marginTop: 10, padding: "8px 10px", borderRadius: 9, border: "1px solid var(--border-subtle)", lineHeight: 1.7 }}>
         <div style={{ color: "var(--text-3)", fontSize: 9.5 }}>PAPER ORDER · pattern known {a.knownDate}</div>
         <div><b>1. {long ? "BUY" : "SELL"} LIMIT</b> at D {fmt(a.entry)}{a.state === "armed" ? ` · cancel if price breaks C (${fmt(a.c.price)})` : ""}</div>
@@ -243,6 +248,47 @@ function AbcdCard({ a }: { a: AbcdSetup }) {
           COT (info only): {a.positioning.sell.ccy} you sell · {a.positioning.sell.verdict} · z {a.positioning.sell.z == null ? "—" : a.positioning.sell.z.toFixed(2)}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The expanded AB=CD chart: the full daily/weekly/monthly chart with the swing and the plan. */
+function AbcdChartModal({ a, onClose }: { a: AbcdSetup; onClose: () => void }) {
+  const long = a.side === "long";
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  return (
+    <div role="dialog" aria-modal="true" aria-label={`${a.pair} AB=CD chart`} onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ width: "min(1180px, 100%)", maxHeight: "100%", overflow: "auto", background: "var(--surface-1)", border: "1px solid var(--border-subtle)", borderRadius: 14, padding: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ ...mono, fontSize: 13 }}>
+            <b style={{ fontSize: 16 }}>{a.pair}</b>
+            <span style={{ marginLeft: 10, color: long ? "var(--green)" : "var(--red)" }}>{long ? "BUY" : "SELL"} at D · AB=CD (paper) · BC/AB {a.retrace.toFixed(3)}</span>
+          </div>
+          <button onClick={onClose} style={{ ...mono, fontSize: 11, color: "var(--text-3)" }}>close (esc)</button>
+        </div>
+        <div style={{ ...mono, fontSize: 11, color: "var(--text-2)", margin: "8px 0 12px", display: "flex", gap: 18, flexWrap: "wrap" }}>
+          <span>D {fmt(a.entry)}</span>
+          <span style={{ color: "var(--red)" }}>stop {fmt(a.stop)} (1.272)</span>
+          <span style={{ color: "var(--green)" }}>target {fmt(a.target)} (0.618 of CD)</span>
+          <span style={{ color: "var(--text-3)" }}>no trail · cancel if C breaks ({fmt(a.c.price)}) · data to {a.lastBarDate}</span>
+        </div>
+        <SetupChartFull
+          instrument={a.pair} entry="conservative" long={long}
+          rangeLo={Math.min(a.a.price, a.b.price, a.c.price)} rangeHi={Math.max(a.a.price, a.b.price, a.c.price)}
+          rangeStart={a.a.date} signalDate={a.knownDate}
+          entryPrice={a.entry} stop={a.stop} breakevenAt={a.entry} target={a.target}
+          hideBreakeven hideBox signalLabel="C"
+          swing={[{ date: a.a.date, price: a.a.price, label: "A" }, { date: a.b.date, price: a.b.price, label: "B" }, { date: a.c.date, price: a.c.price, label: "C" }]}
+          fmt={fmt}
+          dataUrl={`/api/setups/forex/chart?pair=${encodeURIComponent(a.pair)}`}
+        />
+      </div>
     </div>
   );
 }

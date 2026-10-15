@@ -14,6 +14,10 @@
       "schedule": "0 22 * * 1-5"
     },
     {
+      "path": "/api/cron/eps-refresh",
+      "schedule": "50 13 * * 1-5"
+    },
+    {
       "path": "/api/cron/setup-log",
       "schedule": "30 0 * * 2-6"
     },

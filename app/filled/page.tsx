@@ -36,6 +36,42 @@ const TABS: { key: Status; label: string; empty: string }[] = [
 const locked = (r: number | null) =>
   r == null ? "—" : r <= -0.99 ? "full risk" : Math.abs(r) < 0.05 ? "breakeven" : r > 0 ? `${rr(r)} locked` : `${rr(r)} at risk`;
 
+/** The date a row belongs to on the page: the latest thing that happened to it. */
+const eventDate = (r: Row) =>
+  r.status === "open" ? r.fillDate ?? r.firstBarDate
+  : r.status === "expired" ? r.firstBarDate
+  : r.exitDate ?? r.fillDate ?? r.firstBarDate;
+
+const rowR = (r: Row) => (r.status === "open" ? r.openR : r.status === "expired" ? null : r.resultR);
+
+/** Newest month first, newest day first inside it. */
+function groupByMonthDay(rows: Row[]) {
+  const months = new Map<string, Map<string, Row[]>>();
+  for (const r of [...rows].sort((a, b) => eventDate(b).localeCompare(eventDate(a)))) {
+    const d = eventDate(r), m = d.slice(0, 7);
+    if (!months.has(m)) months.set(m, new Map());
+    const days = months.get(m)!;
+    if (!days.has(d)) days.set(d, []);
+    days.get(d)!.push(r);
+  }
+  return [...months].map(([m, days]) => ({ month: m, days: [...days].map(([d, rs]) => ({ day: d, rows: rs })) }));
+}
+
+function Tally({ rows }: { rows: Row[] }) {
+  const rs = rows.map(rowR).filter((v): v is number => v != null);
+  const net = rs.reduce((a, b) => a + b, 0);
+  const w = rs.filter((v) => v > 0.05).length, l = rs.filter((v) => v < -0.05).length;
+  return (
+    <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10.5, color: "var(--text-3)" }}>
+      {rows.length} {rows.length === 1 ? "setup" : "setups"}
+      {rs.length ? <> · {w}W {l}L · <span style={{ color: net >= 0 ? "var(--green)" : "var(--red)" }}>{rr(net)}</span></> : null}
+    </span>
+  );
+}
+
+const monthLabel = (m: string) => new Date(m + "-01T00:00:00Z").toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
+const dayLabel = (d: string) => new Date(d.slice(0, 10) + "T00:00:00Z").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+
 export default function FilledPage() {
   const [data, setData] = useState<{ rows: Row[]; errors: { instrument: string; error: string }[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,19 +111,35 @@ export default function FilledPage() {
           hint={tab === "open" ? "Stops follow the card: breakeven at +1R, then the trail. Set them after the close." : "Last 120 days, played out under the card's rules."}
           right={<div className={s.row}>{TABS.map((t) => <Btn key={t.key} primary={tab === t.key} onClick={() => { setTab(t.key); }}>{t.label} {count(t.key)}</Btn>)}</div>}>
           {shown.length ? (
-            <div className={s.list}>
-              {shown.map((r) => (
-                <div key={r.id} className={s.listRow} title="Click for the chart"
-                  style={{ gridTemplateColumns: "18px minmax(160px,1.3fr) 160px minmax(170px,1fr) 150px", alignItems: "start", cursor: "zoom-in" }}
-                  onClick={() => setPopup(r)}>
-                  <Maximize2 size={12} style={{ marginTop: 3, color: "var(--text-3)" }} />
-                  <Who r={r} />
-                  <Fill r={r} />
-                  {r.status === "open" ? <StopNow r={r} /> : <Exit r={r} />}
-                  <Result r={r} />
+            groupByMonthDay(shown).map(({ month, days }) => (
+              <div key={month} style={{ marginBottom: 18 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "6px 2px", borderBottom: "1px solid var(--border)" }}>
+                  <b style={{ fontSize: 13 }}>{monthLabel(month)}</b>
+                  <Tally rows={days.flatMap((d) => d.rows)} />
                 </div>
-              ))}
-            </div>
+                {days.map(({ day, rows: dr }) => (
+                  <div key={day} style={{ marginTop: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "2px 2px 4px", color: "var(--text-2)", fontSize: 11.5 }}>
+                      <span>{dayLabel(day)}</span>
+                      <Tally rows={dr} />
+                    </div>
+                    <div className={s.list}>
+                      {dr.map((r) => (
+                        <div key={r.id} className={s.listRow} title="Click for the chart"
+                          style={{ gridTemplateColumns: "18px minmax(160px,1.3fr) 160px minmax(170px,1fr) 150px", alignItems: "start", cursor: "zoom-in" }}
+                          onClick={() => setPopup(r)}>
+                          <Maximize2 size={12} style={{ marginTop: 3, color: "var(--text-3)" }} />
+                          <Who r={r} />
+                          <Fill r={r} />
+                          {r.status === "open" ? <StopNow r={r} /> : <Exit r={r} />}
+                          <Result r={r} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))
           ) : <div className={`${s.card} ${s.empty}`}>{TABS.find((t) => t.key === tab)!.empty}</div>}
         </Section>
       ) : null}
