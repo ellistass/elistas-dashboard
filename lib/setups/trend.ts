@@ -11,8 +11,8 @@ import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { completedBars } from "./scan";
 import type { Bar } from "@/lib/wyckoff/engine";
 
-import { TREND_MARKETS, type TrendSetup } from "./trendMarkets";
-export { TREND_MARKETS, type TrendSetup };
+import { TREND_MARKETS, CRYPTO_MARKETS, type TrendSetup } from "./trendMarkets";
+export { TREND_MARKETS, CRYPTO_MARKETS, type TrendSetup };
 const N = 55, ATR_N = 20, STOP_ATR = 2, TRAIL_ATR = 3;
 
 
@@ -32,11 +32,17 @@ export function trendSignal(bars: Bar[], instrument: string, executeSymbol: stri
   if (!side) return null;
   const d = side === "long" ? 1 : -1, a = atrAt(bars, i);
   return {
-    instrument, executeSymbol, side, signalDate: bars[i].date, close: c, channel: side === "long" ? hh : ll,
+    slot: "trend", instrument, executeSymbol, side, signalDate: bars[i].date, close: c, channel: side === "long" ? hh : ll,
     entryRef: c, stop: c - d * STOP_ATR * a, atr: a, breakevenAt: c + d * STOP_ATR * a, trailDistance: TRAIL_ATR * a,
     lastBarDate: bars[i].date,
   };
 }
+
+/** Crypto trades 7 days a week: keep every bar except today's unfinished UTC bar. */
+const cryptoDone = (bars: Bar[]) => {
+  const today = new Date().toISOString().slice(0, 10);
+  return bars.filter((b) => b.date < today);
+};
 
 let cache: { at: number; scan: { at: string; setups: TrendSetup[]; errors: string[] } } | null = null;
 
@@ -50,6 +56,13 @@ export async function scanTrend(force = false): Promise<{ at: string; setups: Tr
       const bars = completedBars(await fetchDailyBars(inst.yahoo, "2y"));
       const s = trendSignal(bars, sym, inst.executeSymbol || sym);
       if (s) setups.push(s);
+    } catch (e) { errors.push(`${sym}: ${e instanceof Error ? e.message : String(e)}`); }
+  }));
+  await Promise.all(Object.entries(CRYPTO_MARKETS).map(async ([sym, m]) => {
+    try {
+      const bars = cryptoDone(await fetchDailyBars(m.yahoo, "2y"));
+      const s = trendSignal(bars, sym, m.ftmo);
+      if (s) setups.push({ ...s, slot: "crypto" });
     } catch (e) { errors.push(`${sym}: ${e instanceof Error ? e.message : String(e)}`); }
   }));
   const scan = { at: new Date().toISOString(), setups, errors };

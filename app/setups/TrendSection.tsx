@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
 import { EmptyState, ErrorCard } from "../wyckoff/_components/ui";
-import { TREND_MARKETS, type TrendSetup } from "@/lib/setups/trendMarkets";
+import { TREND_MARKETS, CRYPTO_MARKETS, type TrendSetup } from "@/lib/setups/trendMarkets";
 import PriceCheck from "./PriceCheck";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
@@ -37,9 +37,18 @@ export default function TrendSection() {
         </button>
       </div>
       {error ? <ErrorCard message={error} /> : null}
-      {data && !data.setups.length ? <EmptyState text="No 55-day breakout on the trend markets at the last close." small /> : null}
+      {(["trend", "crypto"] as const).map((slot) => {
+        const list = data?.setups.filter((s) => s.slot === slot) ?? [];
+        return (
+          <div key={slot} style={{ display: "grid", gap: 8 }}>
+            <div style={{ ...mono, fontSize: 11, color: "var(--text-2)", marginTop: 4 }}>
+              {slot === "trend"
+                ? "Trend slot"
+                : `Crypto slot · ${Object.keys(CRYPTO_MARKETS).join(" / ")} · paper · half risk · one crypto trade at a time · separate from the trend slot`}
+            </div>
+            {data && !list.length ? <EmptyState text={slot === "trend" ? "No 55-day breakout on the trend markets at the last close." : "No 55-day breakout on BTC or ETH at the last daily close (UTC)."} small /> : null}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 12 }}>
-        {data?.setups.map((s) => {
+        {list.map((s) => {
           const long = s.side === "long";
           return (
             <div key={s.instrument + s.signalDate} style={{ border: "1px solid var(--border-subtle)", borderRadius: 12, padding: 14, background: "var(--surface-1)" }}>
@@ -69,6 +78,9 @@ export default function TrendSection() {
           );
         })}
       </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

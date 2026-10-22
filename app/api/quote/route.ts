@@ -12,10 +12,13 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { instrumentInfo } from "@/lib/wyckoff/basket";
+import { CRYPTO_MARKETS } from "@/lib/setups/trendMarkets";
 
 export async function GET(req: Request) {
   if (!(await getServerSession(authOptions))) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const inst = instrumentInfo(new URL(req.url).searchParams.get("symbol") ?? "");
+  const sym = new URL(req.url).searchParams.get("symbol") ?? "";
+  const c = CRYPTO_MARKETS[sym.toUpperCase()];
+  const inst = instrumentInfo(sym) ?? (c ? { symbol: sym.toUpperCase(), yahoo: c.yahoo, assetClass: "crypto" } : null);
   if (!inst) return NextResponse.json({ error: "unknown symbol" }, { status: 400 });
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(inst.yahoo)}?interval=1m&range=1d&includePrePost=true`;
