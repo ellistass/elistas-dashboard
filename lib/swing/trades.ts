@@ -66,7 +66,8 @@ export const mismatch = (t: any) =>
 export const trackInput = (t: any) => ({
   side: t.side as Side, entryDate: t.entryDate, entryPrice: t.entryPrice, initialStop: t.initialStop,
   currentStop: t.currentStop, capPrice: t.capPrice, brokerBest: t.brokerBest, stopMoves: (t.stopMoves ?? []) as StopMove[],
-  trailAtr: specClass(t.instrument) === "index" ? INDEX_TRAIL_ATR : null,
+  // Index RETESTS trail 2×ATR; springs/upthrusts (market at the open) trail 1R.
+  trailAtr: specClass(t.instrument) === "index" && t.cardEntryKind !== "open" ? INDEX_TRAIL_ATR : null,
 });
 
 const trackedFields = (k: Tracked) => ({

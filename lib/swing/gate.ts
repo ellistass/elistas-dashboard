@@ -51,6 +51,7 @@ export const LOGGED_RULES: Rule[] = ["Levels", "Size", "Accounts", "Exposure", "
 /** How far ahead an event counts as "inside the likely hold" (the time exit is 60 bars). */
 export const HOLD_DAYS = 30;
 const MARGIN_WARN = 0.4;
+export const MAX_LOSERS_PER_MONTH = 4;
 
 export async function runGate(g: GateInput): Promise<GateResult> {
   const checks: GateCheck[] = [];
@@ -89,6 +90,12 @@ export async function runGate(g: GateInput): Promise<GateResult> {
     if (worstAfter < -acc.monthlyStop) add("Monthly stop", "block", `worst case after this trade ${fmtUsd(worstAfter)} breaks the ${fmtUsd(-acc.monthlyStop)} monthly stop`);
     else add("Monthly stop", "ok", `worst case after this trade ${fmtUsd(worstAfter)} of ${fmtUsd(-acc.monthlyStop)}`);
   }
+
+  // Losing trades this month. Oct 2026 replay: stopping after the 4th loser left R/month unchanged
+  // (+2.66 → +2.71R) and cut the worst month from −4.7R to −3.5R.
+  const losers = trades.filter((t: any) => t.status === "closed" && (t.exitDate ?? "") >= `${month}-01` && (t.resultR ?? 0) < -0.05).length;
+  if (losers >= MAX_LOSERS_PER_MONTH) add("Monthly stop", "block", `${losers} losing trades this month — done until the 1st (stop after ${MAX_LOSERS_PER_MONTH})`);
+  else add("Monthly stop", "ok", `${losers} of ${MAX_LOSERS_PER_MONTH} losing trades this month`);
 
   // Exposure: slots and correlation
   const mine = exposures(g.instrument, g.side, spec.sector);

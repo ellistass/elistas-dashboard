@@ -115,7 +115,8 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
         const k = bars.indexOf(b);
         if (k > 20) { let a = 0; for (let j = k - 19; j <= k; j++) a += Math.max(bars[j].h, bars[j - 1].c) - Math.min(bars[j].l, bars[j - 1].c); gap = p.trailAtr * (a / 20); }
       }
-      const trail = best - d * gap;
+      const raw = best - d * gap;
+      const trail = d > 0 ? Math.max(raw, fill) : Math.min(raw, fill);   // breakeven floor under the ATR trail
       stop = d > 0 ? Math.max(stop, trail) : Math.min(stop, trail);
     }
   }

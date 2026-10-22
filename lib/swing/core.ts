@@ -232,7 +232,9 @@ export function trackTrade(t: TrackInput, bars: DayBar[]): Tracked {
     let a = 0; for (let j = k - 19; j <= k; j++) a += Math.max(bars[j].h, bars[j - 1].c) - Math.min(bars[j].l, bars[j - 1].c);
     gap = t.trailAtr * (a / 20);
   }
-  const ruleStop = touched1R ? best - d * gap : t.initialStop;
+  // Breakeven floor: with the 2×ATR index trail the stop never sits below entry once +1R is touched (as tested).
+  const trail = best - d * gap;
+  const ruleStop = touched1R ? (d > 0 ? Math.max(trail, t.entryPrice) : Math.min(trail, t.entryPrice)) : t.initialStop;
   const suggestedStop = d > 0 ? Math.max(t.currentStop, ruleStop) : Math.min(t.currentStop, ruleStop);
   const last = after[after.length - 1] ?? null;
   return {

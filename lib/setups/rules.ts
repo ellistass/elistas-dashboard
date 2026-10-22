@@ -14,7 +14,9 @@
 //        the day you'd act). <1× = no effort (−0.15R); ≥2× = climactic (−0.43R).
 //     2. Limit order at the broken edge. Cancel if the day opens THROUGH the
 //        edge (gap) — you would be filled at a price the plan never priced.
-//     3. Stop 1.5 × tol back inside. Order valid for 20 bars after the break.
+//     3. Stop 3 × tol back inside (~ the range midpoint). Order valid for 20 bars.
+//        Oct 2026 replay 2018–26: +0.20R, DD −12R vs the old 1.5 × tol stop +0.15R, DD −19.5R.
+//        Size is cut so the $ risk is unchanged.
 //     Live result: ~182 trades/yr across the basket, +0.39R, DD −11R.
 //     Retest volume is NOT a filter: it's only known after the fill, and
 //     bailing on loud fill days cut the result to +0.16R.
@@ -42,7 +44,7 @@ export const RULES = {
   BREAK_WINDOW: 3,
   BREAK_VOL_MIN: 1.0,
   BREAK_VOL_MAX: 2.0,
-  CONS_STOP_TOL: 1.5,
+  CONS_STOP_TOL: 3,
   CONS_VALID_BARS: 20,
   TEST_VOL_MAX: 1.0,
   TEST_DEPTH_MAX: 0.10,

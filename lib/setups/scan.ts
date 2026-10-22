@@ -15,6 +15,8 @@ import { volRead, INDEX_TRAIL_ATR, type VolRead } from "@/lib/swing/vol";
 import { specClass } from "@/lib/swing/core";
 import { epsFor, ETF } from "@/lib/data/eps";
 import { valuationRead, type ValRead, type EpsReport } from "./valuation";
+import { fetchFuturesCot, cotRead, fetchShortInterest, siRead, positioningVerdict, type FuturesCot, type SiPoint, type SiRead } from "@/lib/data/positioning";
+import { fetchHourBars, to4h, firstDropRead, springRead, type HourBar } from "./intraday";
 
 export interface InstrumentSetup extends Setup {
   instrument: string;
@@ -91,6 +93,8 @@ export async function scanSetups(force = false): Promise<SetupScan> {
   const setups: InstrumentSetup[] = [];
   const errors: SetupScan["errors"] = [];
   const BATCH = 5; // same politeness as the Wyckoff scan
+  // Weekly CFTC positioning for every futures market, once per scan. A CFTC hiccup never kills the scan.
+  const cot: FuturesCot = await fetchFuturesCot().catch(() => ({}));
   for (let i = 0; i < BASKET.length; i += BATCH) {
     await Promise.all(
       BASKET.slice(i, i + BATCH).map(async (inst) => {
@@ -108,19 +112,51 @@ export async function scanSetups(force = false): Promise<SetupScan> {
           const feedGap = bars[bars.length - 1].date < expected ? expected : null;
           const eps = specClass(inst.symbol) === "stock" && !ETF.has(inst.symbol)
             ? await epsFor(inst.symbol).catch(() => [] as EpsReport[]) : null;
+          let h4: HourBar[] | null = null;      // fetched once per instrument, only when it has a setup
+          let siPts: SiPoint[] | null = null;
           for (const s of findSetups(bars)) {
             // Window for the EXPANDED chart: ~160 bars, reaching back to 20 bars before
             // the range if it started earlier (cap 250). The card trims its own view.
             const rs = bars.findIndex((b) => b.date === s.rangeStart);
             const from = Math.max(0, bars.length - 250, Math.min(rs - 20, bars.length - 160));
             const win = bars.slice(from).map((b) => [b.o, b.h, b.l, b.c, b.v, b.date] as [number, number, number, number, number, string]);
-            const trailAtr = specClass(inst.symbol) === "index" ? INDEX_TRAIL_ATR : null;
+            // Retests only: springs/upthrusts trail 1R everywhere (Oct 2026: aggressive A +0.49R with 1R vs +0.40R with 2×ATR).
+            const trailAtr = specClass(inst.symbol) === "index" && s.entry === "conservative" ? INDEX_TRAIL_ATR : null;
             if (trailAtr) s.order.manage = s.order.manage.map((m) => m.startsWith("After that: trail")
-              ? `After that: trail the stop ${trailAtr} × ATR behind the best price (indices: tested +0.64R / +0.96R vs 1R +0.37 / +0.42).` : m);
+              ? `After that: trail the stop ${trailAtr} × ATR behind the best price, never below breakeven (index retests).` : m);
             const valuation = eps ? valuationRead(bars, eps, s.side) : null;
             if (valuation && s.entry === "conservative" && valuation.vsTrade === "against") {
               s.grade = "B";
               s.checks.push({ label: "valuation not against the trade", pass: false, value: `${valuation.val} · P/E ${valuation.pe}` });
+            }
+            // Positioning — COT (futures/ETFs) and short interest (stocks), graded exactly as the Oct 2026 replay.
+            const cr = cotRead(cot, inst.symbol, s.side, s.rangeStart, s.signalDate);
+            let sr: SiRead | null = null;
+            if (specClass(inst.symbol) === "stock" && !ETF.has(inst.symbol)) {
+              siPts ??= await fetchShortInterest(inst.symbol);
+              sr = siRead(siPts, s.rangeStart, s.signalDate);
+            }
+            const pv = positioningVerdict(s.entry, s.side, s.grade, cr, sr);
+            s.checks.push(...pv.checks);
+            if (pv.downgrade && s.grade === "A") s.grade = "B";
+            if (pv.upgrade && s.grade === "B") s.grade = "A";
+            // 4h read — information on the card, never changes the grade.
+            if (s.entry === "conservative" || s.state === "trigger") {
+              h4 ??= to4h(await fetchHourBars(inst.yahoo));
+              if (h4.length && s.entry === "conservative") {
+                const r = firstDropRead(h4, s.side, s.entryPrice, s.signalDate);
+                if (r) s.checks.push({
+                  label: "4h: first candle of the drop back to the edge is light (heavy = cancel the limit)",
+                  pass: !r.heavy, value: `${r.ratio}× break volume · ${r.at.slice(5, 16).replace("T", " ")} UTC`,
+                });
+              } else if (h4.length) {
+                const sp = springRead(h4, s.side, s.signalDate);
+                if (sp) {
+                  s.checks.push({ label: "4h: test-day volume formed in our favour (against = skip or half size)", pass: (sp.favour ?? 0) > 0, value: `${sp.favour ?? "n/a"} · 3 sessions ${sp.favour3 ?? "n/a"}` });
+                  s.checks.push({ label: "4h: absorption — heavy bar at the extreme that closed off it", pass: sp.absorption });
+                  s.checks.push({ label: "4h: last 4h bar of the test day finished strong", pass: sp.strongFinish });
+                }
+              }
             }
             setups.push({
               bars: win,
