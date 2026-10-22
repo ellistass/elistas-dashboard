@@ -76,7 +76,8 @@ export async function GET(req: Request) {
   catch (e) { errors.push(`forex scan failed: ${e instanceof Error ? e.message : String(e)}`); }
 
   // New tonight = fired on the session that just closed. Stale (feed gap) never goes out as new.
-  const newFut = fut.filter((s) => s.signalDate === session && s.state !== "filled" && !s.feedGap);
+  // Only markets tradeable on FTMO (executeSymbol set) go out.
+  const newFut = fut.filter((s) => s.signalDate === session && s.state !== "filled" && !s.feedGap && !!s.executeSymbol);
   const newFx = fx.filter((s) => !s.skip && s.state === "armed" && s.barsSinceBreak === 0);
   // Still waiting = limit orders from earlier breaks that are still good.
   const waitFut = fut.filter((s) => s.entry === "conservative" && s.state === "armed" && s.signalDate !== session);

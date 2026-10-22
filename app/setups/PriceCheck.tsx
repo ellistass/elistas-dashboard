@@ -1,6 +1,6 @@
 "use client";
 // app/setups/PriceCheck.tsx — type the premarket / current price, get the rule's answer.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 
@@ -62,6 +62,15 @@ export default function PriceCheck({ card }: { card: PriceCheckCard }) {
       setSrc(`fetch failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
+  // Fetch when the card opens, then every 5 minutes while the page is open, so the
+  // verdict (VALID / SKIP / CANCEL / WAIT) is current without clicking.
+  useEffect(() => {
+    if (!card.symbol) return;
+    fetchPx();
+    const id = setInterval(fetchPx, 5 * 60 * 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card.symbol]);
   const px = parseFloat(v);
   const out = Number.isFinite(px) ? priceVerdict(card, px) : null;
   const col = out?.tone === "go" ? "var(--green)" : out?.tone === "stop" ? "var(--red)" : "var(--amber)";

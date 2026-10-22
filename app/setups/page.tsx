@@ -53,15 +53,18 @@ export default function SetupsPage() {
   useEffect(() => { load(); }, [load]);
 
   const rows = (data?.setups ?? []).filter((s) => (entry === "all" || s.entry === entry) && (!gradeA || s.grade === "A"));
-  const live = rows.filter((s) => s.state !== "armed");
-  const armed = rows.filter((s) => s.state === "armed");
+  // Markets FTMO doesn't offer (executeSymbol "") are information only.
+  const onFtmo = rows.filter((s) => !!s.executeSymbol);
+  const offFtmo = rows.filter((s) => !s.executeSymbol);
+  const live = onFtmo.filter((s) => s.state !== "armed");
+  const armed = onFtmo.filter((s) => s.state === "armed");
 
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto" }}>
       <SectionHeader
         icon={<Target size={14} />}
         title="Setups"
-        count={rows.length}
+        count={onFtmo.length}
         note={`mechanical triggers from the backtested rules · ${data?.scanned ?? 0} instruments · scanned ${data ? new Date(data.at).toLocaleTimeString() : ""}`}
         right={
           <button onClick={() => load(true)} disabled={busy} style={{ ...mono, fontSize: 11, display: "flex", gap: 6, alignItems: "center" }}>
@@ -105,6 +108,15 @@ export default function SetupsPage() {
               <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>ARMED — ORDERS WAITING · {armed.length}</h3>
               {armed.length ? <Grid rows={armed} /> : <EmptyState text="No qualified breaks waiting for a retest." small />}
 
+              {offFtmo.length > 0 && (
+                <details style={{ marginTop: 20 }}>
+                  <summary style={{ ...mono, fontSize: 11, color: "var(--text-3)", cursor: "pointer" }}>
+                    NOT ON FTMO — INFORMATION ONLY · {offFtmo.length}
+                  </summary>
+                  <div style={{ marginTop: 8 }}><Grid rows={offFtmo} readOnly /></div>
+                </details>
+              )}
+
               {data.errors.length ? (
                 <p style={{ ...mono, fontSize: 10, color: "var(--text-3)", marginTop: 16 }}>
                   feed errors: {data.errors.map((e) => e.instrument).join(", ")}
@@ -118,15 +130,15 @@ export default function SetupsPage() {
   );
 }
 
-function Grid({ rows }: { rows: Row[] }) {
+function Grid({ rows, readOnly = false }: { rows: Row[]; readOnly?: boolean }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 12 }}>
-      {rows.map((s) => <Card key={`${s.instrument}|${s.entry}|${s.side}|${s.signalDate}`} s={s} />)}
+      {rows.map((s) => <Card key={`${s.instrument}|${s.entry}|${s.side}|${s.signalDate}`} s={s} readOnly={readOnly} />)}
     </div>
   );
 }
 
-function Card({ s }: { s: Row }) {
+function Card({ s, readOnly = false }: { s: Row; readOnly?: boolean }) {
   const long = s.side === "long";
   // Inverted futures (6C/6J/6S): show the EXECUTE direction, never make the trader flip it.
   const execLong = s.inverted ? !long : long;
@@ -191,8 +203,14 @@ function Card({ s }: { s: Row }) {
         <span style={{ color: "var(--text-3)" }}>cap</span><span>{fmt(s.target)}</span>
       </div>
       <VolLine v={s.vol} fmt={fmt} trailAtr={s.trailAtr} />
-      <RiskBlock instrument={tc.instrument} executeSymbol={tc.executeSymbol} side={tc.side} grade={tc.grade}
-        entry={tc.entry} stop={tc.stop} withTrend={s.context.daily === "with-trend"} />
+      {readOnly ? (
+        <p style={{ ...mono, fontSize: 10, color: "var(--amber)", marginTop: 8 }}>
+          not tradeable on FTMO — shown for information only
+        </p>
+      ) : (
+        <RiskBlock instrument={tc.instrument} executeSymbol={tc.executeSymbol} side={tc.side} grade={tc.grade}
+          entry={tc.entry} stop={tc.stop} withTrend={s.context.daily === "with-trend"} />
+      )}
       {s.inverted && (
         <p style={{ ...mono, fontSize: 9.5, color: "var(--amber)", marginTop: 6 }}>
           Prices are the FUTURE's. Execute {s.executeSymbol} in the opposite direction; translate levels on your chart.
@@ -227,7 +245,7 @@ function Card({ s }: { s: Row }) {
           {s.volumeQuality === "suspect" ? " · volume feed unverified" : ""}</div>
       </div>
 
-      {s.state !== "filled" && (
+      {!readOnly && s.state !== "filled" && (
         <PriceCheck card={{
           entryKind: s.entry === "aggressive" ? "open" : "limit",
           long: execLong,
@@ -239,7 +257,7 @@ function Card({ s }: { s: Row }) {
           symbol: s.instrument, inverted: s.inverted,
         }} />
       )}
-      <TakeBar card={tc} />
+      {!readOnly && <TakeBar card={tc} />}
     </div>
   );
 }

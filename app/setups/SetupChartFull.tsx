@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { volumeView, isPlottableTag } from "@/lib/chart/volume";
 import { engineReadDetail, stoppingActionAt, structureRead } from "@/lib/wyckoff/engine";
-import { firstDropRead, dropShare, springRead, type HourBar } from "@/lib/setups/intraday";
+import { firstDropRead, dropShare, springRead, volumeFavour, type HourBar } from "@/lib/setups/intraday";
 import { aggregateBars, indexForDate, viewWindow, TIMEFRAME_LABEL, TIMEFRAME_PURPOSE, MAX_BAR_PITCH, type Timeframe } from "@/lib/chart/timeframe";
 
 interface Bar { o: number; h: number; l: number; c: number; v: number; date: string }
@@ -60,7 +60,8 @@ export interface PlanProps {
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const fmtVol = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : v.toFixed(0));
 
-type View = Timeframe | "4H";
+type View = Timeframe | "4H" | "2H";
+const isIntra = (v: View) => v === "4H" || v === "2H";
 /** A labelled point on the chart (H1, SC, 1st, A, F …). */
 interface Mark { date: string; label: string; title: string; col: string; below: boolean }
 
@@ -71,6 +72,7 @@ export default function SetupChartFull(plan: PlanProps) {
   const [showEffort, setShowEffort] = useState(false);
   const [showRead, setShowRead] = useState(true);
   const [h4, setH4] = useState<{ bars: Bar[]; hasVolume: boolean; error?: string } | null>(null);
+  const [h2, setH2] = useState<{ bars: Bar[]; hasVolume: boolean; error?: string } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -89,6 +91,13 @@ export default function SetupChartFull(plan: PlanProps) {
       .then((j) => setH4({ bars: j.bars, hasVolume: j.hasVolume }))
       .catch((e) => setH4({ bars: [], hasVolume: false, error: e instanceof Error ? e.message : String(e) }));
   }, [view, h4, plan.instrument]);
+  useEffect(() => {
+    if (view !== "2H" || h2) return;
+    fetch(`/api/setups/chart4h?instrument=${encodeURIComponent(plan.instrument)}&tf=2h`)
+      .then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error ?? r.statusText); return j; })
+      .then((j) => setH2({ bars: j.bars, hasVolume: j.hasVolume }))
+      .catch((e) => setH2({ bars: [], hasVolume: false, error: e instanceof Error ? e.message : String(e) }));
+  }, [view, h2, plan.instrument]);
 
   const side = plan.long ? "long" : "short";
   // Daily read — the same functions the scan runs, on the same window.
@@ -152,10 +161,29 @@ export default function SetupChartFull(plan: PlanProps) {
     return { marks, shade, lines };
   }, [plan.withRead, h4, plan.signalDate, plan.entry, plan.entryPrice, plan.long, side]);
 
+  // 2H read — springs: the test day's 2h volume (the grade on futures; information on stocks).
+  const two = useMemo(() => {
+    if (!plan.withRead || !h2 || !h2.bars.length) return null;
+    const sig = plan.signalDate.slice(0, 10);
+    const dayBars = h2.bars.filter((b) => b.date.slice(0, 10) === sig);
+    const shade = dayBars.length ? { from: dayBars[0].date, to: dayBars[dayBars.length - 1].date } : null;
+    if (!h2.hasVolume) return { marks: [] as Mark[], shade, lines: ["no 2h volume for this market — price only"] };
+    if (plan.entry === "conservative") return { marks: [] as Mark[], shade, lines: ["retest reads (first drop candle) use the 4-hour view"] };
+    const hb: HourBar[] = dayBars.map((b) => ({ t: b.date, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v }));
+    const f = hb.length >= 2 ? volumeFavour(hb, side, sig, 1) : null;
+    const lines = f == null ? ["not enough 2h bars on the test day for a read"] : [
+      `test-day 2h volume formed ${f > 0 ? "IN OUR FAVOUR" : "AGAINST US"} (${f}; +1 = all for us, −1 = all against) over ${hb.length} bars`,
+      f > 0 ? "futures/commodities/indices: in favour → tradeable (grade A) — tested 69% win, +1.36R on grade A"
+            : "futures/commodities/indices: against → skip (grade B) — tested grade A 0 of 5 won",
+      "stocks: information only — this read did not separate winners on stocks",
+    ];
+    return { marks: [] as Mark[], shade, lines };
+  }, [plan.withRead, h2, plan.signalDate, plan.entry, side]);
+
   if (err) return <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>chart failed: {err}</div>;
   if (!data) return <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading chart…</div>;
 
-  const views: View[] = plan.withRead ? ["D", "W", "M", "4H"] : ["D", "W", "M"];
+  const views: View[] = plan.withRead ? ["D", "W", "M", "4H", "2H"] : ["D", "W", "M"];
   const readOn = plan.withRead && showRead;
   const effortText = daily
     ? data.suspectVolume
@@ -168,22 +196,27 @@ export default function SetupChartFull(plan: PlanProps) {
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 9, flexWrap: "wrap" }}>
         <div className="seg" style={{ display: "inline-flex" }}>
           {views.map((t) => (
-            <button key={t} type="button" className={view === t ? "on" : ""} onClick={() => setView(t)}>{t === "4H" ? "4 hour" : TIMEFRAME_LABEL[t]}</button>
+            <button key={t} type="button" className={view === t ? "on" : ""} onClick={() => setView(t)}>{t === "4H" ? "4 hour" : t === "2H" ? "2 hour" : TIMEFRAME_LABEL[t]}</button>
           ))}
         </div>
         <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
-          {view === "4H" ? "the composite man inside the daily bar — break / test day shaded" : TIMEFRAME_PURPOSE[view]}{plan.note ? ` · ${plan.note}` : ""}
+          {isIntra(view) ? "the composite man inside the daily bar — break / test day shaded" : TIMEFRAME_PURPOSE[view as Timeframe]}{plan.note ? ` · ${plan.note}` : ""}
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-          {plan.withRead && (view === "D" || view === "4H") && (
+          {plan.withRead && (view === "D" || isIntra(view)) && (
             <button type="button" onClick={() => setShowRead((v) => !v)} style={pill(showRead)}>engine read {showRead ? "on" : "off"}</button>
           )}
-          {!data.suspectVolume && view !== "4H" && (
+          {!data.suspectVolume && !isIntra(view) && (
             <button type="button" onClick={() => setShowEffort((v) => !v)} style={pill(showEffort)}>effort marks {showEffort ? "on" : "off"}</button>
           )}
         </div>
       </div>
-      {view === "4H" ? (
+      {view === "2H" ? (
+        !h2 ? <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading 2-hour bars…</div>
+        : h2.error || !h2.bars.length ? <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>2-hour chart failed: {h2.error ?? "no bars"}</div>
+        : <PlanSvg daily={h2.bars} suspectVolume={!h2.hasVolume} tf="2H" showEffort={false} plan={plan}
+            marks={readOn ? two?.marks : undefined} shade={two?.shade ?? null} />
+      ) : view === "4H" ? (
         !h4 ? <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading 4-hour bars…</div>
         : h4.error || !h4.bars.length ? <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>4-hour chart failed: {h4.error ?? "no bars"}</div>
         : <PlanSvg daily={h4.bars} suspectVolume={!h4.hasVolume} tf="4H" showEffort={false} plan={plan}
@@ -196,7 +229,9 @@ export default function SetupChartFull(plan: PlanProps) {
       {readOn && (
         <div style={{ ...mono, fontSize: 10.5, marginTop: 10, display: "grid", gap: 10, lineHeight: 1.6 }}>
           <div style={{ color: "var(--text-1)", fontWeight: 500 }}>What the engine sees</div>
-          {view === "4H" ? (
+          {view === "2H" ? (
+            <ReadBlock title="2-hour read (springs: sets the grade on futures, information on stocks)" lines={two?.lines ?? ["loading…"]} />
+          ) : view === "4H" ? (
             <ReadBlock title="4-hour read (information — never changes the grade)" lines={four?.lines ?? ["loading…"]} />
           ) : daily ? (
             <>
@@ -238,13 +273,13 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan, marks, shade, box
 
   // Same re-location rule as the Wyckoff drawer: dates, not indices, survive
   // rolling up to weekly/monthly.
-  const all = tf === "D" || tf === "4H" ? daily : aggregateBars(daily, tf);
+  const all = tf === "D" || isIntra(tf) ? daily : aggregateBars(daily, tf as Timeframe);
   // 4H: a full timestamp matches its bar; a plain date matches that day's first 4h bar.
-  const at = (d: string) => (tf === "4H"
+  const at = (d: string) => (isIntra(tf)
     ? (d.length > 10 ? all.findIndex((b) => b.date === d) : all.findIndex((b) => b.date.slice(0, 10) >= d.slice(0, 10)))
     : tf === "D" ? all.findIndex((b) => b.date.slice(0, 10) === d.slice(0, 10)) : indexForDate(all, tf, d));
   const fullStart = Math.max(0, at(plan.rangeStart));
-  const win = tf === "4H"
+  const win = isIntra(tf)
     ? viewWindow(all.length, "D", Math.max(0, at(plan.signalDate) - 60))
     : viewWindow(all.length, tf, fullStart);
   const bars = all.slice(win.from, win.to);
@@ -379,7 +414,7 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan, marks, shade, box
         {sigIdx != null && (
           <g>
             <line x1={x(sigIdx)} y1={0} x2={x(sigIdx)} y2={PH} stroke="var(--text-2)" strokeWidth={0.9} strokeDasharray="3 3" opacity={0.6} />
-            {tf !== "4H" && <Marker x={x(sigIdx)} y={sigLabel === "S" ? y(bars[sigIdx].l) + 13 : y(bars[sigIdx].h) - 7} label={sigLabel} title={sigTitle} />}
+            {!isIntra(tf) && <Marker x={x(sigIdx)} y={sigLabel === "S" ? y(bars[sigIdx].l) + 13 : y(bars[sigIdx].h) - 7} label={sigLabel} title={sigTitle} />}
           </g>
         )}
 
@@ -445,7 +480,7 @@ function PlanSvg({ daily, suspectVolume, tf, showEffort, plan, marks, shade, box
           padding: "8px 11px", boxShadow: "0 6px 22px rgba(0,0,0,0.45)", ...mono, fontSize: 10.5, lineHeight: 1.65, color: "var(--text-2)", whiteSpace: "nowrap",
         }}>
           <div style={{ color: "var(--text-1)", fontWeight: 500 }}>
-            {tf === "4H" ? `${hb.date.slice(0, 16).replace("T", " ")} UTC` : hb.date}
+            {isIntra(tf) ? `${hb.date.slice(0, 16).replace("T", " ")} UTC` : hb.date}
             <span style={{ color: "var(--text-3)", fontWeight: 400 }}>
               {" "}· {hover < startIdx ? "context" : sigIdx != null && hover > sigIdx ? "after the signal" : hover === sigIdx ? sigTitle : `range bar ${hover - startIdx + 1}`}
             </span>

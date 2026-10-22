@@ -71,6 +71,8 @@ export async function GET() {
       // Currency futures (6E, 6B …) are only there for the volume/COT reads — not traded
       // (the volume rule on them tested −8.5R). Forex is traded via the COT forex setups.
       if (specClass(s.instrument) === "forex") continue;
+      // Not tradeable on FTMO (executeSymbol "") — information only, never on Tonight.
+      if (!s.executeSymbol) continue;
       const long = s.inverted ? s.side !== "long" : s.side === "long";
       const candles = toCandles(s.bars);
       const last = candles[candles.length - 1]?.[4] ?? null;

@@ -54,19 +54,19 @@ const I = (
 // ── Indices — read the future, execute the CFD. CME complex verified real
 //    (2026-07-25: ES ~1M+/day, plausible NQ/YM/RTY). Never inverted. ──────────
 const INDEX: ScannerInstrument[] = [
-  I("ES", "ES=F", "US500", "index", "real", false, "also SPX500 / US500Cash"),
-  I("NQ", "NQ=F", "US100", "index", "real", false, "also NAS100 / USTEC"),
-  I("YM", "YM=F", "US30", "index", "real", false, "also DJ30 / WS30"),
-  I("RTY", "RTY=F", "US2000", "index", "real", false, "also RUT; less common on CFD"),
+  I("ES", "ES=F", "US500.cash", "index", "real", false, "also SPX500 / US500Cash"),
+  I("NQ", "NQ=F", "US100.cash", "index", "real", false, "also NAS100 / USTEC"),
+  I("YM", "YM=F", "US30.cash", "index", "real", false, "also DJ30 / WS30"),
+  I("RTY", "RTY=F", "US2000.cash", "index", "real", false, "also RUT; less common on CFD"),
   // Yahoo has no Eurex/ICE/JPX/HKEX futures — reading the CASH index, volume
   // unverified => suspect until the feed audit proves otherwise.
-  I("DAX", "^GDAXI", "GER40", "index", "suspect", false, "was GER30 — cash-index read, not FDAX"),
-  I("STOXX", "^STOXX50E", "EU50", "index", "suspect", false, "also STOXX50 / ESTX50 — cash-index read"),
-  I("FTSE", "^FTSE", "UK100", "index", "suspect", false, "also FTSE100 — cash-index read"),
-  I("CAC", "^FCHI", "FRA40", "index", "suspect", false, "also FR40 — cash-index read"),
-  I("NKY", "^N225", "JP225", "index", "suspect", false, "also JPN225 — cash-index read"),
-  I("HSI", "^HSI", "HK50", "index", "suspect", false, "also HSI50 — cash-index read"),
-  I("ASX", "^AXJO", "AUS200", "index", "suspect", false, "also AU200 — cash-index read"),
+  I("DAX", "^GDAXI", "GER40.cash", "index", "suspect", false, "was GER30 — cash-index read, not FDAX"),
+  I("STOXX", "^STOXX50E", "EU50.cash", "index", "suspect", false, "also STOXX50 / ESTX50 — cash-index read"),
+  I("FTSE", "^FTSE", "UK100.cash", "index", "suspect", false, "also FTSE100 — cash-index read"),
+  I("CAC", "^FCHI", "FRA40.cash", "index", "suspect", false, "also FR40 — cash-index read"),
+  I("NKY", "^N225", "JP225.cash", "index", "suspect", false, "also JPN225 — cash-index read"),
+  I("HSI", "^HSI", "HK50.cash", "index", "suspect", false, "also HSI50 — cash-index read"),
+  I("ASX", "^AXJO", "AUS200.cash", "index", "suspect", false, "also AU200 — cash-index read"),
 ];
 
 // ── Commodities — read the future, execute the CFD. GC volume VERIFIED broken
@@ -75,28 +75,28 @@ const INDEX: ScannerInstrument[] = [
 const COMMOD: ScannerInstrument[] = [
   I("GC", "GC=F", "XAUUSD", "commodity", "suspect", false, "also GOLD"),
   I("SI", "SI=F", "XAGUSD", "commodity", "suspect", false, "also SILVER"),
-  I("HG", "HG=F", "COPPER", "commodity", "suspect", false, "also XCUUSD"),
+  I("HG", "HG=F", "XCUUSD", "commodity", "suspect", false, "also XCUUSD"),
   I("PL", "PL=F", "XPTUSD", "commodity", "suspect", false, "not all brokers"),
   I("PA", "PA=F", "XPDUSD", "commodity", "suspect", false, "rare on CFD"),
-  I("CL", "CL=F", "USOIL", "commodity", "suspect", false, "also WTI / OIL"),
-  I("BZ", "BZ=F", "UKOIL", "commodity", "suspect", false, "also BRENT"),
-  I("NG", "NG=F", "NATGAS", "commodity", "suspect", false, "also XNGUSD / NGAS"),
-  I("RB", "RB=F", "GASOLINE", "commodity", "suspect", false, "rare on CFD"),
-  I("HO", "HO=F", "", "commodity", "suspect", false, "often unavailable on CFD — read/score only"),
+  I("CL", "CL=F", "USOIL.cash", "commodity", "suspect", false, "also WTI / OIL"),
+  I("BZ", "BZ=F", "UKOIL.cash", "commodity", "suspect", false, "also BRENT"),
+  I("NG", "NG=F", "NATGAS.cash", "commodity", "suspect", false, "also XNGUSD / NGAS"),
+  I("RB", "RB=F", "", "commodity", "suspect", false, "not on FTMO — read/score only"),
+  I("HO", "HO=F", "HEATOIL.c", "commodity", "suspect", false, "FTMO HEATOIL.c"),
 ];
 
 // ── Agriculture — liquid core; gap/headline-prone (expect messier ranges;
 //    prune what surfaces badly). Suspect until audited. ───────────────────────
 const AGS: ScannerInstrument[] = [
-  I("ZC", "ZC=F", "CORN", "ag", "suspect", false, "limited broker coverage"),
-  I("ZW", "ZW=F", "WHEAT", "ag", "suspect", false, "limited"),
-  I("ZS", "ZS=F", "SOYBEAN", "ag", "suspect", false, "limited"),
-  I("ZL", "ZL=F", "", "ag", "suspect", false, "rare on CFD — read/score only"),
-  I("ZM", "ZM=F", "", "ag", "suspect", false, "rare on CFD — read/score only"),
-  I("SB", "SB=F", "SUGAR", "ag", "suspect", false, "some brokers"),
-  I("KC", "KC=F", "COFFEE", "ag", "suspect", false, "some brokers"),
-  I("CT", "CT=F", "COTTON", "ag", "suspect", false, "rare"),
-  I("CC", "CC=F", "COCOA", "ag", "suspect", false, "rare"),
+  I("ZC", "ZC=F", "CORN.c", "ag", "suspect", false, "limited broker coverage"),
+  I("ZW", "ZW=F", "WHEAT.c", "ag", "suspect", false, "limited"),
+  I("ZS", "ZS=F", "SOYBEAN.c", "ag", "suspect", false, "limited"),
+  I("ZL", "ZL=F", "", "ag", "suspect", false, "not on FTMO — read/score only"),
+  I("ZM", "ZM=F", "", "ag", "suspect", false, "not on FTMO (FTMO's ZM is Zoom stock) — read/score only"),
+  I("SB", "SB=F", "SUGAR.c", "ag", "suspect", false, "some brokers"),
+  I("KC", "KC=F", "COFFEE.c", "ag", "suspect", false, "some brokers"),
+  I("CT", "CT=F", "COTTON.c", "ag", "suspect", false, "rare"),
+  I("CC", "CC=F", "COCOA.c", "ag", "suspect", false, "rare"),
 ];
 
 // ── Currencies — read the future, execute SPOT. Yahoo volume VERIFIED broken
@@ -120,9 +120,20 @@ const STOCK_NAMES = [
   "HD", "UNH", "PG", "JNJ", "BAC", "WFC", "T", "VZ", "CSCO", "ADBE", "QCOM",
   "AVGO", "COST", "NKE", "MCD",
 ];
+// FTMO symbol list checked 22 Oct 2026 (ftmo.com/en/symbols). executeSymbol "" = not on
+// FTMO: the market is still scanned (history, reads) but its card is information only.
+// ETFs duplicate the index/metal future that has its own card, and their levels don't
+// translate to the CFD, so they are information only too.
+const NOT_ON_FTMO = new Set(["MU", "CRM", "ORCL", "MA", "HD", "UNH", "PG", "WFC", "VZ", "ADBE", "COST",
+  "SPY", "QQQ", "IWM", "DIA", "XLE", "XLF", "XLK", "GLD", "SLV"]);
+const FTMO_NAME: Record<string, string> = { GOOGL: "GOOG" };
 const STOCKS: ScannerInstrument[] = STOCK_NAMES.map((s) =>
-  I(s, s, s, "stock", "real", false, "tag accounts that offer stock CFDs (e.g. FTMO)"),
+  I(s, s, NOT_ON_FTMO.has(s) ? "" : FTMO_NAME[s] ?? s, "stock", "real", false,
+    NOT_ON_FTMO.has(s) ? "not on FTMO — read/score only" : "FTMO equities CFD"),
 );
+
+/** Can this market be traded on the account (FTMO)? */
+export const tradeable = (i: { executeSymbol?: string | null }) => !!i.executeSymbol;
 
 export const BASKET: ScannerInstrument[] = [...CURRENCY, ...INDEX, ...COMMOD, ...AGS, ...STOCKS];
 

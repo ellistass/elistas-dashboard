@@ -16,7 +16,7 @@ import { specClass } from "@/lib/swing/core";
 import { epsFor, ETF } from "@/lib/data/eps";
 import { valuationRead, type ValRead, type EpsReport } from "./valuation";
 import { fetchFuturesCot, cotRead, fetchShortInterest, siRead, positioningVerdict, type FuturesCot, type SiPoint, type SiRead } from "@/lib/data/positioning";
-import { fetchHourBars, to4h, firstDropRead, springRead, type HourBar } from "./intraday";
+import { fetchHourBars, to4h, firstDropRead, springRead, spring2hFavour, type HourBar } from "./intraday";
 
 export interface InstrumentSetup extends Setup {
   instrument: string;
@@ -112,6 +112,7 @@ export async function scanSetups(force = false): Promise<SetupScan> {
           const feedGap = bars[bars.length - 1].date < expected ? expected : null;
           const eps = specClass(inst.symbol) === "stock" && !ETF.has(inst.symbol)
             ? await epsFor(inst.symbol).catch(() => [] as EpsReport[]) : null;
+          let h1: HourBar[] | null = null;      // raw hourly bars, fetched once, only when the market has a setup
           let h4: HourBar[] | null = null;      // fetched once per instrument, only when it has a setup
           let siPts: SiPoint[] | null = null;
           for (const s of findSetups(bars)) {
@@ -140,21 +141,36 @@ export async function scanSetups(force = false): Promise<SetupScan> {
             s.checks.push(...pv.checks);
             if (pv.downgrade && s.grade === "A") s.grade = "B";
             if (pv.upgrade && s.grade === "B") s.grade = "A";
-            // 4h read — information on the card, never changes the grade.
+            // Intraday reads. Retests: 4h first-drop candle (information; heavy = cancel the limit).
+            // Springs on futures/commodities/indices: the 2h test-day read sets the grade (Oct 2026 test).
+            // Springs on stocks: 4h reads shown as information only (they didn't separate winners there).
             if (s.entry === "conservative" || s.state === "trigger") {
-              h4 ??= to4h(await fetchHourBars(inst.yahoo));
-              if (h4.length && s.entry === "conservative") {
-                const r = firstDropRead(h4, s.side, s.entryPrice, s.signalDate);
+              h1 ??= await fetchHourBars(inst.yahoo);
+              h4 ??= to4h(h1);
+              if (s.entry === "conservative") {
+                const r = h4.length ? firstDropRead(h4, s.side, s.entryPrice, s.signalDate) : null;
                 if (r) s.checks.push({
                   label: "4h: first candle of the drop back to the edge is light (heavy = cancel the limit)",
                   pass: !r.heavy, value: `${r.ratio}× break volume · ${r.at.slice(5, 16).replace("T", " ")} UTC`,
                 });
+              } else if (inst.assetClass !== "stock") {
+                const r = h1.length ? spring2hFavour(h1, s.side, s.signalDate) : null;
+                if (r) {
+                  const forUs = r.favour > 0;
+                  s.checks.push({
+                    label: "2h: test-day volume formed in our favour (futures: against = skip, in favour = tradeable)",
+                    pass: forUs, value: `${r.favour} · ${r.bars} bars`,
+                  });
+                  // Runs after positioning on purpose: in favour can bring a COT-downgraded spring back to A.
+                  if (!forUs && s.grade === "A") s.grade = "B";
+                  if (forUs && s.grade === "B") s.grade = "A";
+                }
               } else if (h4.length) {
                 const sp = springRead(h4, s.side, s.signalDate);
                 if (sp) {
-                  s.checks.push({ label: "4h: test-day volume formed in our favour (against = skip or half size)", pass: (sp.favour ?? 0) > 0, value: `${sp.favour ?? "n/a"} · 3 sessions ${sp.favour3 ?? "n/a"}` });
-                  s.checks.push({ label: "4h: absorption — heavy bar at the extreme that closed off it", pass: sp.absorption });
-                  s.checks.push({ label: "4h: last 4h bar of the test day finished strong", pass: sp.strongFinish });
+                  s.checks.push({ label: "4h (info only on stocks): test-day volume in our favour", pass: (sp.favour ?? 0) > 0, value: `${sp.favour ?? "n/a"} · 3 sessions ${sp.favour3 ?? "n/a"}` });
+                  s.checks.push({ label: "4h (info only on stocks): absorption — heavy bar at the extreme that closed off it", pass: sp.absorption });
+                  s.checks.push({ label: "4h (info only on stocks): last bar of the test day finished strong", pass: sp.strongFinish });
                 }
               }
             }

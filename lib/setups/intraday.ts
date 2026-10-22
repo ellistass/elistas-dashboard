@@ -135,3 +135,31 @@ export function dropShare(h4: HourBar[], side: "long" | "short", edge: number, b
   const against = seg.filter((b) => d * (b.c - b.o) < 0).reduce((s, b) => s + b.v, 0);
   return { share: Math.round((against / tot) * 100) / 100, from: seg[0].t, to: seg[seg.length - 1].t, bars: seg.length };
 }
+
+/** 1h → 2h bars, counted from each day's first hourly bar (a stock's 6.5h session gives
+ *  even 2h bars, a 24h market ~11–12). Tested Oct 2026 against 1h/3h/4h: the futures
+ *  spring read is sharpest on 2h bars. */
+export function to2h(bars: HourBar[]): HourBar[] {
+  const out: HourBar[] = [];
+  let day = "", k = 0;
+  for (const b of bars) {
+    const d = b.t.slice(0, 10);
+    if (d !== day) { day = d; k = 0; }
+    const cur = out[out.length - 1];
+    if (k % 2 === 0 || !cur) out.push({ ...b });
+    else { cur.h = Math.max(cur.h, b.h); cur.l = Math.min(cur.l, b.l); cur.c = b.c; cur.v += b.v; }
+    k++;
+  }
+  return out;
+}
+
+/** SPRING / UPTHRUST on futures, commodities and indices: in whose favour the test day's
+ *  2h volume formed (+1 = all for the trade, −1 = all against). Jun 2024 – Oct 2026:
+ *  grade A in favour 69% win +1.36R vs against 0% −1.00R; all grades +1.01R vs −0.22R.
+ *  Does NOT separate winners on stocks — not used there. */
+export function spring2hFavour(h1: HourBar[], side: "long" | "short", testDate: string): { favour: number; bars: number } | null {
+  const bars = to2h(h1).filter((b) => day(b) === testDate);
+  if (bars.length < 2) return null;
+  const f = volumeFavour(bars, side, testDate, 1);
+  return f == null ? null : { favour: f, bars: bars.length };
+}
