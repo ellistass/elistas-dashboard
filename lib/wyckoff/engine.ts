@@ -245,6 +245,128 @@ export function engineVerdict(bars: Bar[], start: number, end: number): EngineVe
   return "neutral";
 }
 
+/** The same verdict with the numbers behind it, so you can check it by eye.
+ *  engineVerdict() above is untouched — every backtest number still holds. */
+export interface EngineReadDetail {
+  verdict: EngineVerdict;
+  ratio: number | null; // up effort-per-point ÷ down effort-per-point
+  upDays: number;
+  dnDays: number;
+  upVolShare: number; // share of the window's volume traded on up days
+  stopping: boolean; // selling climax + automatic rally inside the window
+  heavy: { date: string; dir: "up" | "down" | "flat"; volX: number; closePos: number }[];
+  from: string;
+  to: string;
+  bars: number;
+  reasons: string[];
+}
+
+export function engineReadDetail(bars: Bar[], start: number, end: number): EngineReadDetail {
+  const verdict = engineVerdict(bars, start, end);
+  const seg = bars.slice(start, end);
+  let upV = 0, upR = 0, dnV = 0, dnR = 0, upDays = 0, dnDays = 0, totV = 0;
+  for (let k = 1; k < seg.length; k++) {
+    const dp = seg[k].c - seg[k - 1].c;
+    const v = seg[k].v;
+    totV += v;
+    if (dp > 0) { upV += v; upR += dp; upDays++; }
+    else if (dp < 0) { dnV += v; dnR += -dp; dnDays++; }
+  }
+  const ratio = upR > 0 && dnR > 0 ? upV / upR / (dnV / dnR) : null;
+  const avgV = totV / Math.max(seg.length - 1, 1);
+  const heavy = seg
+    .slice(1)
+    .map((b, i) => {
+      const dp = b.c - seg[i].c;
+      const dir: "up" | "down" | "flat" = dp > 0 ? "up" : dp < 0 ? "down" : "flat";
+      return { date: b.date, dir, volX: avgV > 0 ? b.v / avgV : 0, closePos: (b.c - b.l) / Math.max(b.h - b.l, 1e-9) };
+    })
+    .sort((a, b) => b.volX - a.volX)
+    .slice(0, 3);
+  const stopping = stoppingAction(bars, start, end);
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  const upShare = totV > 0 ? upV / totV : 0;
+
+  const reasons: string[] = [];
+  if (ratio == null) reasons.push("price only moved one way inside the window — nothing to compare → neutral");
+  else {
+    const word =
+      verdict === "distrib" ? "rallies needed more volume per point than drops (supply) → DISTRIBUTION"
+      : verdict === "accum" ? "drops needed more volume per point than rallies (demand) → ACCUMULATION"
+      : "effort on rallies and drops roughly equal → NEUTRAL";
+    reasons.push(`up moves cost ${r2(ratio)}× the volume per point of down moves (≥ ${CFG.DISTRIB_RATIO} distribution, ≤ ${CFG.ACCUM_RATIO} accumulation) — ${word}`);
+  }
+  reasons.push(`${upDays} up days, ${dnDays} down days · ${Math.round(upShare * 100)}% of the volume traded on up days`);
+  for (const h of heavy)
+    reasons.push(`heavy day ${h.date}: ${h.volX.toFixed(1)}× avg volume, ${h.dir}, closed in the ${h.closePos > 0.66 ? "top" : h.closePos < 0.33 ? "bottom" : "middle"} third`);
+  reasons.push(stopping ? "stopping action: a selling climax followed by an automatic rally" : "no stopping action (no selling climax + automatic rally)");
+
+  return {
+    verdict, ratio: ratio == null ? null : r2(ratio), upDays, dnDays, upVolShare: r2(upShare), stopping, heavy,
+    from: seg[0]?.date ?? "", to: seg[seg.length - 1]?.date ?? "", bars: seg.length, reasons,
+  };
+}
+
+/** Where the stopping action is: selling climax + automatic rally (long), or the mirror —
+ *  buying climax + automatic reaction (short). Same test as stoppingAction(); returns indices. */
+export function stoppingActionAt(bars: Bar[], start: number, end: number, long = true): { sc: number; ar: number } | null {
+  const seg = bars.slice(start, end);
+  if (seg.length < 5) return null;
+  const maxVol = Math.max(...seg.map((b) => b.v));
+  const avgRange = seg.reduce((s, b) => s + (b.h - b.l), 0) / seg.length;
+  for (let k = 1; k < seg.length; k++) {
+    const b = seg[k];
+    const rk = b.h - b.l;
+    const offExtreme = long ? (b.c - b.l) / Math.max(rk, 1e-9) > 0.5 : (b.h - b.c) / Math.max(rk, 1e-9) > 0.5;
+    if (!(maxVol > 0 && b.v >= 0.9 * maxVol && rk >= avgRange * 1.3 && offExtreme)) continue;
+    for (let j = k + 1; j <= Math.min(k + 4, seg.length - 1); j++)
+      if (long ? seg[j].c > b.c + rk : seg[j].c < b.c - rk) return { sc: start + k, ar: start + j };
+  }
+  return null;
+}
+
+/** Price-only read of a range — no volume, so it works on cash indices.
+ *  DESCRIPTIVE, NOT BACKTESTED: shown on the chart, never used by a rule. */
+export interface StructureRead {
+  closesUpper: number;
+  lows: "rising" | "falling" | "flat";
+  highs: "rising" | "falling" | "flat";
+  lowTests: number;
+  lowTestsHeld: number;
+  highTests: number;
+  highTestsHeld: number;
+  lean: "accum" | "distrib" | "none";
+  reasons: string[];
+}
+
+export function structureRead(bars: Bar[], start: number, end: number, lo: number, hi: number): StructureRead {
+  const seg = bars.slice(start, end);
+  const band = Math.max(hi - lo, 1e-9), mid = (lo + hi) / 2, zone = 0.15 * band;
+  const third = Math.max(1, Math.floor(seg.length / 3));
+  const avg = (xs: number[]) => xs.reduce((s, v) => s + v, 0) / Math.max(xs.length, 1);
+  const trend = (f: (b: Bar) => number): "rising" | "falling" | "flat" => {
+    const a = avg(seg.slice(0, third).map(f)), b = avg(seg.slice(-third).map(f));
+    return b - a > 0.1 * band ? "rising" : a - b > 0.1 * band ? "falling" : "flat";
+  };
+  const closesUpper = seg.filter((b) => b.c > mid).length / Math.max(seg.length, 1);
+  const lt = seg.filter((b) => b.l <= lo + zone), ht = seg.filter((b) => b.h >= hi - zone);
+  const lowTestsHeld = lt.filter((b) => b.c > lo + zone).length;
+  const highTestsHeld = ht.filter((b) => b.c < hi - zone).length;
+  const lows = trend((b) => b.l), highs = trend((b) => b.h);
+  const lean = closesUpper >= 0.6 && lows !== "falling" ? "accum" : closesUpper <= 0.4 && highs !== "rising" ? "distrib" : "none";
+  const pct = Math.round(closesUpper * 100);
+  return {
+    closesUpper: Math.round(closesUpper * 100) / 100, lows, highs,
+    lowTests: lt.length, lowTestsHeld, highTests: ht.length, highTestsHeld, lean,
+    reasons: [
+      `${pct}% of closes in the upper half of the range${pct >= 60 ? " — buyers holding price up" : pct <= 40 ? " — sellers holding price down" : ""}`,
+      `lows ${lows}, highs ${highs}`,
+      `bottom tested ${lt.length}× (${lowTestsHeld} closed back up off it) · top tested ${ht.length}× (${highTestsHeld} closed back down off it)`,
+      lean === "accum" ? "price structure leans ACCUMULATION" : lean === "distrib" ? "price structure leans DISTRIBUTION" : "price structure has no clear lean",
+    ],
+  };
+}
+
 // ── §9 Outcome (benchmark backfill) ───────────────────────────────────────────
 export type Outcome = "up" | "down" | "chop";
 

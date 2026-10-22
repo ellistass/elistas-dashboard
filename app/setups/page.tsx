@@ -17,6 +17,7 @@ import HistorySection from "./HistorySection";
 import TakeBar, { type TakeCard } from "./TakeBar";
 import RiskBlock from "./RiskBlock";
 import VolLine from "./VolLine";
+import PriceCheck from "./PriceCheck";
 import type { ValRead } from "@/lib/setups/valuation";
 
 type Row = InstrumentSetup & { yourRead: string | null; readAgrees: boolean | null; deskUnread: boolean };
@@ -211,14 +212,14 @@ function Card({ s }: { s: Row }) {
       <SetupRead s={s} />
       <ValuationLine v={s.valuation ?? null} entry={s.entry} />
 
-      <div style={{ ...mono, fontSize: 10, marginTop: 6, display: "flex", gap: 6, alignItems: "center",
-        color: s.readAgrees == null ? "var(--text-3)" : s.readAgrees ? "var(--green)" : "var(--red)" }}>
-        <BookOpen size={10} />
-        {s.yourRead == null
-          ? "no read locked on this range — read it on the desk first"
-          : s.yourRead === "pass" ? "you passed on this range"
-          : `your read: ${s.yourRead.toUpperCase()} — ${s.readAgrees ? "agrees" : "DISAGREES"}`}
-      </div>
+      {s.yourRead != null && (
+        <div style={{ ...mono, fontSize: 10, marginTop: 6, display: "flex", gap: 6, alignItems: "center",
+          color: s.readAgrees == null ? "var(--text-3)" : s.readAgrees ? "var(--green)" : "var(--red)" }}>
+          <BookOpen size={10} />
+          {s.yourRead === "pass" ? "you passed on this range"
+            : `your read: ${s.yourRead.toUpperCase()} — ${s.readAgrees ? "agrees" : "DISAGREES"}`}
+        </div>
+      )}
 
       <div style={{ ...mono, fontSize: 9.5, color: "var(--text-3)", marginTop: 8, lineHeight: 1.6 }}>
         {s.notes.map((n) => <div key={n}>· {n}</div>)}
@@ -226,6 +227,17 @@ function Card({ s }: { s: Row }) {
           {s.volumeQuality === "suspect" ? " · volume feed unverified" : ""}</div>
       </div>
 
+      {s.state !== "filled" && (
+        <PriceCheck card={{
+          entryKind: s.entry === "aggressive" ? "open" : "limit",
+          long: execLong,
+          entry: tc.entry, stop: tc.stop, cap: tc.cap ?? tc.entry,
+          // Inverted FX futures flip to the spot pair, same as the order lines.
+          plus1R: s.inverted ? 1 / s.breakevenAt : s.breakevenAt,
+          rangeLo: s.inverted ? 1 / s.rangeHi : s.rangeLo,
+          rangeHi: s.inverted ? 1 / s.rangeLo : s.rangeHi,
+        }} />
+      )}
       <TakeBar card={tc} />
     </div>
   );
@@ -244,8 +256,9 @@ function takeCard(s: Row, execLong: boolean): TakeCard {
     entry: px(s.entryPrice), stop: px(s.stop), cap: px(s.target),
     entryKind: s.entry === "aggressive" ? "open" : "limit",
     samePrices: s.assetClass === "stock",
-    readLocked: s.yourRead != null && s.yourRead !== "pass",
-    readAgrees: s.readAgrees,
+    // The engine read always exists; yours wins where you've locked one.
+    readLocked: true,
+    readAgrees: s.yourRead != null && s.yourRead !== "pass" ? s.readAgrees : s.setupRead.agrees,
     entryDate: s.state === "filled" ? s.lastBarDate : new Date().toISOString().slice(0, 10),
   };
 }
@@ -266,27 +279,61 @@ function ValuationLine({ v, entry }: { v: ValRead | null; entry: string }) {
   );
 }
 
-/** The setup's own accumulation/distribution read (the engine's), next to yours. */
+/** The engine's accumulation/distribution read — always shown, with its reasons, re-runnable. */
 function SetupRead({ s }: { s: Row }) {
-  const [shown, setShown] = useState(!s.deskUnread);
   const r = s.setupRead;
-  const col = r.agrees == null ? "var(--text-3)" : r.agrees ? "var(--green)" : "var(--red)";
-  const word = r.verdict === "accum" ? "ACCUMULATION" : r.verdict === "distrib" ? "DISTRIBUTION" : "NEUTRAL";
+  const d = r.detail;
+  const [why, setWhy] = useState(false);
+  const [rerun, setRerun] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const word = (v: string) => (v === "accum" ? "ACCUMULATION" : v === "distrib" ? "DISTRIBUTION" : "NEUTRAL");
+  const lean = (a: boolean | null) => (a == null ? "no lean" : a ? "agrees with the trade" : "against the trade");
+  const col = (a: boolean | null) => (a == null ? "var(--text-3)" : a ? "var(--green)" : "var(--red)");
+  const link = { ...mono, fontSize: 10, textDecoration: "underline", color: "var(--text-2)" } as const;
+  const go = async () => {
+    setBusy(true);
+    // Cards stored before this build carry no window; fall back to range start → signal.
+    const p = new URLSearchParams({ symbol: s.instrument, from: d?.from ?? s.rangeStart, to: d?.to ?? s.signalDate, side: s.side });
+    try { setRerun(await (await fetch(`/api/setups/read?${p}`)).json()); }
+    catch (e) { setRerun({ error: e instanceof Error ? e.message : String(e) }); }
+    finally { setBusy(false); }
+  };
+  const reasons: string[] = rerun?.asFired?.reasons ?? d?.reasons ?? [];
   return (
-    <div style={{ ...mono, fontSize: 10, marginTop: 10, display: "flex", gap: 6, alignItems: "center", color: shown ? col : "var(--text-3)" }}>
-      <Target size={10} />
-      {shown ? (
+    <div style={{ ...mono, fontSize: 10, marginTop: 10 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", color: col(r.agrees) }}>
+        <Target size={10} />
         <span>
-          <span style={{ color: "var(--text-3)" }}>info only · </span>setup read: <b>{word}</b>
-          {r.agrees == null ? " — no lean" : r.agrees ? " — agrees with the trade" : " — against the trade"}
-          {s.entry === "aggressive" && <span style={{ color: "var(--text-3)" }}> (didn't add edge on springs in the backtest)</span>}
+          engine read: <b>{word(r.verdict)}</b> — {lean(r.agrees)}
+          <span style={{ color: "var(--text-3)" }}>
+            {d ? ` · ${d.from} → ${d.to} (${d.bars} bars)` : ""}
+            {s.entry === "aggressive" ? " · didn't add edge on springs in the backtest" : ""}
+          </span>
         </span>
-      ) : (
-        <span>
-          setup read hidden — this range is still unread on your desk.{" "}
-          <button onClick={() => setShown(true)} style={{ ...mono, fontSize: 10, textDecoration: "underline", color: "var(--text-2)" }}>reveal</button>
-        </span>
+      </div>
+      <div style={{ display: "flex", gap: 10, marginTop: 4, marginLeft: 16 }}>
+        <button onClick={() => { setWhy(!why); if (!d && !rerun) go(); }} style={link}>{why ? "hide why" : "why?"}</button>
+        <button onClick={go} disabled={busy} style={link}>{busy ? "re-running…" : "re-run"}</button>
+      </div>
+      {why && reasons.length > 0 && (
+        <div style={{ marginLeft: 16, marginTop: 4, color: "var(--text-3)", lineHeight: 1.6 }}>
+          {reasons.map((x) => <div key={x}>· {x}</div>)}
+        </div>
       )}
+      {rerun && !rerun.error && (
+        <div style={{ marginLeft: 16, marginTop: 4, lineHeight: 1.6 }}>
+          <div style={{ color: col(rerun.asFired.agrees) }}>
+            as fired (to {rerun.asFired.to}): <b>{word(rerun.asFired.verdict)}</b> · ratio {rerun.asFired.ratio ?? "—"}
+          </div>
+          <div style={{ color: col(rerun.now.agrees) }}>
+            re-run to {rerun.now.to}: <b>{word(rerun.now.verdict)}</b> · ratio {rerun.now.ratio ?? "—"}
+            {rerun.changed ? " — CHANGED since the card fired" : " — unchanged"}
+            <span style={{ color: "var(--text-3)" }}> (includes the break/test bars — not what was backtested)</span>
+          </div>
+          {why && rerun.now.reasons.map((x: string) => <div key={"n" + x} style={{ color: "var(--text-3)" }}>· now: {x}</div>)}
+        </div>
+      )}
+      {rerun?.error && <div style={{ marginLeft: 16, color: "var(--amber)" }}>re-run failed: {rerun.error}</div>}
     </div>
   );
 }
@@ -386,6 +433,8 @@ function ChartModal({ s, onClose, chartProps, execLong }: {
           instrument={s.instrument} entry={s.entry} long={s.side === "long"}
           rangeLo={s.rangeLo} rangeHi={s.rangeHi} rangeStart={s.rangeStart} signalDate={s.signalDate}
           entryPrice={s.entryPrice} stop={s.stop} breakevenAt={s.breakevenAt} target={s.target} fmt={fmt}
+          withRead
+          readWindow={s.setupRead.detail ? { from: s.setupRead.detail.from, to: s.setupRead.detail.to } : undefined}
         />
       </div>
     </div>

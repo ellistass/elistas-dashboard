@@ -37,7 +37,7 @@
 //
 // Everything here is pure: bars in, setups out. No I/O, no clock.
 
-import { CFG, detectRanges, contextPct, engineVerdict, type Bar, type DetectedRange } from "@/lib/wyckoff/engine";
+import { CFG, detectRanges, contextPct, engineReadDetail, type Bar, type EngineReadDetail, type DetectedRange } from "@/lib/wyckoff/engine";
 import { rollMask, goodAvgVolume } from "./roll";
 
 export const RULES = {
@@ -122,7 +122,7 @@ export interface Setup {
    *  bars up to the signal (effort per point of travel, up vs down).
    *  Backtest: on the conservative entry, agrees +0.56R / neutral +0.43R /
    *  disagrees +0.38R. On the aggressive entry it did NOT help. */
-  setupRead: { verdict: "accum" | "distrib" | "neutral"; agrees: boolean | null };
+  setupRead: { verdict: "accum" | "distrib" | "neutral"; agrees: boolean | null; detail?: EngineReadDetail };
   /** Conservative only, and only when the edge was touched on the last bar. */
   retest: RetestRead | null;
   notes: string[];
@@ -160,8 +160,8 @@ export function htfTrend(bars: Bar[], day: string, tf: "weekly" | "monthly", sid
   return (t === "up") === (side === "long") ? "with" : "against";
 }
 
-const readOf = (v: "accum" | "distrib" | "neutral", long: boolean) =>
-  ({ verdict: v, agrees: v === "neutral" ? null : (v === "accum") === long });
+const readOf = (d: EngineReadDetail, long: boolean) =>
+  ({ verdict: d.verdict, agrees: d.verdict === "neutral" ? null : (d.verdict === "accum") === long, detail: d });
 
 const avgOf = (xs: Bar[], f: (b: Bar) => number) => xs.reduce((s, b) => s + f(b), 0) / xs.length;
 const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
@@ -238,7 +238,7 @@ export function conservative(bars: Bar[], r: DetectedRange): Setup | null {
     breakevenAt: r6(long ? edge + risk : edge - risk), target: r6(target),
     barsLeft: lastValid - (n - 1),
     context: { daily, weekly, monthly },
-    setupRead: readOf(engineVerdict(bars, r.start, r.end), long),
+    setupRead: readOf(engineReadDetail(bars, r.start, r.end), long),
     retest,
     order: {
       entry: {
@@ -317,7 +317,7 @@ export function aggressive(bars: Bar[], r: DetectedRange, side: Side): Setup | n
     target: r6(long ? r.hi + band : r.lo - band),
     barsLeft: null,
     context: { daily: ctx == null ? "unknown" : (long ? ctx < 0 : ctx > 0) ? "reversal" : "with-trend", weekly, monthly },
-    setupRead: readOf(engineVerdict(bars, r.start, k), long),
+    setupRead: readOf(engineReadDetail(bars, r.start, k), long),
     retest: null,
     order: {
       entry: { kind: "market-on-open", skipIf: `the open is already ${long ? "at or below" : "at or above"} the stop ${r6(stop)}` },

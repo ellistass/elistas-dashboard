@@ -132,8 +132,8 @@ export async function runGate(g: GateInput): Promise<GateResult> {
   else if (g.cardStop != null) add("Levels", "ok", `levels match the card (stop ${fmtPx(g.stopPrice)})`);
 
   // Blind read before the setup read
-  if (g.readLocked === false) add("Read", "warn", "no blind read locked on this range — read it on the desk first");
-  else if (g.readAgrees === false) add("Read", "warn", "your locked read DISAGREES with this trade");
+  if (g.readLocked === false) add("Read", "warn", "no read on this range");
+  else if (g.readAgrees === false) add("Read", "warn", "the read (yours if locked, else the engine's) is AGAINST this trade");
 
   return { checks, blocked: checks.some((c) => c.level === "block"), plannedExitDate, size, marginUse };
 }

@@ -5,9 +5,8 @@
 //
 // Your locked read, where one exists for the same range, rides along as
 // `yourRead`. The setup's own engine read (`setupRead`) is always included;
-// `deskUnread` marks ranges still waiting for your blind read on the desk, and
-// the page keeps the engine read behind a click for those, so training isn't
-// spoiled by accident.
+// `deskUnread` marks ranges still waiting for your blind read on the desk. The
+// engine read is always shown (with its reasons) — you trade off it.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

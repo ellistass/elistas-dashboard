@@ -17,11 +17,17 @@ const cache = new Map<string, { at: number; bars: HourBar[] }>();
 const TTL_MS = 15 * 60 * 1000;
 
 /** Last month of 1h bars with volume. Empty on any failure — the scan never breaks on this. */
-export async function fetchHourBars(yahooSymbol: string, force = false): Promise<HourBar[]> {
-  const hit = cache.get(yahooSymbol);
+export async function fetchHourBars(
+  yahooSymbol: string,
+  force = false,
+  opts: { range?: "1mo" | "3mo"; keepNoVolume?: boolean } = {},
+): Promise<HourBar[]> {
+  const range = opts.range ?? "1mo";
+  const key = `${yahooSymbol}|${range}|${opts.keepNoVolume ? 1 : 0}`;
+  const hit = cache.get(key);
   if (!force && hit && Date.now() - hit.at < TTL_MS) return hit.bars;
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=60m&range=1mo&includePrePost=false`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=60m&range=${range}&includePrePost=false`;
     const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" }, cache: "no-store" });
     if (!res.ok) throw new Error(`yahoo ${res.status}`);
     const data: any = await res.json();
@@ -29,10 +35,11 @@ export async function fetchHourBars(yahooSymbol: string, force = false): Promise
     const bars: HourBar[] = [];
     for (let i = 0; i < (r?.timestamp?.length ?? 0); i++) {
       const [o, h, l, c, v] = [q.open[i], q.high[i], q.low[i], q.close[i], q.volume[i]];
-      if ([o, h, l, c, v].some((x) => x == null) || !(v > 0) || h < l) continue;
-      bars.push({ t: new Date(r.timestamp[i] * 1000).toISOString(), o, h, l, c, v });
+      if ([o, h, l, c].some((x) => x == null) || h < l) continue;
+      if (!opts.keepNoVolume && !(v > 0)) continue;
+      bars.push({ t: new Date(r.timestamp[i] * 1000).toISOString(), o, h, l, c, v: v ?? 0 });
     }
-    cache.set(yahooSymbol, { at: Date.now(), bars });
+    cache.set(key, { at: Date.now(), bars });
     return bars;
   } catch {
     return hit?.bars ?? [];
@@ -89,7 +96,7 @@ export function volumeFavour(h4: HourBar[], side: "long" | "short", asOfDate: st
   return den > 0 ? Math.round(((d * num) / den) * 100) / 100 : null;
 }
 
-export interface SpringRead { favour: number | null; favour3: number | null; absorption: boolean; strongFinish: boolean }
+export interface SpringRead { favour: number | null; favour3: number | null; absorption: boolean; strongFinish: boolean; extAt: string; lastAt: string }
 
 /** SPRING / UPTHRUST: the test day's 4h bars. */
 export function springRead(h4: HourBar[], side: "long" | "short", testDate: string): SpringRead | null {
@@ -103,5 +110,28 @@ export function springRead(h4: HourBar[], side: "long" | "short", testDate: stri
     favour3: volumeFavour(h4, side, testDate, 3),
     absorption: extBar.v >= 1.3 * avgV && clv(extBar, d) > 0,
     strongFinish: clv(bars[bars.length - 1], d) > 0.33,
+    extAt: extBar.t,
+    lastAt: bars[bars.length - 1].t,
   };
+}
+
+export interface DropShare { share: number; from: string; to: string; bars: number }
+
+/** RETEST: the whole drop back to the edge — share of its volume on candles closing against us,
+ *  from the post-break extreme up to (not including) the touch. Under 0.5 = coming back on no
+ *  selling: 62% win, +0.37R (n=42, all grades, Jun 2024 – Oct 2026). Information only. */
+export function dropShare(h4: HourBar[], side: "long" | "short", edge: number, breakDate: string): DropShare | null {
+  const d = side === "long" ? 1 : -1;
+  const k = h4.findIndex((b) => day(b) >= breakDate);
+  if (k < 0) return null;
+  let end = h4.length;
+  for (let i = k + 1; i < h4.length; i++) if (d > 0 ? h4[i].l <= edge : h4[i].h >= edge) { end = i; break; }
+  const ext = (b: HourBar) => (d > 0 ? b.h : b.l);
+  let peak = k;
+  for (let i = k; i < end; i++) if (d * (ext(h4[i]) - ext(h4[peak])) > 0) peak = i;
+  const seg = h4.slice(peak + 1, end);
+  const tot = seg.reduce((s, b) => s + b.v, 0);
+  if (seg.length < 2 || !(tot > 0)) return null;
+  const against = seg.filter((b) => d * (b.c - b.o) < 0).reduce((s, b) => s + b.v, 0);
+  return { share: Math.round((against / tot) * 100) / 100, from: seg[0].t, to: seg[seg.length - 1].t, bars: seg.length };
 }
