@@ -13,6 +13,10 @@ export interface PriceCheckCard {
   cap: number;
   rangeLo: number;
   rangeHi: number;
+  /** Basket symbol, for the "fetch" button. */
+  symbol?: string;
+  /** Inverted FX futures (6C/6J/6S): the fetched future's price is flipped to the spot pair. */
+  inverted?: boolean;
 }
 
 type Verdict = { tone: "go" | "wait" | "stop"; text: string };
@@ -42,6 +46,22 @@ export function priceVerdict(c: PriceCheckCard, px: number): Verdict {
 
 export default function PriceCheck({ card }: { card: PriceCheckCard }) {
   const [v, setV] = useState("");
+  const [src, setSrc] = useState<string | null>(null);
+  const fetchPx = async () => {
+    if (!card.symbol) return;
+    setSrc("fetching…");
+    try {
+      const r = await fetch(`/api/quote?symbol=${encodeURIComponent(card.symbol)}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? r.statusText);
+      const px = card.inverted ? 1 / j.price : j.price;
+      setV(String(+px.toPrecision(8)));
+      const chg = j.prevClose ? ` · ${j.price >= j.prevClose ? "+" : ""}${(((j.price - j.prevClose) / j.prevClose) * 100).toFixed(2)}% vs last close` : "";
+      setSrc(`${j.session} ${j.price}${chg} · ${new Date(j.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+    } catch (e) {
+      setSrc(`fetch failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
   const px = parseFloat(v);
   const out = Number.isFinite(px) ? priceVerdict(card, px) : null;
   const col = out?.tone === "go" ? "var(--green)" : out?.tone === "stop" ? "var(--red)" : "var(--amber)";
@@ -51,6 +71,13 @@ export default function PriceCheck({ card }: { card: PriceCheckCard }) {
         price now / premarket
         <input value={v} onChange={(e) => setV(e.target.value)} inputMode="decimal" placeholder="e.g. 527.26"
           style={{ ...mono, fontSize: 11, padding: "3px 6px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-card-2)", color: "var(--text-1)", width: 110 }} />
+        {card.symbol && (
+          <button type="button" onClick={fetchPx}
+            style={{ ...mono, fontSize: 10.5, padding: "3px 9px", borderRadius: 6, border: "1px solid var(--border-strong)", color: "var(--text-1)", background: "transparent" }}>
+            fetch
+          </button>
+        )}
+        {src && <span style={{ color: "var(--text-3)" }}>{src}</span>}
       </label>
       {out && <div style={{ color: col, lineHeight: 1.5 }}>{out.text}</div>}
     </div>

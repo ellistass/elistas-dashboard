@@ -236,6 +236,7 @@ function Card({ s }: { s: Row }) {
           plus1R: s.inverted ? 1 / s.breakevenAt : s.breakevenAt,
           rangeLo: s.inverted ? 1 / s.rangeHi : s.rangeLo,
           rangeHi: s.inverted ? 1 / s.rangeLo : s.rangeHi,
+          symbol: s.instrument, inverted: s.inverted,
         }} />
       )}
       <TakeBar card={tc} />
