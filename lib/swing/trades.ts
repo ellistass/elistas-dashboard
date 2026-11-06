@@ -14,6 +14,7 @@ import {
 import { fetchFeedBars } from "./feeds";
 import { INDEX_TRAIL_ATR } from "./vol";
 import { logBreak } from "./discipline";
+import { instrumentInfo } from "@/lib/wyckoff/basket";
 
 const T = () => (db as any).swingTrade;
 
@@ -31,13 +32,59 @@ export async function loadSpecs(): Promise<InstrumentSpecCfg[]> {
   try { return await (db as any).instrumentSpec.findMany(); } catch { return []; }
 }
 
-export interface Action { tradeId: string; instrument: string; kind: "stop-hit" | "cap-hit" | "move-stop" | "time-exit" | "event-exit" | "mismatch"; text: string; urgent: boolean }
+export interface Action { tradeId: string; instrument: string; kind: "stop-hit" | "cap-hit" | "move-stop" | "time-exit" | "event-exit" | "mismatch" | "pending" | "filled"; text: string; urgent: boolean }
+
+/** Does the feed carry the CARD's prices (the future / stock the card was drawn on)? Indices
+ *  are tracked on the cash index and commodities on the future, so a pending order is checked
+ *  in whichever series its level belongs to. */
+const feedIsCardSeries = (t: any) => !!t.cardEntry && t.feed === `yahoo:${instrumentInfo(t.instrument)?.yahoo ?? ""}`;
+
+/**
+ * A pending order against the bars after it was placed. Returns the update, or null (still waiting).
+ *   next-open (springs): fills at the first open after the card's bar; skipped if it opens past the stop.
+ *   limit: fills on the first bar that trades through it within `pendingBars`. Range retests
+ *          (futures/stocks) are cancelled on a gap through the edge (the card's cancelIf); forex
+ *          limits fill at the open on a gap. Not filled in time → expired.
+ */
+export function settlePending(t: any, bars: { date: string; o: number; h: number; l: number; c: number }[]): Record<string, unknown> | null {
+  if (t.status !== "pending" || !t.orderPlacedDate) return null;
+  const long = t.side === "long";
+  const card = feedIsCardSeries(t) && !t.samePrices;
+  const lvl = card ? t.cardEntry : t.entryPrice;
+  const stopLvl = card && t.cardStop != null ? t.cardStop : t.initialStop;
+  const after = bars.filter((b) => b.date > t.orderPlacedDate);
+  const fill = (date: string, price: number) => ({ status: "open", entryDate: date, entryPrice: price, cancelReason: null });
+  const cancel = (date: string, why: string) => ({ status: "cancelled", cancelReason: why, exitDate: date, exitReason: "cancelled" });
+
+  if (t.cardEntryKind === "open") {
+    const b = after[0];
+    if (!b) return null;
+    if (long ? b.o <= stopLvl : b.o >= stopLvl) return cancel(b.date, `opened past the stop on ${b.date} — the card says skip`);
+    return fill(b.date, card ? t.entryPrice : b.o);           // your prices = the feed's: the open; else keep yours (edit to your broker's fill)
+  }
+  const n = t.pendingBars ?? 5;
+  for (const b of after.slice(0, n)) {
+    const touched = long ? b.l <= lvl : b.h >= lvl;
+    if (!touched) continue;
+    const gap = long ? b.o < lvl : b.o > lvl;
+    if (gap && t.market === "futures") return cancel(b.date, `opened through the limit on ${b.date} — the card says cancel`);
+    return fill(b.date, gap && !card ? b.o : t.entryPrice);
+  }
+  if (after.length >= n) return cancel(after[n - 1].date, `limit not filled in ${n} bar${n === 1 ? "" : "s"} — expired`);
+  return null;
+}
 
 /** What this trade needs from you tonight, in plain words. */
 export function actionsFor(t: any): Action[] {
+  const base = { tradeId: t.id, instrument: t.instrument };
+  if (t.status === "pending") {
+    const what = t.cardEntryKind === "open" ? `market at the next open (ref ${fmtPx(t.entryPrice)})` : `limit ${fmtPx(t.entryPrice)}, live ${t.pendingBars ?? 5} bars from ${t.orderPlacedDate}`;
+    return [{ ...base, kind: "pending", urgent: false, text: `${t.instrument}: order waiting — ${what}. Not a trade until it fills.` }];
+  }
   if (t.status !== "open") return [];
   const out: Action[] = [];
-  const base = { tradeId: t.id, instrument: t.instrument };
+  if (t.orderPlacedDate && t.lastDate === t.entryDate)
+    out.push({ ...base, kind: "filled", urgent: true, text: `${t.instrument}: your order filled on ${t.entryDate} at ${fmtPx(t.entryPrice)} — check the stop ${fmtPx(t.currentStop)} is on${t.samePrices ? "" : ", and enter your broker's fill price if it differs"}` });
   const R = Math.abs(t.entryPrice - t.initialStop);
   if (t.stopHitDate) out.push({ ...base, kind: "stop-hit", urgent: true, text: `${t.instrument}: stop ${fmtPx(t.stopHitPrice ?? t.currentStop)} traded on ${t.stopHitDate} — record the exit` });
   else if (t.capHitDate) out.push({ ...base, kind: "cap-hit", urgent: true, text: `${t.instrument}: cap ${fmtPx(t.capPrice)} reached on ${t.capHitDate} — record the exit` });
@@ -85,6 +132,16 @@ function chartBars(bars: { date: string; o: number; h: number; l: number; c: num
 
 /** Recompute every open trade from its feed. One fetch per feed; a bad feed only fails its own trades. */
 export async function refreshOpenTrades(): Promise<{ refreshed: number; errors: { id: string; error: string }[] }> {
+  // Pending orders first: a fill turns them into open trades, tracked below in the same run.
+  const pending = await T().findMany({ where: { status: "pending" } });
+  for (const t of pending) {
+    try {
+      const upd = settlePending(t, await fetchFeedBars(t.feed));
+      if (upd) await T().update({ where: { id: t.id }, data: { ...upd, trackError: null, trackedAt: new Date() } });
+    } catch (e) {
+      await T().update({ where: { id: t.id }, data: { trackError: e instanceof Error ? e.message : String(e), trackedAt: new Date() } });
+    }
+  }
   const open = await T().findMany({ where: { status: "open" } });
   const byFeed = new Map<string, any[]>();
   for (const t of open) byFeed.set(t.feed, [...(byFeed.get(t.feed) ?? []), t]);
@@ -134,7 +191,15 @@ async function eveningChecks(t: any, k: Tracked): Promise<Record<string, unknown
 
 /** Recompute one trade (after you edit it). */
 export async function refreshTrade(id: string) {
-  const t = await T().findUnique({ where: { id } });
+  let t = await T().findUnique({ where: { id } });
+  if (t?.status === "pending") {
+    try {
+      const upd = settlePending(t, await fetchFeedBars(t.feed));
+      t = await T().update({ where: { id }, data: { ...(upd ?? {}), trackError: null, trackedAt: new Date() } });
+    } catch (e) {
+      return await T().update({ where: { id }, data: { trackError: e instanceof Error ? e.message : String(e), trackedAt: new Date() } });
+    }
+  }
   if (!t || t.status !== "open") return t;
   try {
     const bars = await fetchFeedBars(t.feed);

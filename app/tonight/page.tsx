@@ -32,7 +32,7 @@ interface Working {
 interface Payload {
   today: string; closes: { label: string; at: string }[];
   accounts: (SwingAccountCfg & { ledger: Ledger })[];
-  trades: any[]; actions: Action[]; actNow: ActNow[]; working: Working[];
+  trades: any[]; pending?: any[]; actions: Action[]; actNow: ActNow[]; working: Working[];
   scannedAt: { futures: string | null; forex: string | null };
   alerts: { id: string; date: string; instrument: string; rule: string; detail: string }[];
   missingEarnings: string[]; upcoming: string[];
@@ -126,6 +126,22 @@ export default function TonightPage() {
         ) : <div className={`${s.card} ${s.empty}`}>Nothing filled or triggering on the last bar.</div>}
       </Section>
 
+      {data.pending?.length ? (
+        <Section title="Your orders waiting" count={data.pending.length} hint="placed at the broker, not filled yet — they hold a slot; the evening refresh fills or cancels them">
+          <div className={s.list}>
+            {data.pending.map((t) => (
+              <div key={t.id} className={s.listRow} style={{ gridTemplateColumns: "auto auto auto 1fr auto" }}>
+                <Grade g={t.grade} />
+                <b>{t.executeSymbol || t.instrument}</b>
+                <Tag tone={t.side === "long" ? "long" : "short"}>{t.side === "long" ? "BUY" : "SELL"}</Tag>
+                <span className={s.small}>{t.cardEntryKind === "open" ? "market at the next open" : `limit ${px(t.entryPrice)} · live ${t.pendingBars ?? 5} bars after ${t.orderPlacedDate}`} · stop {px(t.initialStop)} · {t.account}</span>
+                <Link href="/trades" className={s.small} style={{ color: "var(--accent)" }}>filled / cancel →</Link>
+              </div>
+            ))}
+          </div>
+        </Section>
+      ) : null}
+
       <Section title="Orders working" count={data.working.length} hint="best edge first (forex → indices → commodities → stocks), then closest to filling">
         {data.working.length ? (
           <div className={s.list}>
@@ -136,7 +152,7 @@ export default function TonightPage() {
                 <Tag tone={w.side === "long" ? "long" : "short"}>{w.side === "long" ? "BUY" : "SELL"}</Tag>
                 <div className={s.fullNarrow}>
                   <DistBar near={(w.away ?? 99) < 2} pct={w.away ?? 99}
-                    label={<>{w.kind === "close" ? `needs a close ${w.side === "long" ? "above" : "below"}` : "limit"} <b style={{ color: "var(--text-1)" }}>{px(w.level)}</b>{w.away != null ? ` · ${w.away.toFixed(1)}% away` : ""}{w.inverted ? " · future's price" : ""}{w.inTrade ? " · in a trade" : ""}</>} />
+                    label={<>{w.kind === "close" ? `needs a close ${w.side === "long" ? "above" : "below"}` : "limit"} <b style={{ color: "var(--text-1)" }}>{px(w.level)}</b>{w.away != null ? ` · ${w.away.toFixed(1)}% away` : ""}{w.inverted ? " · future's price" : ""}{w.inTrade ? " · you have an order or trade on it" : ""}</>} />
                 </div>
                 <div className={s.hideNarrow}><Sparkline values={w.closes} level={w.level} /></div>
                 <div className={s.hideNarrow}>

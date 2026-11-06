@@ -37,7 +37,8 @@ export default function SetupChart({
   entry: number;
   stop: number;
   breakevenAt: number;
-  target: number;
+  /** Cap / take-profit. Optional: the trend slot has no target (trail only). */
+  target?: number;
   long: boolean;
   suspectVolume?: boolean;
   fmt: (x: number) => string;
@@ -51,8 +52,9 @@ export default function SetupChart({
   const n = bars.length;
   const plotW = W - LABEL_W;
   const barsW = plotW - FUTURE;
-  const pMin = Math.min(...bars.map((b) => b[2]), rangeLo, stop, target, entry);
-  const pMax = Math.max(...bars.map((b) => b[1]), rangeHi, stop, target, entry);
+  const tgt = target != null ? [target] : [];
+  const pMin = Math.min(...bars.map((b) => b[2]), rangeLo, stop, entry, ...tgt);
+  const pMax = Math.max(...bars.map((b) => b[1]), rangeHi, stop, entry, ...tgt);
   const pad = (pMax - pMin) * 0.04;
   const lo = pMin - pad, span = Math.max(pMax + pad - lo, 1e-9);
 
@@ -71,7 +73,7 @@ export default function SetupChart({
 
   // Keep the four labels from sitting on top of each other.
   const levels = [
-    { key: "cap", p: target, col: "var(--green)", dash: "5 3", w: 1 },
+    ...(target != null ? [{ key: "cap", p: target, col: "var(--green)", dash: "5 3", w: 1 }] : []),
     { key: "+1R", p: breakevenAt, col: "var(--green)", dash: "1.5 2.5", w: 1 },
     { key: "entry", p: entry, col: "var(--accent)", dash: "", w: 1.4 },
     { key: "stop", p: stop, col: "var(--red)", dash: "4 2", w: 1.2 },
@@ -85,7 +87,7 @@ export default function SetupChart({
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} role="img"
-      aria-label={`${long ? "long" : "short"} setup: entry ${fmt(entry)}, stop ${fmt(stop)}, breakeven at ${fmt(breakevenAt)}, cap ${fmt(target)}`}>
+      aria-label={`${long ? "long" : "short"} setup: entry ${fmt(entry)}, stop ${fmt(stop)}, breakeven at ${fmt(breakevenAt)}${target != null ? `, cap ${fmt(target)}` : ", no cap"}`}>
       {/* range box */}
       <rect x={boxFrom} y={y(rangeHi)} width={Math.max(2, boxTo - boxFrom)} height={Math.max(1, y(rangeLo) - y(rangeHi))} fill="var(--accent)" opacity={0.05} />
       <line x1={boxFrom} y1={y(rangeHi)} x2={boxTo} y2={y(rangeHi)} stroke="var(--accent)" strokeWidth={0.8} strokeDasharray="3 2" opacity={0.6} />

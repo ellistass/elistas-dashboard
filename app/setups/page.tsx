@@ -283,6 +283,9 @@ function takeCard(s: Row, execLong: boolean): TakeCard {
     readLocked: true,
     readAgrees: s.yourRead != null && s.yourRead !== "pass" ? s.readAgrees : s.setupRead.agrees,
     entryDate: s.state === "filled" ? s.lastBarDate : new Date().toISOString().slice(0, 10),
+    filled: s.state === "filled",
+    goodFor: s.entry === "aggressive" ? 1 : s.barsLeft ?? null,
+    lastBarDate: s.lastBarDate,
   };
 }
 

@@ -35,8 +35,27 @@ export function trendSignal(bars: Bar[], instrument: string, executeSymbol: stri
     slot: "trend", instrument, executeSymbol, side, signalDate: bars[i].date, close: c, channel: side === "long" ? hh : ll,
     entryRef: c, stop: c - d * STOP_ATR * a, atr: a, breakevenAt: c + d * STOP_ATR * a, trailDistance: TRAIL_ATR * a,
     lastBarDate: bars[i].date,
+    channelHi: hh, channelLo: ll, channelStart: prev[0].date,
+    bars: bars.slice(-120).map((b) => [b.o, b.h, b.l, b.c, b.v, b.date] as [number, number, number, number, number, string]),
   };
 }
+
+/** Every FRESH 55-day breakout (the bar before was not one) from `fromDate` on — the Filled
+ *  page replays these so the trend and crypto slots show their history, not just today. */
+export function trendHistory(bars: Bar[], instrument: string, executeSymbol: string, slot: "trend" | "crypto", fromDate: string): TrendSetup[] {
+  const out: TrendSetup[] = [];
+  let prevSig = false;
+  const first = bars.findIndex((b) => b.date >= fromDate);
+  if (first < 0) return out;
+  for (let i = Math.max(N + ATR_N + 1, first - 1); i < bars.length; i++) {
+    const s = trendSignal(bars.slice(Math.max(0, i - 200), i + 1), instrument, executeSymbol);
+    if (s && !prevSig && bars[i].date >= fromDate) out.push({ ...s, slot });
+    prevSig = !!s;
+  }
+  return out;
+}
+
+export { cryptoDone };
 
 /** Crypto trades 7 days a week: keep every bar except today's unfinished UTC bar. */
 const cryptoDone = (bars: Bar[]) => {

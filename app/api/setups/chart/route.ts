@@ -14,12 +14,24 @@ import { authOptions } from "@/lib/auth";
 import { instrumentInfo } from "@/lib/wyckoff/basket";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { completedBars } from "@/lib/setups/scan";
+import { CRYPTO_MARKETS } from "@/lib/setups/trendMarkets";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const symbol = new URL(req.url).searchParams.get("instrument") ?? "";
+  // Crypto slot (BTC/ETH): 7-day market, drop only today's unfinished UTC bar (as the trend scan does).
+  const crypto = CRYPTO_MARKETS[symbol];
+  if (crypto) {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const bars = (await fetchDailyBars(crypto.yahoo, "5y")).filter((b) => b.date < today);
+      return NextResponse.json({ instrument: symbol, suspectVolume: false, bars });
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
+    }
+  }
   const inst = instrumentInfo(symbol);
   if (!inst) return NextResponse.json({ error: `unknown instrument ${symbol}` }, { status: 400 });
 

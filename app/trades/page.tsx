@@ -43,6 +43,8 @@ export default function TradesPage() {
   }, [load]);
 
   const open = (data?.trades ?? []).filter((t) => t.status === "open");
+  const pending = (data?.trades ?? []).filter((t) => t.status === "pending");
+  const cancelled = (data?.trades ?? []).filter((t) => t.status === "cancelled");
   const closed = (data?.trades ?? []).filter((t) => t.status === "closed");
   const month = todayUtc().slice(0, 7);
   let atRisk = 0, locked = 0;
@@ -53,7 +55,7 @@ export default function TradesPage() {
   return (
     <div className={s.page}>
       <PageHead title="Trades"
-        sub={data ? `${open.length} open · ${usd(atRisk)} at risk · ${usd(locked)} locked by stops` : error ?? "Loading trades…"}
+        sub={data ? `${open.length} open · ${pending.length} order${pending.length === 1 ? "" : "s"} waiting · ${usd(atRisk)} at risk · ${usd(locked)} locked by stops` : error ?? "Loading trades…"}
         right={
           <div className={s.row}>
             <Btn primary onClick={() => setAdding(!adding)}><Plus size={12} /> Add trade</Btn>
@@ -70,11 +72,51 @@ export default function TradesPage() {
             {data.accounts.map((a) => <AccountCard key={a.key} a={{ ...a, ledger: ledger(a, data.trades, month) }} />)}
           </div>
 
+          {pending.length ? (
+            <Section title="Orders waiting" count={pending.length} hint="Not trades yet. Each evening the bars fill them (→ Open) or cancel them (expired, gapped through, opened past the stop). Each holds a slot and its risk until then.">
+              {pending.map((t) => <PendingRow key={t.id} t={t} patch={patch} />)}
+            </Section>
+          ) : null}
+
           <Section title="Open" count={open.length}>
             {open.length
-              ? open.map((t) => <TradeCard key={t.id} t={t} editable actions={data.actions.filter((a) => a.tradeId === t.id)} patch={patch} onDeleted={() => load()} />)
+              ? open.map((t) => (
+                <div key={t.id} style={{ display: "grid", gap: 4 }}>
+                  <TradeCard t={t} editable actions={data.actions.filter((a) => a.tradeId === t.id)} patch={patch} onDeleted={() => load()} />
+                  {(t.stopMoves ?? []).length === 0 ? (
+                    <div className={s.small} style={{ textAlign: "right" }}>
+                      <Btn style={{ padding: "3px 8px", fontSize: 10 }} title="Saved as a trade but the order never filled: back to pending, then settled against the bars"
+                        onClick={() => { if (confirm(`Turn ${t.instrument} back into a pending order? It's then checked against the bars: filled on the real day, or cancelled if it never filled.`)) patch({ id: t.id, action: "to-pending" }); }}>
+                        this was only an order
+                      </Btn>
+                    </div>
+                  ) : null}
+                </div>
+              ))
               : <div className={`${s.card} ${s.empty}`}>No open trades. Use <b>Add trade</b> for a position you took at your broker, or <b>Took it</b> on a setup card.</div>}
           </Section>
+
+          {cancelled.length ? (
+            <Section title="Cancelled orders · last 90 days" count={cancelled.length} hint="Never filled — not trades, not counted in the month.">
+              <div className={`${s.card} ${s.tableWrap}`} style={{ padding: 4 }}>
+                <table className={s.table}>
+                  <thead><tr>{["date", "order", "account", "level", "why", ""].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {cancelled.map((t) => (
+                      <tr key={t.id}>
+                        <td>{t.exitDate}</td>
+                        <td style={{ color: "var(--text-1)" }}><b>{t.instrument}</b> <Tag tone={t.side === "long" ? "long" : "short"}>{t.side}</Tag></td>
+                        <td>{t.account}</td>
+                        <td>{t.cardEntryKind === "open" ? "next open" : `limit ${px(t.entryPrice)}`}</td>
+                        <td>{t.cancelReason ?? "cancelled"}</td>
+                        <td><Btn style={{ padding: "3px 8px", fontSize: 10 }} onClick={() => { if (confirm(`Delete the cancelled ${t.instrument} order?`)) fetch(`/api/swing/trades?id=${t.id}`, { method: "DELETE" }).then(() => load()); }}>Delete</Btn></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Section>
+          ) : null}
 
           <Section title="Closed · last 90 days" count={closed.length} right={closed.length ? <span className={s.mono} style={{ color: totalR >= 0 ? "var(--green)" : "var(--red)" }}>{rr(totalR)} · {usd(closed.reduce((x, t) => x + (t.pnlUsd ?? 0), 0))}</span> : null}>
             <div className={s.card}><RBars items={closedChrono.map((t) => ({ r: t.resultR ?? 0, label: `${t.exitDate} ${t.instrument} ${t.side}` }))} /></div>
@@ -102,6 +144,43 @@ export default function TradesPage() {
           </Section>
         </>
       ) : null}
+    </div>
+  );
+}
+
+// ── A pending order: filled at the broker, or cancel it ──────────────────────
+
+function PendingRow({ t, patch }: { t: any; patch: (b: Record<string, unknown>) => Promise<boolean> }) {
+  const [filling, setFilling] = useState(false);
+  const [date, setDate] = useState(todayUtc());
+  const [price, setPrice] = useState(px(t.entryPrice));
+  const bars = t.pendingBars ?? 5;
+  return (
+    <div className={s.card} style={{ display: "grid", gap: 8 }}>
+      <div className={s.row} style={{ flexWrap: "wrap" }}>
+        <b>{t.executeSymbol || t.instrument}</b>{t.executeSymbol && t.executeSymbol !== t.instrument ? <span className={s.small}>{t.instrument}</span> : null}
+        <Tag tone={t.side === "long" ? "long" : "short"}>{t.side}</Tag>
+        <Tag tone="info">order waiting</Tag>
+        <span className={s.small}>{t.account} · grade {t.grade}</span>
+        <span className={s.small} style={{ marginLeft: "auto" }}>
+          {t.cardEntryKind === "open" ? `market at the open after ${t.orderPlacedDate}` : `limit ${px(t.entryPrice)} · live ${bars} bar${bars === 1 ? "" : "s"} after ${t.orderPlacedDate}`}
+          {" "}· stop {px(t.initialStop)}{t.capPrice != null ? ` · cap ${px(t.capPrice)}` : ""}
+        </span>
+      </div>
+      {t.trackError ? <div className={s.small} style={{ color: "var(--amber)" }}>couldn't check the feed: {t.trackError}</div> : null}
+      {filling ? (
+        <div className={s.row} style={{ flexWrap: "wrap" }}>
+          <label className={s.field}>fill date<input className={s.input} value={date} onChange={(e) => setDate(e.target.value)} /></label>
+          <label className={s.field}>your fill price<input className={s.input} value={price} onChange={(e) => setPrice(e.target.value)} /></label>
+          <Btn primary onClick={() => patch({ id: t.id, action: "fill", date, price })}>Save fill</Btn>
+          <Btn onClick={() => setFilling(false)}>Back</Btn>
+        </div>
+      ) : (
+        <div className={s.row}>
+          <Btn onClick={() => setFilling(true)}>Filled at the broker</Btn>
+          <Btn danger onClick={() => { if (confirm(`Cancel the ${t.instrument} order?`)) patch({ id: t.id, action: "cancel" }); }}>Cancel order</Btn>
+        </div>
+      )}
     </div>
   );
 }

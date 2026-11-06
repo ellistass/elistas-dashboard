@@ -292,7 +292,8 @@ export function riskParts(t: LedgerTrade) {
 export function ledger(acc: SwingAccountCfg, trades: LedgerTrade[], month: string): Ledger {
   const mine = trades.filter((t) => t.account === acc.key);
   const realised = mine.filter((t) => t.status === "closed" && t.exitDate?.startsWith(month)).reduce((s, t) => s + (t.pnlUsd ?? 0), 0);
-  const open = mine.filter((t) => t.status === "open");
+  // A pending order holds its slot and its full risk: it can fill any day.
+  const open = mine.filter((t) => t.status === "open" || t.status === "pending");
   let openRisk = 0, locked = 0;
   for (const t of open) { const p = riskParts(t); openRisk += p.open; locked += p.locked; }
   const worstCase = realised - openRisk + locked;

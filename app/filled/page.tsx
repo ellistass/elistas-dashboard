@@ -1,10 +1,13 @@
 "use client";
-// app/filled/page.tsx — every setup after it left /setups: what's the stop tonight,
-// and how did the rest play out?
+// app/filled/page.tsx — every setup after it left /setups (range, forex, trend and
+// crypto slots): what's the stop tonight, and how did the rest play out?
 //
 // Open fills first (with tonight's stop), then won / lost / breakeven / never
-// filled. Click a row for the Setups page's chart in a popup, with the fill,
-// the stop trail step by step, and the exit drawn on it.
+// filled. Filters: grade, and the account rules — every setup taken (no limits),
+// only what the rules take (slots, 4 losers, monthly stop, one per market, card
+// skips), or only what they skip. The calendar puts the simulated days next to
+// your real trades. Click a row for the Setups chart with the fill, the stop
+// trail step by step, and the exit drawn on it.
 
 import { useCallback, useEffect, useState } from "react";
 import { Maximize2, RefreshCw } from "lucide-react";
@@ -12,6 +15,14 @@ import { kit as s, Btn, Grade, PageHead, Section, SideTag, Tag, px, rr } from ".
 import SetupChartFull from "../setups/SetupChartFull";
 
 type Status = "open" | "win" | "loss" | "be" | "expired";
+interface RuleCall { taken: boolean; slot: string; reason: string | null }
+interface AccountInfo { key: string; name: string; gradesAllowed: string[]; maxSlots: number; stopR: number | null }
+interface RealTrade {
+  id: string; account: string; instrument: string; executeSymbol: string | null; side: string; grade: string;
+  entryDate: string; exitDate: string | null; status: string; resultR: number | null; rNow: number | null; pnlUsd: number | null;
+}
+type GradeF = "all" | "A" | "B" | "trend";
+type ModeF = "every" | "rules" | "skipped";
 interface Row {
   id: string; market: string; instrument: string; executeSymbol: string; inverted: boolean;
   side: string; entry: string; grade: string; status: Status;
@@ -22,6 +33,10 @@ interface Row {
   lockedR: number | null; lastDate: string | null; lastClose: number | null;
   openR: number | null; peakR: number | null; barsHeld: number;
   exitDate: string | null; exitPrice: number | null; exitReason: string | null; resultR: number | null;
+  slot: string | null; weight: number;
+  plannedExit: { date: string; event: string } | null;
+  rules: Record<string, RuleCall> | null;
+  warmup: boolean;
   taken: { account: string; status: string } | null;
 }
 
@@ -43,6 +58,8 @@ const eventDate = (r: Row) =>
   : r.exitDate ?? r.fillDate ?? r.firstBarDate;
 
 const rowR = (r: Row) => (r.status === "open" ? r.openR : r.status === "expired" ? null : r.resultR);
+/** In account R: trend/crypto trades are half risk. */
+const acctR = (r: Row) => { const v = rowR(r); return v == null ? null : v * (r.weight ?? 1); };
 
 /** Newest month first, newest day first inside it. */
 function groupByMonthDay(rows: Row[]) {
@@ -58,7 +75,7 @@ function groupByMonthDay(rows: Row[]) {
 }
 
 function Tally({ rows }: { rows: Row[] }) {
-  const rs = rows.map(rowR).filter((v): v is number => v != null);
+  const rs = rows.map(acctR).filter((v): v is number => v != null);
   const net = rs.reduce((a, b) => a + b, 0);
   const w = rs.filter((v) => v > 0.05).length, l = rs.filter((v) => v < -0.05).length;
   return (
@@ -73,7 +90,14 @@ const monthLabel = (m: string) => new Date(m + "-01T00:00:00Z").toLocaleDateStri
 const dayLabel = (d: string) => new Date(d.slice(0, 10) + "T00:00:00Z").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 
 export default function FilledPage() {
-  const [data, setData] = useState<{ rows: Row[]; errors: { instrument: string; error: string }[] } | null>(null);
+  const [data, setData] = useState<{
+    rows: Row[]; errors: { instrument: string; error: string }[];
+    accounts: AccountInfo[]; real: RealTrade[]; windowStart: string; warmupDays: number;
+  } | null>(null);
+  const [grade, setGrade] = useState<GradeF>("all");
+  const [mode, setMode] = useState<ModeF>("every");
+  const [acct, setAcct] = useState("50k");
+  const [view, setView] = useState<"list" | "calendar">("list");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Status>("open");
@@ -91,22 +115,60 @@ export default function FilledPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const rows = data?.rows ?? [];
+  const gradeOk = (r: Row) => grade === "all" || (grade === "trend" ? r.entry === "trend" : r.grade === grade);
+  const call = (r: Row) => r.rules?.[acct] ?? null;
+  const modeOk = (r: Row) => mode === "every" || (mode === "rules" ? call(r)?.taken === true : !!call(r) && !call(r)!.taken);
+  const rows = (data?.rows ?? []).filter((r) => gradeOk(r) && modeOk(r));
+  const real = (data?.real ?? []).filter((t) => t.account === acct && (grade === "all" || grade === "trend" || t.grade === grade));
   const count = (k: Status) => rows.filter((r) => r.status === k).length;
   const shown = rows.filter((r) => r.status === tab);
   const moves = rows.filter((r) => r.status === "open" && r.stopMoved).length;
-  const closedR = rows.filter((r) => r.resultR != null && r.status !== "expired").map((r) => r.resultR!);
+  const closedR = rows.filter((r) => r.resultR != null && r.status !== "expired").map((r) => r.resultR! * (r.weight ?? 1));
   const avg = closedR.length ? closedR.reduce((a, b) => a + b, 0) / closedR.length : null;
+  const net = closedR.reduce((a, b) => a + b, 0);
+  const accInfo = data?.accounts.find((a) => a.key === acct);
 
   return (
     <div className={s.page}>
       <PageHead title="Filled"
-        sub={data ? `${count("open")} open · ${moves} stop ${moves === 1 ? "move" : "moves"} tonight · ${count("win")} won · ${count("loss")} lost${avg != null ? ` · ${rr(avg)} average closed` : ""}` : error ?? "Loading…"}
+        sub={data ? `${count("open")} open · ${moves} stop ${moves === 1 ? "move" : "moves"} tonight · ${count("win")} won · ${count("loss")} lost${avg != null ? ` · ${rr(avg)} average · ${rr(net)} net closed` : ""}` : error ?? "Loading…"}
         right={<Btn onClick={load} disabled={busy}><RefreshCw size={12} className={busy ? "animate-spin" : ""} /> Refresh</Btn>} />
 
       {data?.errors.length ? <div className={`${s.card} ${s.small}`} style={{ color: "var(--amber)" }}>Feed errors: {data.errors.map((e) => e.instrument).join(", ")}, so those markets are missing below.</div> : null}
 
       {data ? (
+        <div className={`${s.card} ${s.small}`} style={{ display: "grid", gap: 8 }}>
+          <div className={s.row} style={{ flexWrap: "wrap" }}>
+            <span style={{ width: 56 }}>Grade</span>
+            {(["all", "A", "B", "trend"] as const).map((g) => (
+              <Btn key={g} primary={grade === g} onClick={() => setGrade(g)}>{g === "all" ? "All grades" : g === "trend" ? "Trend / crypto" : `Grade ${g}`}</Btn>
+            ))}
+          </div>
+          <div className={s.row} style={{ flexWrap: "wrap" }}>
+            <span style={{ width: 56 }}>Trades</span>
+            <Btn primary={mode === "every"} onClick={() => setMode("every")}>Every setup taken</Btn>
+            <Btn primary={mode === "rules"} onClick={() => setMode("rules")}>Taken by the rules</Btn>
+            <Btn primary={mode === "skipped"} onClick={() => setMode("skipped")}>Skipped by the rules</Btn>
+            <span style={{ width: 12 }} />
+            {data.accounts.map((a) => <Btn key={a.key} primary={acct === a.key} onClick={() => setAcct(a.key)}>{a.key}</Btn>)}
+          </div>
+          <div className={s.row} style={{ flexWrap: "wrap" }}>
+            <span style={{ width: 56 }}>View</span>
+            <Btn primary={view === "list"} onClick={() => setView("list")}>List</Btn>
+            <Btn primary={view === "calendar"} onClick={() => setView("calendar")}>Calendar · simulated vs real</Btn>
+          </div>
+          <div style={{ color: "var(--text-3)", lineHeight: 1.6 }}>
+            {mode === "every" ? "Every setup that filled, as if all were taken — no slot, loss or monthly limits."
+              : `${accInfo?.key ?? acct} rules: ${accInfo?.gradesAllowed.join("/") ?? "A"} only in the ${accInfo?.maxSlots ?? 3} range slots · trend 1 slot · crypto 1 slot (both ½ risk) · a trade at breakeven frees its slot · correlated trades share a slot unless the other is losing · one trade per market · stop after 4 losers in a month · monthly stop ${accInfo?.stopR ?? 5}R (worst case) · the card's own skips (not on FTMO, forex COT skip, 4h heavy first drop).`}
+            {" "}Events inside a hold (Discipline → Event dates) exit at the close the day before. R totals are account R (½-risk trades count half).
+            {mode !== "every" ? ` Fills in the first ${data.warmupDays} days (before ${addDaysIso(data.windowStart, data.warmupDays)}) are warming up: the rules don't see trades from before the window, so slots look emptier than they were.` : ""}
+          </div>
+        </div>
+      ) : null}
+
+      {data && view === "calendar" ? <Calendar rows={rows} real={real} onPick={setPopup} /> : null}
+
+      {data && view === "list" ? (
         <Section title={TABS.find((t) => t.key === tab)!.label} count={shown.length}
           hint={tab === "open" ? "Stops follow the card: breakeven at +1R, then the trail. Set them after the close." : "Last 120 days, played out under the card's rules."}
           right={<div className={s.row}>{TABS.map((t) => <Btn key={t.key} primary={tab === t.key} onClick={() => { setTab(t.key); }}>{t.label} {count(t.key)}</Btn>)}</div>}>
@@ -129,7 +191,7 @@ export default function FilledPage() {
                           style={{ gridTemplateColumns: "18px minmax(160px,1.3fr) 160px minmax(170px,1fr) 150px", alignItems: "start", cursor: "zoom-in" }}
                           onClick={() => setPopup(r)}>
                           <Maximize2 size={12} style={{ marginTop: 3, color: "var(--text-3)" }} />
-                          <Who r={r} />
+                          <Who r={r} acct={acct} />
                           <Fill r={r} />
                           {r.status === "open" ? <StopNow r={r} /> : <Exit r={r} />}
                           <Result r={r} />
@@ -148,13 +210,19 @@ export default function FilledPage() {
   );
 }
 
-function Who({ r }: { r: Row }) {
+function Who({ r, acct }: { r: Row; acct: string }) {
+  const c = r.rules?.[acct] ?? null;
   return (
     <div className={s.row} style={{ flexWrap: "wrap" }}>
       <b>{r.executeSymbol}</b>{r.executeSymbol !== r.instrument ? <span className={s.small}>{r.instrument}</span> : null}
       <SideTag side={r.side} /><Grade g={r.grade} />
-      <span className={s.small}>{r.entry}</span>
-      {r.taken ? <Tag tone="good">taken · {r.taken.account}</Tag> : <Tag tone="plain">not taken</Tag>}
+      <span className={s.small}>{r.entry === "trend" ? `${r.market} slot · ½ risk` : r.entry}</span>
+      {c ? (c.taken
+        ? <Tag tone="good">rules: take{c.reason ? ` · ${c.reason}` : ""}</Tag>
+        : <Tag tone="plain">rules: skip · {c.reason}</Tag>) : null}
+      {c && r.warmup ? <span className={s.small}>warming up</span> : null}
+      {r.taken ? <Tag tone="info">{r.taken.status === "pending" ? "your order · waiting" : r.taken.status === "cancelled" ? "your order · cancelled" : "you took it"} · {r.taken.account}</Tag> : r.fillDate ? <span className={s.small}>you: not taken</span> : null}
+      {r.plannedExit ? <Tag tone="warn">exit {r.plannedExit.date} close · {r.plannedExit.event}</Tag> : null}
       {r.inverted ? <span className={s.small}>prices are the future's — translate to {r.executeSymbol}</span> : null}
     </div>
   );
@@ -245,14 +313,98 @@ function ChartModal({ r, onClose }: { r: Row; onClose: () => void }) {
           <span style={{ color: "var(--amber)" }}>— amber line: the stop, bar by bar</span>
         </div>
         <SetupChartFull
-          instrument={r.instrument} entry={r.entry === "aggressive" ? "aggressive" : "conservative"} long={long}
+          instrument={r.instrument} entry={r.entry === "aggressive" || r.entry === "trend" ? "aggressive" : "conservative"} long={long}
           rangeLo={r.rangeLo} rangeHi={r.rangeHi} rangeStart={r.rangeStart} signalDate={r.signalDate ?? r.firstBarDate}
           entryPrice={r.entryPrice} stop={r.origStop} breakevenAt={r.breakevenAt} target={r.target ?? undefined} fmt={(x) => px(x)}
           dataUrl={r.market === "forex" ? `/api/setups/forex/chart?pair=${encodeURIComponent(r.instrument)}` : undefined}
-          note={r.inverted ? `prices are the future's — translate to ${r.executeSymbol}` : undefined}
+          note={r.entry === "trend" ? "trend slot · box = the 55-day channel the close broke · no target, 3 × ATR trail" : r.inverted ? `prices are the future's — translate to ${r.executeSymbol}` : undefined}
           played={{ fillDate: r.fillDate, fillPrice: r.fillPrice, exitDate: r.exitDate, exitPrice: r.exitPrice,
             win: r.status === "win" ? true : r.status === "loss" ? false : null, stops }} />
       </div>
+    </div>
+  );
+}
+
+const addDaysIso = (d: string, n: number) => new Date(Date.parse(d.slice(0, 10) + "T00:00:00Z") + n * 86400e3).toISOString().slice(0, 10);
+
+/** Month grid: each day = the simulated trades that closed that day (under the filters above)
+ *  next to your real trades that closed that day. Click a day for its trades. */
+function Calendar({ rows, real, onPick }: { rows: Row[]; real: RealTrade[]; onPick: (r: Row) => void }) {
+  const sim = rows.filter((r) => r.exitDate && r.status !== "open" && r.status !== "expired");
+  const realClosed = real.filter((t) => t.status === "closed" && t.exitDate);
+  const months = [...new Set([...sim.map((r) => r.exitDate!.slice(0, 7)), ...realClosed.map((t) => t.exitDate!.slice(0, 7)), new Date().toISOString().slice(0, 7)])].sort();
+  const [month, setMonth] = useState(months[months.length - 1]);
+  const [day, setDay] = useState<string | null>(null);
+  const mi = months.indexOf(month);
+
+  const simBy = new Map<string, Row[]>(), realBy = new Map<string, RealTrade[]>();
+  for (const r of sim) simBy.set(r.exitDate!.slice(0, 10), [...(simBy.get(r.exitDate!.slice(0, 10)) ?? []), r]);
+  for (const t of realClosed) realBy.set(t.exitDate!.slice(0, 10), [...(realBy.get(t.exitDate!.slice(0, 10)) ?? []), t]);
+  const sumSim = (rs: Row[]) => rs.reduce((a, r) => a + (acctR(r) ?? 0), 0);
+  const sumReal = (ts: RealTrade[]) => ts.reduce((a, t) => a + (t.resultR ?? 0), 0);
+
+  const first = new Date(month + "-01T00:00:00Z");
+  const lead = (first.getUTCDay() + 6) % 7;                     // Monday first
+  const nDays = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  const cells: (string | null)[] = [...Array(lead).fill(null), ...Array.from({ length: nDays }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`)];
+  while (cells.length % 7) cells.push(null);
+
+  const mSim = sim.filter((r) => r.exitDate!.startsWith(month)), mReal = realClosed.filter((t) => t.exitDate!.startsWith(month));
+  const wl = (vs: number[]) => `${vs.filter((v) => v > 0.05).length}W ${vs.filter((v) => v < -0.05).length}L`;
+  const tone = (v: number) => (v > 0.05 ? "var(--green)" : v < -0.05 ? "var(--red)" : "var(--text-3)");
+  const mono = { fontFamily: "'DM Mono', monospace" } as const;
+
+  return (
+    <div className={s.card} style={{ display: "grid", gap: 10 }}>
+      <div className={s.row} style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
+        <div className={s.row}>
+          <Btn disabled={mi <= 0} onClick={() => { setMonth(months[mi - 1]); setDay(null); }}>‹</Btn>
+          <b style={{ fontSize: 14 }}>{monthLabel(month)}</b>
+          <Btn disabled={mi >= months.length - 1} onClick={() => { setMonth(months[mi + 1]); setDay(null); }}>›</Btn>
+        </div>
+        <div style={{ ...mono, fontSize: 11, display: "flex", gap: 18 }}>
+          <span>simulated <b style={{ color: tone(sumSim(mSim)) }}>{rr(sumSim(mSim))}</b> · {mSim.length} · {wl(mSim.map((r) => acctR(r) ?? 0))}</span>
+          <span>real <b style={{ color: tone(sumReal(mReal)) }}>{rr(sumReal(mReal))}</b> · {mReal.length} · {wl(mReal.map((t) => t.resultR ?? 0))}</span>
+          <span style={{ color: "var(--text-3)" }}>gap {rr(sumReal(mReal) - sumSim(mSim))}</span>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => <div key={d} className={s.small} style={{ textAlign: "center" }}>{d}</div>)}
+        {cells.map((d, i) => {
+          if (!d) return <div key={i} />;
+          const ss = simBy.get(d) ?? [], rs = realBy.get(d) ?? [];
+          const empty = !ss.length && !rs.length;
+          return (
+            <button key={d} onClick={() => setDay(empty ? null : d)} disabled={empty}
+              style={{ ...mono, textAlign: "left", minHeight: 62, padding: "5px 6px", borderRadius: 8, fontSize: 10.5, lineHeight: 1.5,
+                border: `1px solid ${day === d ? "var(--text-2)" : "var(--border-subtle)"}`, background: empty ? "transparent" : "var(--surface-2, transparent)",
+                cursor: empty ? "default" : "pointer", color: "var(--text-2)" }}>
+              <div style={{ color: "var(--text-3)" }}>{Number(d.slice(8))}</div>
+              {ss.length ? <div>sim <span style={{ color: tone(sumSim(ss)) }}>{rr(sumSim(ss))}</span> ·{ss.length}</div> : null}
+              {rs.length ? <div>real <span style={{ color: tone(sumReal(rs)) }}>{rr(sumReal(rs))}</span> ·{rs.length}</div> : null}
+            </button>
+          );
+        })}
+      </div>
+      {day ? (
+        <div style={{ display: "grid", gap: 6 }}>
+          <b style={{ fontSize: 12 }}>{dayLabel(day)}</b>
+          {(simBy.get(day) ?? []).map((r) => (
+            <div key={r.id} className={s.row} style={{ cursor: "zoom-in", flexWrap: "wrap" }} onClick={() => onPick(r)}>
+              <span className={s.small} style={{ width: 40 }}>sim</span><b>{r.executeSymbol}</b><SideTag side={r.side} /><Grade g={r.grade} />
+              <span className={s.small}>{r.exitReason}</span>
+              <span className={s.mono} style={{ color: tone(acctR(r) ?? 0), marginLeft: "auto" }}>{rr(acctR(r))}{r.weight !== 1 ? " (½)" : ""}</span>
+            </div>
+          ))}
+          {(realBy.get(day) ?? []).map((t) => (
+            <div key={t.id} className={s.row} style={{ flexWrap: "wrap" }}>
+              <span className={s.small} style={{ width: 40 }}>real</span><b>{t.executeSymbol || t.instrument}</b><SideTag side={t.side} /><Grade g={t.grade} />
+              <span className={s.small}>{t.account} · in {t.entryDate}</span>
+              <span className={s.mono} style={{ color: tone(t.resultR ?? 0), marginLeft: "auto" }}>{rr(t.resultR)}</span>
+            </div>
+          ))}
+        </div>
+      ) : <div className={s.small}>Days show trades by exit date. Click a day to see them; click a simulated trade for its chart.</div>}
     </div>
   );
 }

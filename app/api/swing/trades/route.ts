@@ -2,12 +2,17 @@
 //
 // GET  ?status=open|closed|all (default all, closed = last 90 days) [&refresh=1]
 //      → { trades, actions, accounts }. refresh=1 recomputes open trades from Yahoo first.
-// POST → add a trade (your real fills). Size defaults from the instrument spec.
+// POST → add a trade (your real fills), or with `pending: true` an ORDER you placed that
+//        hasn't filled: saved as "pending" and settled each evening (fills → open,
+//        expired / gapped through / opened past the stop → cancelled). Size defaults from the instrument spec.
 //        The pre-trade gate runs first: a block returns 409 { gate } unless
 //        `override: true`, and every failed rule is then logged as a rule break.
 // PATCH { id, action: "move-stop", to }                       — stops only move in your favour
 //       { id, action: "close", exitDate, exitPrice, exitReason }
 //       { id, action: "update", brokerBest?, notes?, feed?, capPrice?, size? }
+//       { id, action: "fill", date, price? }   — a pending order filled (your broker's date/price)
+//       { id, action: "cancel", reason? }      — you cancelled a pending order
+//       { id, action: "to-pending" }           — an open trade that was really only an order
 // DELETE ?id= → remove a trade entered by mistake.
 
 export const runtime = "nodejs";
@@ -18,7 +23,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { isFxPair, resultOf, riskForGrade, sizeFor, specClass, specFor, todayUtc, type StopMove } from "@/lib/swing/core";
+import { addDays, isFxPair, resultOf, riskForGrade, sizeFor, specClass, specFor, todayUtc, type StopMove } from "@/lib/swing/core";
 import { defaultFeed } from "@/lib/swing/feeds";
 import { actionsFor, loadAccounts, loadSpecs, refreshOpenTrades, refreshTrade } from "@/lib/swing/trades";
 import { LOGGED_RULES, runGate } from "@/lib/swing/gate";
@@ -39,9 +44,9 @@ export async function GET(req: Request) {
     if (q.get("refresh") === "1") refresh = await refreshOpenTrades();
     const since = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
     const where =
-      status === "open" ? { status: "open" }
+      status === "open" ? { status: { in: ["open", "pending"] } }
       : status === "closed" ? { status: "closed", exitDate: { gte: since } }
-      : { OR: [{ status: "open" }, { status: "closed", exitDate: { gte: since } }] };
+      : { OR: [{ status: "open" }, { status: "pending" }, { status: { in: ["closed", "cancelled"] }, exitDate: { gte: since } }] };
     const trades = await T().findMany({ where, orderBy: [{ status: "desc" }, { entryDate: "desc" }] });
     return NextResponse.json({
       trades,
@@ -91,12 +96,17 @@ export async function POST(req: Request) {
     });
     if (gate.blocked && !b.override) return NextResponse.json({ error: "blocked by the pre-trade gate", gate }, { status: 409 });
     const setupLogId = b.setupRef ? await matchLogRow(b.setupRef) : null;
+    // An order that hasn't filled: pending until the bars fill it (lib/swing/trades.ts settlePending).
+    const pending = b.pending === true;
+    const placed = isDate(b.orderPlacedDate) ? b.orderPlacedDate : b.entryDate;
+    const pendingBars = cardEntryKind === "open" ? 1 : Math.max(1, Math.round(Number(b.goodFor) || 5));
 
     const t = await T().create({
       data: {
         account: account.key, setupLogId, market, instrument,
         executeSymbol: b.executeSymbol || null, feed: (b.feed && String(b.feed).includes(":")) ? String(b.feed) : defaultFeed(instrument),
         side, grade, entryDate: b.entryDate, entryPrice, initialStop, currentStop: initialStop,
+        ...(pending ? { status: "pending", orderPlacedDate: placed, pendingBars } : {}),
         capPrice, size, riskUsd, stopMoves: [],
         cardEntry, cardStop, cardCap, cardEntryKind, samePrices,
         plannedExitDate: isDate(b.plannedExitDate) ? b.plannedExitDate : gate.plannedExitDate,
@@ -159,6 +169,42 @@ export async function PATCH(req: Request) {
       if ("size" in b && Number(b.size) > 0) data.size = Number(b.size);
       if (Object.values(data).some((v) => typeof v === "number" && !Number.isFinite(v))) return bad("numbers only");
       await T().update({ where: { id: t.id }, data });
+      return NextResponse.json({ trade: await refreshTrade(t.id) });
+    }
+
+    if (b.action === "fill") {
+      if (t.status !== "pending") return bad("only a pending order can be filled");
+      if (!isDate(b.date)) return bad("fill date must be YYYY-MM-DD");
+      const price = num(b.price);
+      if (price != null && !Number.isFinite(price)) return bad("numbers only");
+      await T().update({ where: { id: t.id }, data: { status: "open", entryDate: b.date, ...(price != null ? { entryPrice: price } : {}), cancelReason: null } });
+      return NextResponse.json({ trade: await refreshTrade(t.id) });
+    }
+
+    if (b.action === "cancel") {
+      if (t.status !== "pending") return bad("only a pending order can be cancelled");
+      const trade = await T().update({ where: { id: t.id }, data: { status: "cancelled", cancelReason: b.reason ? String(b.reason) : "cancelled by you", exitDate: todayUtc(), exitReason: "cancelled" } });
+      return NextResponse.json({ trade });
+    }
+
+    if (b.action === "to-pending") {
+      // Saved as a trade but it was only an order: back to pending, tracking reset, then settled
+      // against the bars at once (it fills on the real day, or is cancelled if it never did).
+      if (t.status !== "open") return bad("only an open trade can be turned back into an order");
+      let placed = addDays(t.entryDate, -1), goodFor = 5;
+      if (t.setupLogId) {
+        const log = await (db as any).setupLog.findUnique({ where: { id: t.setupLogId } }).catch(() => null);
+        if (log) { placed = log.firstBarDate; goodFor = log.snapshot?.barsLeft ?? log.snapshot?.order?.entry?.goodFor ?? log.snapshot?.order?.goodForBars ?? 5; }
+      }
+      await T().update({
+        where: { id: t.id },
+        data: {
+          status: "pending", orderPlacedDate: placed, pendingBars: t.cardEntryKind === "open" ? 1 : goodFor,
+          currentStop: t.initialStop, stopMoves: [],
+          lastDate: null, lastClose: null, bestPrice: null, bestDate: null, rNow: null, peakR: null, touched1R: false,
+          suggestedStop: null, stopHitDate: null, stopHitPrice: null, capHitDate: null, daysHeld: null, moveDueSince: null,
+        },
+      });
       return NextResponse.json({ trade: await refreshTrade(t.id) });
     }
 

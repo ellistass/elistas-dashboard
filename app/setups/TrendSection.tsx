@@ -5,6 +5,8 @@ import { RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
 import { EmptyState, ErrorCard } from "../wyckoff/_components/ui";
 import { TREND_MARKETS, CRYPTO_MARKETS, type TrendSetup } from "@/lib/setups/trendMarkets";
 import PriceCheck from "./PriceCheck";
+import SetupChart from "./SetupChart";
+import SetupChartFull from "./SetupChartFull";
 
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const fmt = (x: number) => (Math.abs(x) >= 100 ? x.toFixed(2) : Math.abs(x) >= 1 ? x.toFixed(4) : x.toFixed(5));
@@ -13,6 +15,7 @@ export default function TrendSection() {
   const [data, setData] = useState<{ at: string; setups: TrendSetup[]; errors: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState<TrendSetup | null>(null);
   const load = useCallback(async (fresh = false) => {
     setBusy(true); setError(null);
     try {
@@ -70,6 +73,11 @@ export default function TrendSection() {
               <div style={{ ...mono, fontSize: 10, marginTop: 8, color: "var(--text-3)" }}>
                 closed {long ? "above the 55-day high" : "below the 55-day low"} {fmt(s.channel)} on {s.signalDate} · data to {s.lastBarDate}
               </div>
+              <button onClick={() => setOpen(s)} title="Click to expand"
+                style={{ marginTop: 10, display: "block", width: "100%", padding: 0, background: "none", border: "none", cursor: "zoom-in" }}>
+                <SetupChart bars={s.bars ?? []} rangeLo={s.channelLo} rangeHi={s.channelHi} rangeStart={s.channelStart}
+                  signalDate={s.signalDate} entry={s.entryRef} stop={s.stop} breakevenAt={s.breakevenAt} long={long} fmt={fmt} />
+              </button>
               <PriceCheck card={{
                 entryKind: "open", long, entry: s.entryRef, stop: s.stop, cap: long ? Number.MAX_VALUE : 0,
                 plus1R: s.breakevenAt, rangeLo: s.channel, rangeHi: s.channel, symbol: s.instrument,
@@ -81,6 +89,51 @@ export default function TrendSection() {
           </div>
         );
       })}
+      {open ? <TrendChartModal s={open} onClose={() => setOpen(null)} /> : null}
+    </div>
+  );
+}
+
+/** The expanded chart for a trend/crypto card: box = the 55-day channel, no cap (3×ATR trail). */
+export function TrendChartModal({ s, onClose, played }: {
+  s: TrendSetup; onClose: () => void;
+  played?: React.ComponentProps<typeof SetupChartFull>["played"];
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
+  }, [onClose]);
+  const long = s.side === "long";
+  return (
+    <div role="dialog" aria-modal="true" aria-label={`${s.instrument} chart`} onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ width: "min(1180px, 100%)", maxHeight: "100%", overflow: "auto", background: "var(--surface-1)", border: "1px solid var(--border-subtle)", borderRadius: 14, padding: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ ...mono, fontSize: 13 }}>
+            <b style={{ fontSize: 16 }}>{s.instrument}</b>
+            <span style={{ marginLeft: 10, color: long ? "var(--green)" : "var(--red)" }}>
+              {long ? "BUY" : "SELL"} {s.executeSymbol} · {s.slot} slot · 55-day breakout · ½ risk
+            </span>
+          </div>
+          <button onClick={onClose} style={{ ...mono, fontSize: 11, color: "var(--text-3)" }}>close (esc)</button>
+        </div>
+        <div style={{ ...mono, fontSize: 11, color: "var(--text-2)", margin: "8px 0 12px", display: "flex", gap: 18, flexWrap: "wrap" }}>
+          <span>entry next open (ref {fmt(s.entryRef)})</span>
+          <span style={{ color: "var(--red)" }}>stop {fmt(s.stop)} (2 × ATR)</span>
+          <span style={{ color: "var(--green)" }}>+1R → BE {fmt(s.breakevenAt)}</span>
+          <span style={{ color: "var(--text-3)" }}>then trail {fmt(s.trailDistance)} (3 × ATR) · no cap</span>
+          <span style={{ color: "var(--text-3)" }}>signal {s.signalDate}</span>
+        </div>
+        <SetupChartFull instrument={s.instrument} entry="aggressive" long={long}
+          rangeLo={s.channelLo} rangeHi={s.channelHi} rangeStart={s.channelStart} signalDate={s.signalDate}
+          entryPrice={s.entryRef} stop={s.stop} breakevenAt={s.breakevenAt} fmt={fmt}
+          note="trend slot · box = the 55-day channel the close broke · no target, 3 × ATR trail"
+          played={played} />
+      </div>
     </div>
   );
 }

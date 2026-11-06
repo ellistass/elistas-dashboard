@@ -20,8 +20,8 @@ export async function GET() {
       loadAccounts(),
       loadSpecs(),
       (db as any).swingTrade.findMany({
-        where: { status: "open" },
-        select: { account: true, instrument: true, side: true, size: true, entryPrice: true, initialStop: true, currentStop: true, riskUsd: true, rNow: true },
+        where: { status: { in: ["open", "pending"] } },   // pending orders hold a slot too
+        select: { status: true, account: true, instrument: true, side: true, size: true, entryPrice: true, initialStop: true, currentStop: true, riskUsd: true, rNow: true },
       }).catch(() => []),
       (db as any).tradingEvent.findMany({ where: { date: { gte: addDays(today, -7), lte: addDays(today, 90) } }, orderBy: { date: "asc" } }).catch(() => []),
       (db as any).ratesSnapshot.findFirst({ orderBy: { fetchedAt: "desc" }, select: { rates: true, fetchedAt: true } }).catch(() => null),

@@ -192,6 +192,7 @@ function Card({ s }: { s: DriverSetup }) {
           entry: s.order.entry, stop: s.order.stopLoss, cap: null, entryKind: "limit", samePrices: true,
           readLocked: null, readAgrees: null,
           entryDate: s.state === "filled" ? s.lastBarDate : new Date().toISOString().slice(0, 10),
+          filled: s.state === "filled", goodFor: s.order.goodForBars ?? null, lastBarDate: s.lastBarDate,
         }} />
       )}
     </div>

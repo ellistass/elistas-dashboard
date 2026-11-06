@@ -22,4 +22,8 @@ export interface TrendSetup {
   breakevenAt: number;
   trailDistance: number;
   lastBarDate: string;
+  channelHi: number;          // 55-day high before the signal (the box on the chart)
+  channelLo: number;          // 55-day low before the signal
+  channelStart: string;       // first bar of the 55-day window
+  bars: [number, number, number, number, number, string][];   // last 120 daily bars [o,h,l,c,v,date] for the card chart
 }

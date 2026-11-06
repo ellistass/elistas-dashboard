@@ -54,13 +54,14 @@ export async function GET() {
     const month = monthOf(today);
     const [accounts, trades, scans, unreviewed, events] = await Promise.all([
       loadAccounts(),
-      (db as any).swingTrade.findMany({ where: { OR: [{ status: "open" }, { status: "closed", exitDate: { gte: `${month}-01` } }] }, orderBy: { entryDate: "asc" } }),
+      (db as any).swingTrade.findMany({ where: { OR: [{ status: "open" }, { status: "pending" }, { status: "closed", exitDate: { gte: `${month}-01` } }] }, orderBy: { entryDate: "asc" } }),
       (db as any).setupScanCache.findMany().catch(() => []),
       (db as any).disciplineEvent.findMany({ where: { kind: "break", reviewedAt: null }, orderBy: { date: "desc" } }).catch(() => []),
       (db as any).tradingEvent.findMany({ where: { date: { gte: today, lte: addDays(today, 120) } }, orderBy: { date: "asc" } }).catch(() => []),
     ]);
     const open = trades.filter((t: any) => t.status === "open");
-    const inTrade = new Set(open.map((t: any) => t.instrument));
+    const pending = trades.filter((t: any) => t.status === "pending");
+    const inTrade = new Set([...open, ...pending].map((t: any) => t.instrument));
     const fut = scans.find((x: any) => x.key === "futures");
     const fx = scans.find((x: any) => x.key === "forex");
 
@@ -99,6 +100,7 @@ export async function GET() {
           entry: px(s.entryPrice), stop: px(s.stop), cap: px(s.target), entryKind: s.entry === "aggressive" ? "open" : "limit",
           samePrices: s.assetClass === "stock", readLocked: null, readAgrees: null,
           entryDate: s.state === "filled" ? s.lastBarDate : today,
+          filled: s.state === "filled", goodFor: s.entry === "aggressive" ? 1 : s.barsLeft ?? s.order?.entry?.goodFor ?? null, lastBarDate: s.lastBarDate,
         },
       });
     }
@@ -124,6 +126,7 @@ export async function GET() {
           ref: { market: "forex", instrument: s.pair, side: s.side, entry: "forex", rangeLo: s.range.lo, rangeHi: s.range.hi },
           instrument: s.pair, executeSymbol: null, side: s.side, grade: s.grade, entry: s.order.entry, stop: s.order.stopLoss, cap: null,
           entryKind: "limit", samePrices: true, readLocked: null, readAgrees: null, entryDate: s.lastBarDate,
+          filled: true, goodFor: null, lastBarDate: s.lastBarDate,
         },
       });
     }
@@ -147,7 +150,8 @@ export async function GET() {
       closes: closeTimes(),
       accounts: accounts.map((a) => ({ ...a, ledger: ledger(a, trades, month) })),
       trades: open,
-      actions: open.flatMap(actionsFor),
+      pending,
+      actions: [...open, ...pending].flatMap(actionsFor),
       actNow,
       working,
       scannedAt: { futures: fut?.computedAt ?? null, forex: fx?.computedAt ?? null },

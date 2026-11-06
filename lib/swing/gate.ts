@@ -51,7 +51,8 @@ export const LOGGED_RULES: Rule[] = ["Levels", "Size", "Accounts", "Exposure", "
 /** How far ahead an event counts as "inside the likely hold" (the time exit is 60 bars). */
 export const HOLD_DAYS = 30;
 const MARGIN_WARN = 0.4;
-export const MAX_LOSERS_PER_MONTH = 4;
+import { MAX_LOSERS_PER_MONTH } from "./rulesSim";   // one value for the gate and the Filled simulation
+export { MAX_LOSERS_PER_MONTH };
 
 export async function runGate(g: GateInput): Promise<GateResult> {
   const checks: GateCheck[] = [];
@@ -66,9 +67,10 @@ export async function runGate(g: GateInput): Promise<GateResult> {
   const month = monthOf(today);
 
   const trades = await (db as any).swingTrade.findMany({
-    where: { account: acc.key, OR: [{ status: "open" }, { status: "closed", exitDate: { gte: `${month}-01` } }] },
+    where: { account: acc.key, OR: [{ status: "open" }, { status: "pending" }, { status: "closed", exitDate: { gte: `${month}-01` } }] },
   });
-  const open = trades.filter((t: any) => t.status === "open");
+  // Pending orders hold a slot and count their risk (they can fill any day).
+  const open = trades.filter((t: any) => t.status === "open" || t.status === "pending");
   const withSector = (t: any) => ({ ...t, sector: specFor(t.instrument, specs).sector });
   const L = ledger(acc, trades, month);
   const R = Math.abs(g.entryPrice - g.stopPrice);

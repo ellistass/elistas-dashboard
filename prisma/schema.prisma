@@ -710,6 +710,10 @@ model SwingTrade {
   cardEntryKind   String?                 // "limit" | "open" (market at the next open: entry is only a reference)
   brokerBest      Float?                  // your broker's best print when the feed differs
   plannedExitDate String?                 // exit before an event (set by the gate, step 3)
+  // pending order ("Took it" before the fill): live from the bar AFTER orderPlacedDate
+  orderPlacedDate String?                 // the card's last bar when you placed the order
+  pendingBars     Int?                    // bars the limit stays live (the card's good-for; next-open = 1)
+  cancelReason    String?                 // why a pending order was cancelled (expired, gap through, …)
   // evening maths
   lastDate        String?
   lastClose       Float?
@@ -730,7 +734,7 @@ model SwingTrade {
   trackedAt       DateTime?
   trackError      String?
   // the close
-  status          String    @default("open") // "open" | "closed"
+  status          String    @default("open") // "pending" (order placed, not filled) | "open" | "closed" | "cancelled"
   exitDate        String?
   exitPrice       Float?
   exitReason      String?                 // stop | trail | cap | event | effort-result | time | manual

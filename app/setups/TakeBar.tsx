@@ -32,6 +32,12 @@ export interface TakeCard {
   readLocked: boolean | null;
   readAgrees: boolean | null;
   entryDate: string;
+  /** The entry has already happened on the card (limit touched on the last bar). false = only an order can be placed now. */
+  filled?: boolean;
+  /** Bars the limit stays live (next-open entries: 1). */
+  goodFor?: number | null;
+  /** The card's last completed bar — a pending order is live from the bar after it. */
+  lastBarDate?: string;
 }
 
 interface Check { rule: string; level: "ok" | "warn" | "block"; text: string }
@@ -66,6 +72,8 @@ function TakeForm({ card, onDone }: { card: TakeCard; onDone: (text: string) => 
   });
   const [specs, setSpecs] = useState<InstrumentSpecCfg[]>([]);
   const [gate, setGate] = useState<Gate | null>(null);
+  // Not filled on the card yet → by default you've placed an ORDER, not taken a trade.
+  const [placed, setPlaced] = useState<"pending" | "filled">(card.filled === false ? "pending" : "filled");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -90,6 +98,7 @@ function TakeForm({ card, onDone }: { card: TakeCard; onDone: (text: string) => 
     entryDate: f.entryDate, entryPrice: f.entryPrice, stopPrice: f.stopPrice, capPrice: f.capPrice, riskUsd: risk, size,
     cardEntry: card.entry, cardStop: card.stop, cardCap: card.cap, cardEntryKind: card.entryKind,
     samePrices: card.samePrices, readLocked: card.readLocked, readAgrees: card.readAgrees, setupRef: card.ref, notes: f.notes, override,
+    pending: placed === "pending", goodFor: card.goodFor ?? null, orderPlacedDate: card.lastBarDate ?? f.entryDate,
   });
 
   const check = async () => {
@@ -112,21 +121,36 @@ function TakeForm({ card, onDone }: { card: TakeCard; onDone: (text: string) => 
       if (!r.ok) throw new Error(j.error ?? r.statusText);
       invalidateRiskContext();
       const logged = (j.gate?.checks ?? []).filter((c: Check) => c.level === "block" || (c.level === "warn" && ["Levels", "House money", "Read"].includes(c.rule))).length;
-      onDone(`Saved to Trades (${f.account}).${logged ? ` ${logged} rule break${logged > 1 ? "s" : ""} logged on Discipline.` : ""}`);
+      const what = placed === "pending"
+        ? `Order saved as pending (${f.account}) — it becomes a trade when the price fills it (checked every evening), or is cancelled if it expires.`
+        : `Saved to Trades (${f.account}).`;
+      onDone(`${what}${logged ? ` ${logged} rule break${logged > 1 ? "s" : ""} logged on Discipline.` : ""}`);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
 
   return (
     <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+      {card.filled === false ? (
+        <div style={{ ...mono, fontSize: 10.5, display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", gap: 4, alignItems: "center", cursor: "pointer" }}>
+            <input type="radio" checked={placed === "pending"} onChange={() => { setPlaced("pending"); setGate(null); }} />
+            order placed — not filled yet{card.entryKind === "open" ? " (market at the next open)" : card.goodFor ? ` (limit, live ${card.goodFor} bars)` : " (limit)"}
+          </label>
+          <label style={{ display: "flex", gap: 4, alignItems: "center", cursor: "pointer" }}>
+            <input type="radio" checked={placed === "filled"} onChange={() => { setPlaced("filled"); setGate(null); }} />
+            already filled at the broker
+          </label>
+        </div>
+      ) : null}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
         <label style={lbl}>account
           <select style={inp} value={f.account} onChange={set("account")}>
             {(accounts ?? []).map((a) => <option key={a.key} value={a.key}>{a.key}{a.gradesAllowed.includes(card.grade) ? "" : ` (${a.gradesAllowed.join("/")} only)`}</option>)}
           </select>
         </label>
-        <label style={lbl}>entry date<input style={inp} value={f.entryDate} onChange={set("entryDate")} /></label>
-        <label style={lbl}>your entry{card.entryKind === "open" ? " (fill)" : ""}<input style={inp} value={f.entryPrice} onChange={set("entryPrice")} /></label>
+        <label style={lbl}>{placed === "pending" ? "order date" : "entry date"}<input style={inp} value={f.entryDate} onChange={set("entryDate")} /></label>
+        <label style={lbl}>{placed === "pending" ? (card.entryKind === "open" ? "your reference entry" : "your limit") : `your entry${card.entryKind === "open" ? " (fill)" : ""}`}<input style={inp} value={f.entryPrice} onChange={set("entryPrice")} /></label>
         <label style={lbl}>your stop<input style={inp} value={f.stopPrice} onChange={set("stopPrice")} /></label>
         <label style={lbl}>your cap<input style={inp} value={f.capPrice} onChange={set("capPrice")} /></label>
         <label style={lbl}>risk $<input style={inp} placeholder={String(risk)} value={f.riskUsd} onChange={set("riskUsd")} /></label>
@@ -152,7 +176,7 @@ function TakeForm({ card, onDone }: { card: TakeCard; onDone: (text: string) => 
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         <button style={btn} disabled={busy || !f.account} onClick={check}>check the rules</button>
-        {gate && !gate.blocked ? <button style={{ ...btn, borderColor: "var(--green)" }} disabled={busy} onClick={() => save(false)}>save trade</button> : null}
+        {gate && !gate.blocked ? <button style={{ ...btn, borderColor: "var(--green)" }} disabled={busy} onClick={() => save(false)}>{placed === "pending" ? "save order (pending)" : "save trade"}</button> : null}
         {gate && gate.blocked ? (
           <button style={{ ...btn, borderColor: "var(--red)", color: "var(--red)" }} disabled={busy} onClick={() => save(true)}>
             already in it — save and log the break{gate.checks.filter((c) => c.level === "block").length > 1 ? "s" : ""}
