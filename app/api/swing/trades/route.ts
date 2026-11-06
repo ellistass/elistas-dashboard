@@ -93,6 +93,7 @@ export async function POST(req: Request) {
     const gate = await runGate({
       account: account.key, instrument, side, grade, riskUsd, entryPrice, stopPrice: initialStop, size,
       cardEntry, cardStop, cardEntryKind, samePrices, readLocked: b.readLocked ?? null, readAgrees: b.readAgrees ?? null,
+      ruleSkip: b.ruleSkip ?? null,
     });
     if (gate.blocked && !b.override) return NextResponse.json({ error: "blocked by the pre-trade gate", gate }, { status: 409 });
     const setupLogId = b.setupRef ? await matchLogRow(b.setupRef) : null;

@@ -133,6 +133,7 @@ function build(base: Omit<FilledRow, "status" | "fillDate" | "fillPrice" | "stop
 /** What the card itself says about taking it (before any account rule). */
 function cardSkipFor(row: any): string | null {
   const s = row.snapshot ?? {};
+  if (s.ruleSkip) return s.ruleSkip;
   if (row.market === "futures") {
     const inst = instrumentInfo(row.instrument);
     if (inst && !inst.executeSymbol) return "not on FTMO — information only";

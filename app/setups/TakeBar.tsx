@@ -38,6 +38,8 @@ export interface TakeCard {
   goodFor?: number | null;
   /** The card's last completed bar — a pending order is live from the bar after it. */
   lastBarDate?: string;
+  /** The card's account rule says skip (e.g. stock in an unhealthy market) — the gate blocks it. */
+  ruleSkip?: string | null;
 }
 
 interface Check { rule: string; level: "ok" | "warn" | "block"; text: string }
@@ -99,6 +101,7 @@ function TakeForm({ card, onDone }: { card: TakeCard; onDone: (text: string) => 
     cardEntry: card.entry, cardStop: card.stop, cardCap: card.cap, cardEntryKind: card.entryKind,
     samePrices: card.samePrices, readLocked: card.readLocked, readAgrees: card.readAgrees, setupRef: card.ref, notes: f.notes, override,
     pending: placed === "pending", goodFor: card.goodFor ?? null, orderPlacedDate: card.lastBarDate ?? f.entryDate,
+    ruleSkip: card.ruleSkip ?? null,
   });
 
   const check = async () => {

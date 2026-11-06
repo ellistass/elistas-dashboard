@@ -17,6 +17,7 @@ import { epsFor, ETF } from "@/lib/data/eps";
 import { valuationRead, type ValRead, type EpsReport } from "./valuation";
 import { fetchFuturesCot, cotRead, fetchShortInterest, siRead, positioningVerdict, type FuturesCot, type SiPoint, type SiRead } from "@/lib/data/positioning";
 import { fetchHourBars, to4h, firstDropRead, springRead, spring2hFavour, type HourBar } from "./intraday";
+import { breadthSeries, marketReadAt, type MarketRead } from "./market";
 
 export interface InstrumentSetup extends Setup {
   instrument: string;
@@ -37,6 +38,10 @@ export interface InstrumentSetup extends Setup {
   valuation: ValRead | null;
   /** Chart window: the range plus a little context, as [o,h,l,c,v,date] tuples. */
   bars: [number, number, number, number, number, string][];
+  /** Stocks only: market state at the signal (lib/setups/market.ts). */
+  market: MarketRead | null;
+  /** The account rules say don't take it (grade unchanged). */
+  ruleSkip: string | null;
 }
 
 export interface SetupScan {
@@ -95,6 +100,7 @@ export async function scanSetups(force = false): Promise<SetupScan> {
   const BATCH = 5; // same politeness as the Wyckoff scan
   // Weekly CFTC positioning for every futures market, once per scan. A CFTC hiccup never kills the scan.
   const cot: FuturesCot = await fetchFuturesCot().catch(() => ({}));
+  const stockBars: Bar[][] = [];   // every scanned stock (not ETFs) → market breadth
   for (let i = 0; i < BASKET.length; i += BATCH) {
     await Promise.all(
       BASKET.slice(i, i + BATCH).map(async (inst) => {
@@ -108,6 +114,7 @@ export async function scanSetups(force = false): Promise<SetupScan> {
             try { bars = patchVolume(raw, await storedVolume(inst.symbol)).bars; } catch { bars = raw; }
           }
           if (bars.length < 120) return;
+          if (specClass(inst.symbol) === "stock" && !ETF.has(inst.symbol)) stockBars.push(bars);
           const expected = expectedLastSession();
           const feedGap = bars[bars.length - 1].date < expected ? expected : null;
           const eps = specClass(inst.symbol) === "stock" && !ETF.has(inst.symbol)
@@ -187,6 +194,8 @@ export async function scanSetups(force = false): Promise<SetupScan> {
               volumeQuality: inst.volumeQuality,
               lastBarDate: bars[bars.length - 1].date,
               feedGap,
+              market: null,
+              ruleSkip: null,
             });
           }
         } catch (e) {
@@ -194,6 +203,27 @@ export async function scanSetups(force = false): Promise<SetupScan> {
         }
       }),
     );
+  }
+
+  // Stocks: market state at the signal. RULE — stock setups only in a healthy market (Nov 2026 test).
+  try {
+    const spx = completedBars(await fetchDailyBars("^GSPC", "5y"));
+    const breadth = breadthSeries(stockBars);
+    for (const s of setups) {
+      if (s.assetClass !== "stock" || ETF.has(s.instrument)) continue;
+      const m = marketReadAt(spx, breadth, s.signalDate);
+      s.market = m;
+      if (!m) continue;
+      const pct = Math.round(m.breadth * 100);
+      s.checks.push({
+        label: "Market healthy: S&P 200-day rising and ≥ 50% of stocks above their 200-day (rule — skip if not)",
+        pass: m.state === "healthy",
+        value: `${m.state} · S&P 200-day ${m.spxTrendUp ? "rising" : "falling"} · ${pct}% of ${m.stocks} stocks above`,
+      });
+      if (m.state !== "healthy") s.ruleSkip = `market ${m.state} — stock setups only in a healthy market`;
+    }
+  } catch (e) {
+    errors.push({ instrument: "^GSPC", error: `market state: ${e instanceof Error ? e.message : String(e)}` });
   }
 
   // Grade A first, then what needs action soonest.

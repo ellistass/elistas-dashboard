@@ -18,6 +18,7 @@ export async function POST(req: Request) {
       grade: b.grade === "B" ? "B" : "A", riskUsd: Number(b.riskUsd), entryPrice: Number(b.entryPrice), stopPrice: Number(b.stopPrice),
       size: b.size ? Number(b.size) : null, cardEntry: b.cardEntry ?? null, cardStop: b.cardStop ?? null,
       cardEntryKind: b.cardEntryKind ?? null, samePrices: !!b.samePrices, readLocked: b.readLocked ?? null, readAgrees: b.readAgrees ?? null,
+      ruleSkip: b.ruleSkip ?? null,
     };
     if (![g.riskUsd, g.entryPrice, g.stopPrice].every((x) => Number.isFinite(x) && x > 0)) {
       return NextResponse.json({ error: "risk, entry and stop are required" }, { status: 400 });

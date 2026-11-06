@@ -29,10 +29,12 @@ export interface GateInput {
   /** Futures cards: true = your blind read is locked, false = not read, null = n/a. */
   readLocked?: boolean | null;
   readAgrees?: boolean | null;
+  /** The card's account rule says skip (e.g. stock in an unhealthy market). */
+  ruleSkip?: string | null;
 }
 
 /** The spec rule a check belongs to — also the rule-break log's "Rule" column. */
-export type Rule = "Entry" | "Levels" | "Size" | "Accounts" | "Exposure" | "Monthly stop" | "House money" | "Management" | "Exits" | "Size after wins" | "Margin" | "Events" | "Read";
+export type Rule = "Entry" | "Levels" | "Size" | "Accounts" | "Exposure" | "Monthly stop" | "House money" | "Management" | "Exits" | "Size after wins" | "Margin" | "Events" | "Read" | "Market";
 
 export interface GateCheck { rule: Rule; level: "ok" | "warn" | "block"; text: string }
 
@@ -46,7 +48,7 @@ export interface GateResult {
 }
 
 /** Rules whose failure is written to the rule-break log when you take the trade anyway. */
-export const LOGGED_RULES: Rule[] = ["Levels", "Size", "Accounts", "Exposure", "Monthly stop", "House money", "Read"];
+export const LOGGED_RULES: Rule[] = ["Levels", "Size", "Accounts", "Exposure", "Monthly stop", "House money", "Read", "Market"];
 
 /** How far ahead an event counts as "inside the likely hold" (the time exit is 60 bars). */
 export const HOLD_DAYS = 30;
@@ -79,6 +81,7 @@ export async function runGate(g: GateInput): Promise<GateResult> {
   // Accounts
   if (!acc.gradesAllowed.includes(g.grade)) add("Accounts", "block", `${acc.key} takes ${acc.gradesAllowed.join("/")}-grades only — this is a ${g.grade}`);
   else add("Accounts", "ok", `${g.grade}-grade allowed in ${acc.key}`);
+  if (g.ruleSkip) add("Market", "block", `card rule: ${g.ruleSkip}`);
 
   // Size
   const allowed = riskForGrade(g.grade, acc.riskPerTrade);

@@ -167,6 +167,9 @@ function Card({ s, readOnly = false }: { s: Row; readOnly?: boolean }) {
           grade {s.grade}
         </span>
       </div>
+      {s.ruleSkip && (
+        <div style={{ ...mono, fontSize: 11, color: "var(--red)", marginTop: 4 }}>rule: skip · {s.ruleSkip}</div>
+      )}
 
       <div style={{ ...mono, fontSize: 11, marginTop: 6, color: execLong ? "var(--green)" : "var(--red)" }}>
         {execLong ? "BUY" : "SELL"} {s.executeSymbol || s.instrument} · {s.entry}
@@ -286,6 +289,7 @@ function takeCard(s: Row, execLong: boolean): TakeCard {
     filled: s.state === "filled",
     goodFor: s.entry === "aggressive" ? 1 : s.barsLeft ?? null,
     lastBarDate: s.lastBarDate,
+    ruleSkip: s.ruleSkip ?? null,
   };
 }
 
