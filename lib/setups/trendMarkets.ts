@@ -26,4 +26,8 @@ export interface TrendSetup {
   channelLo: number;          // 55-day low before the signal
   channelStart: string;       // first bar of the 55-day window
   bars: [number, number, number, number, number, string][];   // last 120 daily bars [o,h,l,c,v,date] for the card chart
+  /** How far the close is above (+) / below (−) its 200-day average, as a fraction. */
+  vs200: number | null;
+  /** Trend-slot rule says don't take it (Nov 2026 test); null on the crypto slot. */
+  ruleSkip: string | null;
 }

@@ -186,7 +186,9 @@ function Card({ s }: { s: DriverSetup }) {
       {s.yields && (
         <div style={{ ...mono, fontSize: 11, color: s.yields.supporting ? "var(--green)" : "var(--text-3)" }}>
           Yields: {s.yields.supporting ? "supporting" : "against"} (10y gap {s.yields.change > 0 ? "+" : ""}{s.yields.change} over 3 months)
-          {s.yields.supporting ? " — scale in at +1R allowed (half size)" : " — no scale-in"}
+          {s.yields.supporting
+            ? ` — scale in at +1R (${fmt(s.order.breakEven)}): add half size, stop at the entry ${fmt(s.order.entry)}`
+            : " — no scale-in"}
         </div>
       )}
       <Driver s={s} />

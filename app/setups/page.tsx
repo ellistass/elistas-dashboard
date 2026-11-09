@@ -142,6 +142,11 @@ function Grid({ rows, readOnly = false }: { rows: Row[]; readOnly?: boolean }) {
   );
 }
 
+/** Market type tag on the card — which rule set applies (Nov 2026 layers). */
+const MARKET_TYPE: Record<string, string> = {
+  stock: "stock", index: "index future", commodity: "commodity future", ag: "grain / soft future", currency: "currency future",
+};
+
 function Card({ s, readOnly = false }: { s: Row; readOnly?: boolean }) {
   const long = s.side === "long";
   // Inverted futures (6C/6J/6S): show the EXECUTE direction, never make the trader flip it.
@@ -162,6 +167,9 @@ function Card({ s, readOnly = false }: { s: Row; readOnly?: boolean }) {
           {s.executeSymbol && s.executeSymbol !== s.instrument && (
             <span style={{ ...mono, fontSize: 10, color: "var(--text-3)", marginLeft: 6 }}>→ {s.executeSymbol}</span>
           )}
+          <span style={{ ...mono, fontSize: 9.5, marginLeft: 8, padding: "1px 7px", borderRadius: 999, border: "1px solid var(--border-subtle)", color: "var(--text-2)" }}>
+            {MARKET_TYPE[s.assetClass] ?? s.assetClass}{s.market ? ` · market ${s.market.state}` : ""}
+          </span>
         </div>
         <span style={{ ...mono, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${s.grade === "A" ? "var(--green)" : "var(--border-subtle)"}`, color: s.grade === "A" ? "var(--green)" : "var(--text-3)" }}>
           grade {s.grade}

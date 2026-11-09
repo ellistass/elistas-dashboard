@@ -175,7 +175,7 @@ function evaluateTrend(t: TrendSetup, bars: DayBar[], events: Evt[], taken: Fill
     slot: t.slot, weight: 0.5,
     rangeLo: t.channelLo, rangeHi: t.channelHi, rangeStart: t.channelStart, signalDate: t.signalDate, firstBarDate: t.signalDate,
     breakevenAt: ref + d * TREND_STOP_ATR * t.atr, taken,
-  }, input, bars, events, null);
+  }, input, bars, events, t.ruleSkip ?? null);
 }
 
 async function loadEvents(from: string): Promise<Evt[]> {

@@ -44,12 +44,16 @@ export default function TradeCard({ t, actions, patch, editable = false, onDelet
   else instr = { what: `Nothing to do tonight — stop stays at ${px(t.currentStop)}`, why: t.touched1R ? `Trailing ${trailTxt} behind the best price.` : `Breakeven once price reaches ${px(t.entryPrice + d * R)} (+1R).`, tone: "info" };
   const mismatch = by("mismatch");
   const scale = by("scale-in");
+  // Forex scale-in plan (Nov 2026 test): yields supporting → add a 2nd position, half size, at +1R.
+  const scaleAt = t.entryPrice + d * R;
+  const scalePlan = t.market === "forex" && !t.parentTradeId && !t.stopHitDate && !t.touched1R && t.scaleIn === "supporting";
 
   const lines: ChartLine[] = [
     { label: "entry", value: t.entryPrice, tone: "fg2", dash: true },
     { label: "stop", value: t.currentStop, tone: "red" },
   ];
   if (moveDue) lines.push({ label: "new stop", value: t.suggestedStop, tone: "accent" });
+  if (scalePlan) lines.push({ label: "add (+1R)", value: scaleAt, tone: "green", dash: true });
   if (t.bestPrice != null && Math.abs(t.bestPrice - t.entryPrice) > R * 0.05) lines.push({ label: "best", value: t.bestPrice, tone: "green", dash: true });
   if (t.capPrice != null) lines.push({ label: "cap", value: t.capPrice, tone: "green" });
   const bars: Candle[] = (t.recentBars ?? []) as Candle[];
@@ -86,8 +90,14 @@ export default function TradeCard({ t, actions, patch, editable = false, onDelet
               if (r.ok) location.reload(); else alert((await r.json()).error ?? "save failed");
             }}>Log the add</Btn>
           </div>
-        ) : t.market === "forex" && t.scaleIn === "against" && t.touched1R ? (
-          <div className={s.small} style={{ color: "var(--text-3)" }}>Yields against — no scale-in.</div>
+        ) : scalePlan ? (
+          <div className={s.small} style={{ color: "var(--green)" }}>
+            ↗ Scale-in plan: when price reaches +1R ({px(scaleAt)}), add a 2nd position at half size ({usd(t.riskUsd / 2)} risk), stop at your entry {px(t.entryPrice)}. Yields supporting.
+          </div>
+        ) : t.market === "forex" && !t.parentTradeId && t.scaleIn === "against" ? (
+          <div className={s.small} style={{ color: "var(--text-3)" }}>Yields against — no scale-in on this trade.</div>
+        ) : t.market === "forex" && !t.parentTradeId && t.scaleIn == null && !t.stopHitDate ? (
+          <div className={s.small} style={{ color: "var(--text-3)" }}>No yields read saved for this trade — scale-in unknown (check the card).</div>
         ) : null}
         <div className={s.row}>
           {moveDue ? <Btn primary onClick={() => patch({ id: t.id, action: "move-stop", to: t.suggestedStop })}>I moved it to {px(t.suggestedStop)}</Btn> : null}

@@ -63,6 +63,14 @@ export default function TrendSection() {
               <div style={{ ...mono, fontSize: 11, marginTop: 6, color: long ? "var(--green)" : "var(--red)" }}>
                 {long ? "BUY" : "SELL"} {s.executeSymbol} · trend breakout · enter at the next open
               </div>
+              {s.ruleSkip && (
+                <div style={{ ...mono, fontSize: 11, color: "var(--red)", marginTop: 4 }}>rule: skip · {s.ruleSkip}</div>
+              )}
+              {s.vs200 != null && (
+                <div style={{ ...mono, fontSize: 10, color: "var(--text-3)", marginTop: 4 }}>
+                  {s.vs200 >= 0 ? "+" : ""}{Math.round(s.vs200 * 100)}% vs the 200-day (skip longs above +20%)
+                </div>
+              )}
               <div style={{ ...mono, fontSize: 10.5, marginTop: 10, padding: "8px 10px", borderRadius: 9, border: "1px solid var(--border-subtle)", lineHeight: 1.7 }}>
                 <div>1. {long ? "BUY" : "SELL"} MARKET at the next open (ref close {fmt(s.close)})</div>
                 <div>2. {long ? "SELL" : "BUY"} STOP at {fmt(s.stop)} (2 × ATR {fmt(s.atr)}) — re-measure from your fill</div>

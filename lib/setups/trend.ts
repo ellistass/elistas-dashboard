@@ -6,6 +6,10 @@
 // Rules: the last completed daily bar CLOSES above the highest high (long) / below
 // the lowest low (short) of the previous 55 bars → enter at the next open, stop
 // 2 × ATR(20), breakeven at +1R, then trail 3 × ATR behind the best price, no target.
+//
+// Trend-slot rules (Nov 2026 test, these 10 markets, 2018 – Oct 2026; not the crypto slot):
+//   longs only — longs +0.51R / +0.59R per trade (2018–mid-22 / since), shorts +0.19R / −0.44R;
+//   skip longs already > 20% above the 200-day — +0.17R (both halves) vs +0.63R for the rest.
 import { BASKET } from "@/lib/wyckoff/basket";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { completedBars } from "./scan";
@@ -13,7 +17,7 @@ import type { Bar } from "@/lib/wyckoff/engine";
 
 import { TREND_MARKETS, CRYPTO_MARKETS, type TrendSetup } from "./trendMarkets";
 export { TREND_MARKETS, CRYPTO_MARKETS, type TrendSetup };
-const N = 55, ATR_N = 20, STOP_ATR = 2, TRAIL_ATR = 3;
+const N = 55, ATR_N = 20, STOP_ATR = 2, TRAIL_ATR = 3, MAX_ABOVE_200 = 0.2;
 
 
 const atrAt = (b: Bar[], i: number) => {
@@ -22,7 +26,7 @@ const atrAt = (b: Bar[], i: number) => {
   return s / ATR_N;
 };
 
-export function trendSignal(bars: Bar[], instrument: string, executeSymbol: string): TrendSetup | null {
+export function trendSignal(bars: Bar[], instrument: string, executeSymbol: string, slot: "trend" | "crypto" = "trend"): TrendSetup | null {
   const i = bars.length - 1;
   if (i < N + ATR_N + 1) return null;
   const prev = bars.slice(i - N, i);
@@ -31,12 +35,19 @@ export function trendSignal(bars: Bar[], instrument: string, executeSymbol: stri
   const side = c > hh ? "long" : c < ll ? "short" : null;
   if (!side) return null;
   const d = side === "long" ? 1 : -1, a = atrAt(bars, i);
+  const sma200 = i >= 199 ? bars.slice(i - 199, i + 1).reduce((s, b) => s + b.c, 0) / 200 : null;
+  const vs200 = sma200 ? c / sma200 - 1 : null;
+  const ruleSkip = slot === "crypto" ? null
+    : side === "short" ? "trend slot: longs only (shorts −0.44R/trade since mid-2022)"
+    : vs200 != null && vs200 > MAX_ABOVE_200 ? `already ${Math.round(vs200 * 100)}% above the 200-day — late breakout (+0.17R vs +0.63R)`
+    : null;
   return {
-    slot: "trend", instrument, executeSymbol, side, signalDate: bars[i].date, close: c, channel: side === "long" ? hh : ll,
+    slot, instrument, executeSymbol, side, signalDate: bars[i].date, close: c, channel: side === "long" ? hh : ll,
     entryRef: c, stop: c - d * STOP_ATR * a, atr: a, breakevenAt: c + d * STOP_ATR * a, trailDistance: TRAIL_ATR * a,
     lastBarDate: bars[i].date,
     channelHi: hh, channelLo: ll, channelStart: prev[0].date,
     bars: bars.slice(-120).map((b) => [b.o, b.h, b.l, b.c, b.v, b.date] as [number, number, number, number, number, string]),
+    vs200: vs200 == null ? null : +vs200.toFixed(3), ruleSkip,
   };
 }
 
@@ -48,8 +59,8 @@ export function trendHistory(bars: Bar[], instrument: string, executeSymbol: str
   const first = bars.findIndex((b) => b.date >= fromDate);
   if (first < 0) return out;
   for (let i = Math.max(N + ATR_N + 1, first - 1); i < bars.length; i++) {
-    const s = trendSignal(bars.slice(Math.max(0, i - 200), i + 1), instrument, executeSymbol);
-    if (s && !prevSig && bars[i].date >= fromDate) out.push({ ...s, slot });
+    const s = trendSignal(bars.slice(Math.max(0, i - 200), i + 1), instrument, executeSymbol, slot);
+    if (s && !prevSig && bars[i].date >= fromDate) out.push(s);
     prevSig = !!s;
   }
   return out;
@@ -80,8 +91,8 @@ export async function scanTrend(force = false): Promise<{ at: string; setups: Tr
   await Promise.all(Object.entries(CRYPTO_MARKETS).map(async ([sym, m]) => {
     try {
       const bars = cryptoDone(await fetchDailyBars(m.yahoo, "2y"));
-      const s = trendSignal(bars, sym, m.ftmo);
-      if (s) setups.push({ ...s, slot: "crypto" });
+      const s = trendSignal(bars, sym, m.ftmo, "crypto");
+      if (s) setups.push(s);
     } catch (e) { errors.push(`${sym}: ${e instanceof Error ? e.message : String(e)}`); }
   }));
   const scan = { at: new Date().toISOString(), setups, errors };

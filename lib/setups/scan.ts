@@ -193,6 +193,13 @@ export async function scanSetups(force = false): Promise<SetupScan> {
               : cls === "commodity" ? commodityLayers(bars, inst.symbol, s.side, s.signalDate, realYield)
               : null;
             if (layer) s.checks.push(...layer.checks);
+            // Index B → A (Nov 2026 test): a retest after a REVERSAL break that passes the AVWAP layer
+            // traded like A — 13 trades, 62% win, +0.96R (both halves positive). With-trend B retests
+            // with the same layer lost (−0.31R, n 58), so they stay B.
+            if (cls === "index" && layer && !layer.skip && s.grade === "B" && s.entry === "conservative" && s.context.daily === "reversal") {
+              s.grade = "A";
+              s.checks.push({ label: "B → A: index retest after a reversal break, AVWAP centred + held (tested 13 trades, 62%, +0.96R)", pass: true });
+            }
             setups.push({
               bars: win,
               valuation,
