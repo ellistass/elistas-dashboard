@@ -505,6 +505,9 @@ export async function scanForexDrivers(force = false): Promise<DriverScan> {
       const B = s.pair.slice(0, 3), Q = s.pair.slice(3);
       const [buy, sell] = s.side === "long" ? [B, Q] : [Q, B];
       s.yields = yieldRead(ys, buy, sell, s.breakDate ?? s.lastBarDate);
+      // RULE (Nov 2026 test): forex A with yields against went 43 trades, 42% win, −0.18R → skip.
+      if (s.yields && !s.yields.supporting && s.grade === "A" && !s.skip)
+        s.skip = `yields against (10y gap ${s.yields.change} over 3 months) — tested 43 trades, 42% win, −0.18R`;
     }
   } catch { /* no yields line */ }
   abcd.sort((x, y) => (x.state === "filled" ? 0 : 1) - (y.state === "filled" ? 0 : 1) || x.barsLeft - y.barsLeft);
