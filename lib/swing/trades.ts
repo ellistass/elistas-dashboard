@@ -32,7 +32,7 @@ export async function loadSpecs(): Promise<InstrumentSpecCfg[]> {
   try { return await (db as any).instrumentSpec.findMany(); } catch { return []; }
 }
 
-export interface Action { tradeId: string; instrument: string; kind: "stop-hit" | "cap-hit" | "move-stop" | "time-exit" | "event-exit" | "mismatch" | "pending" | "filled"; text: string; urgent: boolean }
+export interface Action { tradeId: string; instrument: string; kind: "stop-hit" | "cap-hit" | "move-stop" | "time-exit" | "event-exit" | "mismatch" | "pending" | "filled" | "scale-in"; text: string; urgent: boolean }
 
 /** Does the feed carry the CARD's prices (the future / stock the card was drawn on)? Indices
  *  are tracked on the cash index and commodities on the future, so a pending order is checked
@@ -75,7 +75,7 @@ export function settlePending(t: any, bars: { date: string; o: number; h: number
 }
 
 /** What this trade needs from you tonight, in plain words. */
-export function actionsFor(t: any): Action[] {
+export function actionsFor(t: any, _i?: number, all?: any[]): Action[] {
   const base = { tradeId: t.id, instrument: t.instrument };
   if (t.status === "pending") {
     const what = t.cardEntryKind === "open" ? `market at the next open (ref ${fmtPx(t.entryPrice)})` : `limit ${fmtPx(t.entryPrice)}, live ${t.pendingBars ?? 5} bars from ${t.orderPlacedDate}`;
@@ -99,6 +99,13 @@ export function actionsFor(t: any): Action[] {
     if (t.plannedExitDate && t.lastDate && t.lastDate <= t.plannedExitDate && t.lastDate >= addDays(t.plannedExitDate, -5))
       out.push({ ...base, kind: "event-exit", urgent: true, text: `${t.instrument}: exit before ${t.plannedExitDate}'s close (event after it)` });
     if ((t.daysHeld ?? 0) >= MAX_HOLD) out.push({ ...base, kind: "time-exit", urgent: true, text: `${t.instrument}: ${t.daysHeld} bars held — time exit at the close` });
+  }
+  // Forex scale-in (Nov 2026 test): +1R touched and yields supporting → add a 2nd position, half size.
+  if (t.market === "forex" && !t.parentTradeId && t.scaleIn === "supporting" && t.touched1R && !t.stopHitDate
+      && !(all ?? []).some((x: any) => x.parentTradeId === t.id)) {
+    const add = t.entryPrice + (t.side === "long" ? R : -R);
+    out.push({ ...base, kind: "scale-in", urgent: false,
+      text: `${t.instrument}: +1R reached and yields support — scale in: 2nd position, half size, near ${fmtPx(add)}, stop ${fmtPx(t.entryPrice)} (1R behind the add)` });
   }
   const mm = mismatch(t);
   if (mm) out.push({ ...base, kind: "mismatch", urgent: false, text: `${t.instrument}: ${mm}` });

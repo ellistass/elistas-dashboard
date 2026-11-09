@@ -119,6 +119,10 @@ const STOCK_NAMES = [
   "BA", "DIS", "KO", "PFE", "WMT", "CVX", "XOM", "MU", "CRM", "ORCL", "V", "MA",
   "HD", "UNH", "PG", "JNJ", "BAC", "WFC", "T", "VZ", "CSCO", "ADBE", "QCOM",
   "AVGO", "COST", "NKE", "MCD",
+  // 17 more FTMO US stocks (Nov 2026; market-state and short-interest rules held on them out of sample).
+  // Not added: BRK.B (no FINRA short interest under that symbol), ZM (clashes with soybean meal ZM).
+  "FDX", "GE", "GM", "GME", "IBM", "LMT", "RTX", "SBUX", "PLTR", "MSTR",
+  "SNOW", "BABA", "ARM", "ASML", "AZN", "RACE", "SPCX",
 ];
 // FTMO symbol list checked 22 Oct 2026 (ftmo.com/en/symbols). executeSymbol "" = not on
 // FTMO: the market is still scanned (history, reads) but its card is information only.

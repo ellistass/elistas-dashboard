@@ -112,6 +112,8 @@ export async function POST(req: Request) {
         cardEntry, cardStop, cardCap, cardEntryKind, samePrices,
         plannedExitDate: isDate(b.plannedExitDate) ? b.plannedExitDate : gate.plannedExitDate,
         notes: b.notes ? String(b.notes) : null,
+        scaleIn: b.scaleIn === "supporting" || b.scaleIn === "against" ? b.scaleIn : null,
+        parentTradeId: typeof b.parentTradeId === "string" ? b.parentTradeId : null,
       },
     });
     // Taken over a failed rule → it goes in the rule-break log. Blocks always;

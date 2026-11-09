@@ -44,6 +44,7 @@ import { storedVolume, patchVolume } from "@/lib/data/futuresVolume";
 import { fetchCot, positioningRead, type PositioningRead, type CotSeries } from "@/lib/data/cot";
 import { abcdFor, type AbcdSetup } from "./abcd";
 import { volRead, type VolRead } from "@/lib/swing/vol";
+import { fetchYields, yieldRead, type YieldRead } from "@/lib/data/yields";
 
 export const CCY = ["EUR", "GBP", "AUD", "NZD", "USD", "CAD", "CHF", "JPY"] as const;
 export type Ccy = (typeof CCY)[number];
@@ -106,6 +107,8 @@ export interface DriverSetup {
   /** Real money (CFTC asset managers) in each leg from range start → now. The SELL
    *  leg is the tested read: still buying it = trapped fuel ✓, already selling = late ⚠. */
   positioning: PositioningRead | null;
+  /** 10y yield gap trend (buy − sell) at the break: supporting → scale in at +1R allowed (lib/data/yields.ts). */
+  yields: YieldRead | null;
   /** Last 60 days of both strength indices, rebased to 0 — for the card sparkline. */
   strength: { dates: string[]; loser: number[]; winner: number[] };
   /** Chart window: the range plus context, [o,h,l,c,date] on NY-close candles. */
@@ -341,6 +344,7 @@ export function driverSetupFor(pair: string, bars: Bar[], si: StrengthIndex, fv?
     ],
     retest,
     positioning: null,                                                  // filled in by scanForexDrivers (needs the CFTC feed)
+    yields: null,                                                       // filled in by scanForexDrivers (FRED)
     strength: { dates: si.dates.slice(w, t + 1), loser: rebase(loser), winner: rebase(winner) },
     bars: bars.slice(Math.max(0, Math.min(r.start - 15, n - 120), n - 200))
       .map((b) => [b.o, b.h, b.l, b.c, b.date] as [number, number, number, number, string]),
@@ -494,6 +498,15 @@ export async function scanForexDrivers(force = false): Promise<DriverScan> {
       a.positioning = positioningRead(cot, buy, sell, a.b.date, a.lastBarDate);
     }
   } catch (e) { cotError = e instanceof Error ? e.message : String(e); }
+  // Yields (FRED, monthly): information for the scale-in at +1R. A FRED hiccup just hides the line.
+  try {
+    const ys = await fetchYields();
+    for (const s of setups) {
+      const B = s.pair.slice(0, 3), Q = s.pair.slice(3);
+      const [buy, sell] = s.side === "long" ? [B, Q] : [Q, B];
+      s.yields = yieldRead(ys, buy, sell, s.breakDate ?? s.lastBarDate);
+    }
+  } catch { /* no yields line */ }
   abcd.sort((x, y) => (x.state === "filled" ? 0 : 1) - (y.state === "filled" ? 0 : 1) || x.barsLeft - y.barsLeft);
   const rank = { filled: 0, armed: 1, watch: 2 } as const;
   setups.sort((a, b) => Number(!!a.skip) - Number(!!b.skip) || rank[a.state] - rank[b.state] || a.grade.localeCompare(b.grade));

@@ -183,6 +183,12 @@ function Card({ s }: { s: DriverSetup }) {
 
       {s.positioning && <Positioning p={s.positioning} />}
       {s.cotPath?.length ? <CotPathLine path={s.cotPath} /> : null}
+      {s.yields && (
+        <div style={{ ...mono, fontSize: 11, color: s.yields.supporting ? "var(--green)" : "var(--text-3)" }}>
+          Yields: {s.yields.supporting ? "supporting" : "against"} (10y gap {s.yields.change > 0 ? "+" : ""}{s.yields.change} over 3 months)
+          {s.yields.supporting ? " — scale in at +1R allowed (half size)" : " — no scale-in"}
+        </div>
+      )}
       <Driver s={s} />
 
       {!s.skip && s.state !== "watch" && (
@@ -193,6 +199,7 @@ function Card({ s }: { s: DriverSetup }) {
           readLocked: null, readAgrees: null,
           entryDate: s.state === "filled" ? s.lastBarDate : new Date().toISOString().slice(0, 10),
           filled: s.state === "filled", goodFor: s.order.goodForBars ?? null, lastBarDate: s.lastBarDate,
+          scaleIn: s.yields ? (s.yields.supporting ? "supporting" : "against") : null,
         }} />
       )}
     </div>

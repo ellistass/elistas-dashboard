@@ -40,6 +40,8 @@ export interface TakeCard {
   lastBarDate?: string;
   /** The card's account rule says skip (e.g. stock in an unhealthy market) — the gate blocks it. */
   ruleSkip?: string | null;
+  /** Forex: the yields read when taken ("supporting" → scale in at +1R allowed). */
+  scaleIn?: string | null;
 }
 
 interface Check { rule: string; level: "ok" | "warn" | "block"; text: string }
@@ -102,6 +104,7 @@ function TakeForm({ card, onDone }: { card: TakeCard; onDone: (text: string) => 
     samePrices: card.samePrices, readLocked: card.readLocked, readAgrees: card.readAgrees, setupRef: card.ref, notes: f.notes, override,
     pending: placed === "pending", goodFor: card.goodFor ?? null, orderPlacedDate: card.lastBarDate ?? f.entryDate,
     ruleSkip: card.ruleSkip ?? null,
+    scaleIn: card.scaleIn ?? null,
   });
 
   const check = async () => {

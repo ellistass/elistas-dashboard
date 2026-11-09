@@ -43,6 +43,7 @@ export default function TradeCard({ t, actions, patch, editable = false, onDelet
   else if (by("time-exit")) instr = { what: strip(by("time-exit")), tone: "warn" };
   else instr = { what: `Nothing to do tonight — stop stays at ${px(t.currentStop)}`, why: t.touched1R ? `Trailing ${trailTxt} behind the best price.` : `Breakeven once price reaches ${px(t.entryPrice + d * R)} (+1R).`, tone: "info" };
   const mismatch = by("mismatch");
+  const scale = by("scale-in");
 
   const lines: ChartLine[] = [
     { label: "entry", value: t.entryPrice, tone: "fg2", dash: true },
@@ -72,6 +73,22 @@ export default function TradeCard({ t, actions, patch, editable = false, onDelet
         </div>
         <Do what={instr.what} why={instr.why} tone={instr.tone} />
         {mismatch ? <div className={s.small} style={{ color: "var(--amber)" }}>⚠ {strip(mismatch)}</div> : null}
+        {scale ? (
+          <div className={s.small} style={{ color: "var(--green)" }}>
+            ↗ {strip(scale)}{" "}
+            <Btn onClick={async () => {
+              const px0 = prompt("Add filled at (your broker's price)?", String(t.entryPrice + d * R));
+              if (!px0) return;
+              const r = await fetch("/api/swing/trades", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+                account: t.account, instrument: t.instrument, side: t.side, grade: t.grade, entryDate: new Date().toISOString().slice(0, 10),
+                entryPrice: Number(px0), stopPrice: t.entryPrice, riskUsd: t.riskUsd / 2, parentTradeId: t.id, notes: "scale-in add (yields supporting)",
+              }) });
+              if (r.ok) location.reload(); else alert((await r.json()).error ?? "save failed");
+            }}>Log the add</Btn>
+          </div>
+        ) : t.market === "forex" && t.scaleIn === "against" && t.touched1R ? (
+          <div className={s.small} style={{ color: "var(--text-3)" }}>Yields against — no scale-in.</div>
+        ) : null}
         <div className={s.row}>
           {moveDue ? <Btn primary onClick={() => patch({ id: t.id, action: "move-stop", to: t.suggestedStop })}>I moved it to {px(t.suggestedStop)}</Btn> : null}
           <Btn primary={!!(t.stopHitDate || t.capHitDate)} onClick={() => setMode(mode === "close" ? null : "close")}>Record exit</Btn>

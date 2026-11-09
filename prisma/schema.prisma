@@ -741,6 +741,8 @@ model SwingTrade {
   resultR         Float?
   pnlUsd          Float?
   notes           String?
+  scaleIn         String?                 // forex: "supporting" | "against" — the yields read when taken
+  parentTradeId   String?                 // a scale-in add: the trade it was added to
 
   @@index([status])
   @@index([account, entryDate])

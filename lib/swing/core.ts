@@ -114,6 +114,9 @@ export const SECTOR: Record<string, string> = {
   KO: "consumer", PG: "consumer", WMT: "consumer", COST: "consumer", MCD: "consumer", NKE: "consumer", HD: "consumer", DIS: "consumer",
   PFE: "health", JNJ: "health", UNH: "health",
   T: "telecom", VZ: "telecom", BA: "industrials",
+  IBM: "tech", PLTR: "tech", MSTR: "tech", SNOW: "tech", ARM: "tech", ASML: "tech", BABA: "tech",
+  FDX: "industrials", GE: "industrials", LMT: "industrials", RTX: "industrials", SPCX: "industrials",
+  GM: "consumer", GME: "consumer", SBUX: "consumer", RACE: "consumer", AZN: "health",
 };
 
 export interface Exposure { factor: string; sign: 1 | -1 }

@@ -18,6 +18,8 @@ import { valuationRead, type ValRead, type EpsReport } from "./valuation";
 import { fetchFuturesCot, cotRead, fetchShortInterest, siRead, positioningVerdict, type FuturesCot, type SiPoint, type SiRead } from "@/lib/data/positioning";
 import { fetchHourBars, to4h, firstDropRead, springRead, spring2hFavour, type HourBar } from "./intraday";
 import { breadthSeries, marketReadAt, type MarketRead } from "./market";
+import { stockLayers, indexLayers, commodityLayers } from "./layers";
+import { fetchRealYield } from "@/lib/data/yields";
 
 export interface InstrumentSetup extends Setup {
   instrument: string;
@@ -100,6 +102,8 @@ export async function scanSetups(force = false): Promise<SetupScan> {
   const BATCH = 5; // same politeness as the Wyckoff scan
   // Weekly CFTC positioning for every futures market, once per scan. A CFTC hiccup never kills the scan.
   const cot: FuturesCot = await fetchFuturesCot().catch(() => ({}));
+  // US 10y real yield (gold/silver rule). A FRED hiccup only blanks that one read.
+  const realYield = await fetchRealYield().catch(() => null);
   const stockBars: Bar[][] = [];   // every scanned stock (not ETFs) → market breadth
   for (let i = 0; i < BASKET.length; i += BATCH) {
     await Promise.all(
@@ -181,6 +185,14 @@ export async function scanSetups(force = false): Promise<SetupScan> {
                 }
               }
             }
+            // Nov 2026 layers — rules on top of the grade (card shows "rule: skip"; grade letter unchanged).
+            const cls = specClass(inst.symbol);
+            const layer = cls === "stock" && !ETF.has(inst.symbol)
+              ? stockLayers(bars, s.side, s.signalDate, s.setupRead.agrees, s.setupRead.verdict)
+              : cls === "index" ? indexLayers(bars, s.side, s.rangeStart, s.rangeLo, s.rangeHi, s.signalDate)
+              : cls === "commodity" ? commodityLayers(bars, inst.symbol, s.side, s.signalDate, realYield)
+              : null;
+            if (layer) s.checks.push(...layer.checks);
             setups.push({
               bars: win,
               valuation,
@@ -195,7 +207,7 @@ export async function scanSetups(force = false): Promise<SetupScan> {
               lastBarDate: bars[bars.length - 1].date,
               feedGap,
               market: null,
-              ruleSkip: null,
+              ruleSkip: layer?.skip ?? null,
             });
           }
         } catch (e) {
