@@ -29,6 +29,7 @@ export default function ForexSection({ view = "retest" }: { view?: "retest" | "a
   const [data, setData] = useState<DriverScan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [withYields, setWithYields] = useState(true);
 
   const load = useCallback(async (fresh = false) => {
     setBusy(true); setError(null);
@@ -44,7 +45,8 @@ export default function ForexSection({ view = "retest" }: { view?: "retest" | "a
 
   // Your edge (Nov 2026 test): COT grade A, no skip (late / quiet / selling USD / yields against) —
   // 47 trades, 64% win, +0.49R. Everything else is kept out of the lists (collapsed below, for the record).
-  const all = data?.setups ?? [];
+  // Yields rule off → yields-against cards come back as normal COT-A cards (tested: 43 trades, 42% win, −0.18R).
+  const all = (data?.setups ?? []).map((s) => !withYields && s.skip?.startsWith("yields against") ? { ...s, skip: null } : s);
   const inEdge = (s: DriverSetup) => s.grade === "A" && !s.skip;
   const live = all.filter((s) => s.state !== "watch" && inEdge(s));
   const watch = all.filter((s) => s.state === "watch" && inEdge(s));
@@ -81,6 +83,14 @@ export default function ForexSection({ view = "retest" }: { view?: "retest" | "a
       {data && view === "abcd" && <AbcdSection rows={data.abcd ?? []} />}
       {data && view === "retest" && (
         <>
+          <div style={{ display: "flex", gap: 8, margin: "12px 0 0", alignItems: "center" }}>
+            <button onClick={() => setWithYields(!withYields)} style={{ ...mono, fontSize: 11, padding: "3px 10px", borderRadius: 999, border: `1px solid ${withYields ? "var(--green)" : "var(--amber)"}`, color: withYields ? "var(--green)" : "var(--amber)" }}>
+              yields rule: {withYields ? "on" : "off"}
+            </button>
+            <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
+              {withYields ? "COT A + yields supporting: 47 trades, 64% win, +0.49R" : "COT A only: 90 trades, 53% win, +0.17R (yields-against cards included)"}
+            </span>
+          </div>
           <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>ORDERS · {live.length}</h3>
           {live.length ? <Grid rows={live} /> : <EmptyState text="No reversal breaks waiting for a retest." small />}
           <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>WATCH — PRESSING THE EDGE · {watch.length}</h3>

@@ -20,6 +20,7 @@ import { fetchHourBars, to4h, firstDropRead, springRead, spring2hFavour, type Ho
 import { breadthSeries, marketReadAt, type MarketRead } from "./market";
 import { stockLayers, indexLayers, commodityLayers } from "./layers";
 import { fetchRealYield } from "@/lib/data/yields";
+import { earningsReleases, nextEarnings } from "@/lib/data/earnings";
 
 export interface InstrumentSetup extends Setup {
   instrument: string;
@@ -126,6 +127,7 @@ export async function scanSetups(force = false): Promise<SetupScan> {
           let h1: HourBar[] | null = null;      // raw hourly bars, fetched once, only when the market has a setup
           let h4: HourBar[] | null = null;      // fetched once per instrument, only when it has a setup
           let siPts: SiPoint[] | null = null;
+          let releases: string[] | null = null;  // SEC earnings releases, fetched once, only when a stock has a setup
           for (const s of findSetups(bars)) {
             // Window for the EXPANDED chart: ~160 bars, reaching back to 20 bars before
             // the range if it started earlier (cap 250). The card trims its own view.
@@ -193,12 +195,28 @@ export async function scanSetups(force = false): Promise<SetupScan> {
               : cls === "commodity" ? commodityLayers(bars, inst.symbol, s.side, s.signalDate, realYield)
               : null;
             if (layer) s.checks.push(...layer.checks);
+            // Earnings within 10 days of entry: WARNING (Nov 2026 test: 38% / −0.29R, 13 trades; gaps jump the stop).
+            if (cls === "stock" && !ETF.has(inst.symbol)) {
+              releases ??= await earningsReleases(inst.symbol).catch(() => []);
+              const er = nextEarnings(releases, bars[bars.length - 1].date);
+              if (er) s.checks.push({
+                label: "Earnings not within 10 days of entry (warning — entries within 10 days tested 38% / −0.29R; gaps can jump the stop)",
+                pass: er.days > 10, value: `next ~${er.next} (estimated from SEC filings, ${er.days} days)`,
+              });
+            }
             // Index B → A (Nov 2026 test): a retest after a REVERSAL break that passes the AVWAP layer
             // traded like A — 13 trades, 62% win, +0.96R (both halves positive). With-trend B retests
             // with the same layer lost (−0.31R, n 58), so they stay B.
             if (cls === "index" && layer && !layer.skip && s.grade === "B" && s.entry === "conservative" && s.context.daily === "reversal") {
               s.grade = "A";
               s.checks.push({ label: "B → A: index retest after a reversal break, AVWAP centred + held (tested 13 trades, 62%, +0.96R)", pass: true });
+            }
+            // Commodity B → A (Nov 2026 test): a retest after a REVERSAL break that passes the commodity
+            // layers — 27 trades, 67% win in both halves, +0.17R (small wins: +0.77R avg). Added to the
+            // book: 295 trades, 62% win, +191R vs +186R, max DD −6.0R vs −5.0R, 48 vs 40 months with 3+ trades.
+            if (cls === "commodity" && layer && !layer.skip && s.grade === "B" && s.entry === "conservative" && s.context.daily === "reversal") {
+              s.grade = "A";
+              s.checks.push({ label: "B → A: commodity retest after a reversal break, layers passed (tested 27 trades, 67%, +0.17R — small winners)", pass: true });
             }
             setups.push({
               bars: win,

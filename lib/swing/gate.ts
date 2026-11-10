@@ -104,6 +104,14 @@ export async function runGate(g: GateInput): Promise<GateResult> {
 
   // Exposure: slots and correlation
   const mine = exposures(g.instrument, g.side, spec.sector);
+  // One trade per currency direction (Nov 2026 test) — blocks even when the other trade is winning.
+  // Filled trades only: two pending orders may wait side by side (cancel the other when one fills).
+  // Same instrument is skipped: that's the scale-in add on the trade itself.
+  for (const t of open.filter((x: any) => x.status === "open" && x.instrument !== g.instrument)) {
+    const hit = exposures(t.instrument, t.side, specFor(t.instrument, specs).sector)
+      .find((y) => y.factor.startsWith("ccy:") && mine.some((x) => x.factor === y.factor && x.sign === y.sign));
+    if (hit) { add("Exposure", "block", `already ${hit.sign > 0 ? "long" : "short"} ${hit.factor.slice(4)} via ${t.instrument} ${t.side} — one trade per currency direction`); break; }
+  }
   const groups: any[][] = correlationGroups(open.map(withSector));
   const joins = groups.find((grp) => grp.some((t: any) => correlated(mine, exposures(t.instrument, t.side, specFor(t.instrument, specs).sector))));
   if (joins) {

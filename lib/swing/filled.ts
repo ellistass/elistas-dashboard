@@ -206,8 +206,9 @@ function evaluateLogged(row: any, bars: DayBar[], events: Evt[], taken: FilledRo
   const inst = row.market === "futures" ? instrumentInfo(row.instrument) : undefined;
   const paper = row.entry === "abcd";
   const layerSkip = layerSkipFor(row, bars, ctx);
-  // Index B → A: a retest after a reversal break that passes the AVWAP layer (same as scan.ts).
-  const upgrade = !!ctx && row.market === "futures" && specClass(row.instrument) === "index" && row.grade === "B"
+  // Index / commodity B → A: a retest after a reversal break that passes the layers (same as scan.ts).
+  const upCls = row.market === "futures" ? specClass(row.instrument) : null;
+  const upgrade = !!ctx && (upCls === "index" || upCls === "commodity") && row.grade === "B"
     && row.entry === "conservative" && row.snapshot?.context?.daily === "reversal" && !layerSkip;
   return build({
     id: row.id, market: row.market, instrument: row.instrument,
