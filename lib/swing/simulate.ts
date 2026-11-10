@@ -104,7 +104,9 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
       const px = !isFillBar && (d > 0 ? b.o > p.cap : b.o < p.cap) ? b.o : p.cap;
       return done(b.date, px, "cap");
     }
-    const ext = d > 0 ? b.h : b.l;
+    const ext = isFillBar && p.entryKind === "limit"
+      ? b.c                                  // limit fill bar: the high/low may have printed BEFORE the fill
+      : d > 0 ? b.h : b.l;
     if (d * (ext - best) > 0) best = ext;
     held++;
     if (held >= maxHold) return done(b.date, b.c, "time");
