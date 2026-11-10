@@ -9,13 +9,15 @@
 //
 // Trend-slot rules (Nov 2026 test, these 10 markets, 2018 – Oct 2026; not the crypto slot):
 //   longs only — longs +0.51R / +0.59R per trade (2018–mid-22 / since), shorts +0.19R / −0.44R;
-//   skip longs already > 20% above the 200-day — +0.17R (both halves) vs +0.63R for the rest.
+//   skip longs already > 20% above the 200-day — +0.17R (both halves) vs +0.63R for the rest;
+//   skip breakouts that close in the lower half of the day's range — 30% win, +0.07R (30 trades);
+//   half off at +0.5R, stop to breakeven, trail the rest 3 × ATR — 76% win (84 trades), still paper.
 import { BASKET } from "@/lib/wyckoff/basket";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { completedBars } from "./scan";
 import type { Bar } from "@/lib/wyckoff/engine";
 
-import { TREND_MARKETS, CRYPTO_MARKETS, type TrendSetup } from "./trendMarkets";
+import { TREND_MARKETS, CRYPTO_MARKETS, TREND_PARTIAL, type TrendSetup } from "./trendMarkets";
 export { TREND_MARKETS, CRYPTO_MARKETS, type TrendSetup };
 const N = 55, ATR_N = 20, STOP_ATR = 2, TRAIL_ATR = 3, MAX_ABOVE_200 = 0.2;
 
@@ -40,6 +42,7 @@ export function trendSignal(bars: Bar[], instrument: string, executeSymbol: stri
   const ruleSkip = slot === "crypto" ? null
     : side === "short" ? "trend slot: longs only (shorts −0.44R/trade since mid-2022)"
     : vs200 != null && vs200 > MAX_ABOVE_200 ? `already ${Math.round(vs200 * 100)}% above the 200-day — late breakout (+0.17R vs +0.63R)`
+    : bars[i].h > bars[i].l && (c - bars[i].l) / (bars[i].h - bars[i].l) < 0.5 ? "breakout closed in the lower half of its range — weak close (30% win, +0.07R)"
     : null;
   return {
     slot, instrument, executeSymbol, side, signalDate: bars[i].date, close: c, channel: side === "long" ? hh : ll,
@@ -48,6 +51,7 @@ export function trendSignal(bars: Bar[], instrument: string, executeSymbol: stri
     channelHi: hh, channelLo: ll, channelStart: prev[0].date,
     bars: bars.slice(-120).map((b) => [b.o, b.h, b.l, b.c, b.v, b.date] as [number, number, number, number, number, string]),
     vs200: vs200 == null ? null : +vs200.toFixed(3), ruleSkip,
+    partialAt: slot === "crypto" ? null : c + d * TREND_PARTIAL.atR * STOP_ATR * a,
   };
 }
 

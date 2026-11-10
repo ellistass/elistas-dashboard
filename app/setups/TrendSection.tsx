@@ -33,7 +33,7 @@ export default function TrendSection() {
       <div style={{ ...mono, fontSize: 10.5, color: "var(--text-3)", border: "1px solid var(--border-subtle)", borderRadius: 10, padding: "8px 12px", lineHeight: 1.7 }}>
         <b style={{ color: "var(--text-2)" }}>Trend slot · paper · half risk · one trade at a time · never uses the 3 range slots.</b><br />
         Markets: {TREND_MARKETS.join(", ")} (trended in both 2018–21 and 2022–26). Signal: the daily close breaks the 55-day high (long) or low (short).
-        Entry at the next open · stop 2 × ATR(20) · at +1R stop to breakeven, then trail 3 × ATR behind the best price · no target.
+        Entry at the next open · stop 2 × ATR(20) · trend slot: close half at +0.5R and move the stop to breakeven, then trail the rest 3 × ATR · no target.
         Tested: about 1 trade a month, ~37% win, a few large winners; adds ~+0.3 R/month to the range system with ~1–2R deeper drawdown.
         <button onClick={() => load(true)} disabled={busy} style={{ ...mono, fontSize: 10.5, marginLeft: 8, display: "inline-flex", gap: 4, alignItems: "center" }}>
           <RefreshCw size={10} className={busy ? "animate-spin" : ""} /> rescan
@@ -75,7 +75,9 @@ export default function TrendSection() {
                 <div>1. {long ? "BUY" : "SELL"} MARKET at the next open (ref close {fmt(s.close)})</div>
                 <div>2. {long ? "SELL" : "BUY"} STOP at {fmt(s.stop)} (2 × ATR {fmt(s.atr)}) — re-measure from your fill</div>
                 <div>3. no take-profit</div>
-                <div style={{ color: "var(--text-3)" }}>· at +1R ({fmt(s.breakevenAt)}) move the stop to breakeven</div>
+                {s.partialAt != null
+                  ? <div style={{ color: "var(--text-3)" }}>· at +0.5R ({fmt(s.partialAt)}) close HALF and move the stop to breakeven</div>
+                  : <div style={{ color: "var(--text-3)" }}>· at +1R ({fmt(s.breakevenAt)}) move the stop to breakeven</div>}
                 <div style={{ color: "var(--text-3)" }}>· then trail the stop {fmt(s.trailDistance)} (3 × ATR) behind the best price</div>
               </div>
               <div style={{ ...mono, fontSize: 10, marginTop: 8, color: "var(--text-3)" }}>

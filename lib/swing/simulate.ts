@@ -25,6 +25,8 @@ export interface SimInput {
   trail?: boolean;
   /** Trail distance after +1R as a multiple of ATR(20); absent = 1R. Indices use 2. */
   trailAtr?: number | null;
+  /** Close `frac` of the position at +`atR` R and move the stop to breakeven (trend slot). */
+  partial?: { atR: number; frac: number } | null;
 }
 
 export type SimOutcome = "win" | "loss" | "be" | "expired" | "open";
@@ -82,9 +84,11 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
 
   // ── Manage ────────────────────────────────────────────────────────────────
   let stop = p.stop, best = fill, held = 0;
+  let banked = 0, left = 1;                    // R banked by the partial, and the share still open
+  const total = (px: number) => banked + left * r(px);
   const path: { date: string; stop: number }[] = [];
   const done = (date: string, px: number, why: SimResult["exitReason"]): SimResult => {
-    const res = r(px);
+    const res = total(px);
     return {
       outcome: res > 0.05 ? "win" : res < -0.05 ? "loss" : "be",
       fillDate, fillPrice: fill, exitDate: date, exitPrice: px, exitReason: why,
@@ -103,6 +107,12 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
     if (p.cap != null && (d > 0 ? b.h >= p.cap : b.l <= p.cap)) {
       const px = !isFillBar && (d > 0 ? b.o > p.cap : b.o < p.cap) ? b.o : p.cap;
       return done(b.date, px, "cap");
+    }
+    // Partial: after the stop check (a bar that hits both counts as the stop — conservative).
+    if (p.partial && left === 1 && !(isFillBar && p.entryKind === "limit")
+      && (d > 0 ? b.h >= fill + p.partial.atR * R : b.l <= fill - p.partial.atR * R)) {
+      banked = p.partial.frac * p.partial.atR; left = 1 - p.partial.frac;
+      stop = d > 0 ? Math.max(stop, fill) : Math.min(stop, fill);
     }
     const ext = isFillBar && p.entryKind === "limit"
       ? b.c                                  // limit fill bar: the high/low may have printed BEFORE the fill
@@ -125,7 +135,7 @@ export function simulate(p: SimInput, bars: DayBar[]): SimResult {
   const last = after[after.length - 1];
   return {
     outcome: "open", fillDate, fillPrice: fill, exitDate: null, exitPrice: null, exitReason: null,
-    resultR: last ? +r(last.c).toFixed(3) : 0, peakR: +r(best).toFixed(3),
+    resultR: last ? +total(last.c).toFixed(3) : 0, peakR: +r(best).toFixed(3),
     stopNow: stop, lastDate: last?.date ?? null, lastClose: last?.c ?? null, stops: path,
   };
 }

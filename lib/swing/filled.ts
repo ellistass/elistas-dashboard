@@ -16,6 +16,7 @@ import { instrumentInfo, BASKET } from "@/lib/wyckoff/basket";
 import { fetchDailyBars } from "@/lib/wyckoff/daily";
 import { completedBars } from "@/lib/setups/scan";
 import { trendHistory, cryptoDone, TREND_MARKETS, CRYPTO_MARKETS, type TrendSetup } from "@/lib/setups/trend";
+import { TREND_PARTIAL } from "@/lib/setups/trendMarkets";
 import { addDays, todayUtc, type DayBar } from "./core";
 import { barsFor, simInputFor } from "./outcomes";
 import { simulate, type SimInput, type SimResult } from "./simulate";
@@ -235,6 +236,7 @@ function evaluateTrend(t: TrendSetup, bars: DayBar[], events: Evt[], taken: Fill
   const input: SimInput = {
     side: t.side, entryKind: "open", entryPrice: ref, stop, cap: null,
     firstBarDate: t.signalDate, goodFor: 1, maxHold: TREND_MAX_HOLD, trailAtr: TREND_TRAIL_ATR,
+    partial: t.slot === "trend" ? TREND_PARTIAL : null,       // crypto slot unchanged (not tested)
   };
   return build({
     id: `${t.slot}:${t.instrument}:${t.signalDate}`, market: t.slot, instrument: t.instrument,

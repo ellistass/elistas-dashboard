@@ -189,6 +189,11 @@ function Card({ s, readOnly = false }: { s: Row; readOnly?: boolean }) {
           grade {s.grade}{s.upgradedFrom ? " · from B" : ""}
         </span>
       </div>
+      {s.upgradedFrom && (
+        <div style={{ ...mono, fontSize: 11, color: "var(--green)", marginTop: 4 }}>
+          UPGRADED {s.upgradedFrom} → A · {s.checks.find((c) => c.label.startsWith("B → A"))?.label.replace("B → A: ", "") ?? "passed the layers"}
+        </div>
+      )}
       {s.ruleSkip && (
         <div style={{ ...mono, fontSize: 11, color: "var(--red)", marginTop: 4 }}>rule: skip · {s.ruleSkip}</div>
       )}

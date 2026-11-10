@@ -1,4 +1,6 @@
 // lib/setups/trendMarkets.ts — client-safe constants/types for the trend slot (no server imports).
+/** Trend slot partial (Nov 2026 test): half off at +0.5R → 76% win, DD −2.4R, +10R in 8.8 years at ½ risk, one slot. */
+export const TREND_PARTIAL = { atR: 0.5, frac: 0.5 };
 export const TREND_MARKETS = ["GC", "HO", "HG", "BZ", "CT", "NKY", "NQ", "ES", "NVDA", "DIS"];
 
 /** The crypto slot: its own single slot, half risk, same 55-day rules. BTC/ETH only
@@ -30,4 +32,6 @@ export interface TrendSetup {
   vs200: number | null;
   /** Trend-slot rule says don't take it (Nov 2026 test); null on the crypto slot. */
   ruleSkip: string | null;
+  /** Trend slot: price where half comes off and the stop goes to breakeven (+0.5R). null on the crypto slot. */
+  partialAt: number | null;
 }
