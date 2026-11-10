@@ -38,6 +38,7 @@ interface Row {
   rules: Record<string, RuleCall> | null;
   warmup: boolean;
   taken: { account: string; status: string } | null;
+  edge: boolean;
 }
 
 const TABS: { key: Status; label: string; empty: string }[] = [
@@ -96,6 +97,7 @@ export default function FilledPage() {
   } | null>(null);
   const [grade, setGrade] = useState<GradeF>("all");
   const [mode, setMode] = useState<ModeF>("every");
+  const [edgeOnly, setEdgeOnly] = useState(true);
   const [acct, setAcct] = useState("50k");
   const [view, setView] = useState<"list" | "calendar">("list");
   const [error, setError] = useState<string | null>(null);
@@ -118,7 +120,7 @@ export default function FilledPage() {
   const gradeOk = (r: Row) => grade === "all" || (grade === "trend" ? r.entry === "trend" : r.grade === grade);
   const call = (r: Row) => r.rules?.[acct] ?? null;
   const modeOk = (r: Row) => mode === "every" || (mode === "rules" ? call(r)?.taken === true : !!call(r) && !call(r)!.taken);
-  const rows = (data?.rows ?? []).filter((r) => gradeOk(r) && modeOk(r));
+  const rows = (data?.rows ?? []).filter((r) => gradeOk(r) && modeOk(r) && (!edgeOnly || r.edge));
   const real = (data?.real ?? []).filter((t) => t.account === acct && (grade === "all" || grade === "trend" || t.grade === grade));
   const count = (k: Status) => rows.filter((r) => r.status === k).length;
   const shown = rows.filter((r) => r.status === tab);
@@ -149,6 +151,8 @@ export default function FilledPage() {
             <Btn primary={mode === "every"} onClick={() => setMode("every")}>Every setup taken</Btn>
             <Btn primary={mode === "rules"} onClick={() => setMode("rules")}>Taken by the rules</Btn>
             <Btn primary={mode === "skipped"} onClick={() => setMode("skipped")}>Skipped by the rules</Btn>
+            <span style={{ width: 12 }} />
+            <Btn primary={edgeOnly} onClick={() => setEdgeOnly(!edgeOnly)}>{edgeOnly ? "My edge only" : "Everything (B + rule skips)"}</Btn>
             <span style={{ width: 12 }} />
             {data.accounts.map((a) => <Btn key={a.key} primary={acct === a.key} onClick={() => setAcct(a.key)}>{a.key}</Btn>)}
           </div>

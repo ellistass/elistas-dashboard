@@ -39,7 +39,7 @@ export default function SetupsPage() {
   const [busy, setBusy] = useState(false);
   const [market, setMarket] = useState<"futures" | "forex" | "trend" | "abcd" | "history">("futures");
   const [entry, setEntry] = useState<"all" | "conservative" | "aggressive">("all");
-  const [gradeA, setGradeA] = useState(false);
+  const [showOutside, setShowOutside] = useState(false);
 
   const load = useCallback(async (fresh = false) => {
     setBusy(true); setError(null);
@@ -53,12 +53,17 @@ export default function SetupsPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const rows = (data?.setups ?? []).filter((s) => (entry === "all" || s.entry === entry) && (!gradeA || s.grade === "A"));
+  const rows = (data?.setups ?? []).filter((s) => entry === "all" || s.entry === entry);
   // Markets FTMO doesn't offer (executeSymbol "") are information only.
   const onFtmo = rows.filter((s) => !!s.executeSymbol);
   const offFtmo = rows.filter((s) => !s.executeSymbol);
-  const live = onFtmo.filter((s) => s.state !== "armed");
-  const armed = onFtmo.filter((s) => s.state === "armed");
+  // Your edge (Nov 2026 test): grade A AND every layer rule passed — 62% win, +0.74R/trade with the
+  // 50k rules. Grade B and rule skips are what built the drawdown, so they're kept out of the lists.
+  const inEdge = (s: Row) => s.grade === "A" && !s.ruleSkip;
+  const edge = onFtmo.filter(inEdge);
+  const outside = onFtmo.filter((s) => !inEdge(s));
+  const live = edge.filter((s) => s.state !== "armed");
+  const armed = edge.filter((s) => s.state === "armed");
 
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto" }}>
@@ -96,7 +101,7 @@ export default function SetupsPage() {
             {(["all", "conservative", "aggressive"] as const).map((e) => (
               <Chip key={e} on={entry === e} onClick={() => setEntry(e)}>{e}</Chip>
             ))}
-            <Chip on={gradeA} onClick={() => setGradeA(!gradeA)}>grade A only</Chip>
+            <Chip on={showOutside} onClick={() => setShowOutside(!showOutside)}>show outside my edge ({outside.length})</Chip>
           </div>
 
           {!data && !error ? <LoadingCard what="setups (scanning the basket — up to a minute on a cold start)" /> : null}
@@ -111,6 +116,15 @@ export default function SetupsPage() {
 
               <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>ARMED — ORDERS WAITING · {armed.length}</h3>
               {armed.length ? <Grid rows={armed} /> : <EmptyState text="No qualified breaks waiting for a retest." small />}
+
+              {showOutside && outside.length > 0 && (
+                <>
+                  <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>
+                    OUTSIDE MY EDGE — grade B or a rule skip, not traded · {outside.length}
+                  </h3>
+                  <Grid rows={outside} readOnly />
+                </>
+              )}
 
               {offFtmo.length > 0 && (
                 <details style={{ marginTop: 20 }}>

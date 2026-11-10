@@ -22,6 +22,11 @@ import { simulate, type SimInput, type SimResult } from "./simulate";
 import { applyRules, type RuleCall, type RuleCand, type RuleSlot } from "./rulesSim";
 import { loadAccounts, loadSpecs } from "./trades";
 import { symbolsFor } from "./events";
+import { specClass } from "./core";
+import { ETF } from "@/lib/data/eps";
+import { stockLayers, indexLayers, commodityLayers } from "@/lib/setups/layers";
+import { fetchRealYield, fetchYields, yieldRead, type YieldSeries } from "@/lib/data/yields";
+import { breadthSeries, marketReadAt, type MarketRead } from "@/lib/setups/market";
 
 const LOOKBACK_DAYS = 150;   // simulate caps a hold at 60 bars ≈ 85 calendar days
 /** The rules start from an empty account at the window start, so the first weeks can take
@@ -52,6 +57,8 @@ export interface FilledRow {
   rules: Record<string, RuleCall> | null;
   warmup: boolean;
   taken: { account: string; status: string } | null;
+  /** Inside the tested edge (Nov 2026: grade A + every layer rule) — what /setups now shows. */
+  edge: boolean;
 }
 
 export interface RealTrade {
@@ -98,7 +105,7 @@ function withEventExit(sim: SimResult, input: SimInput, bars: DayBar[], events: 
 interface Built { r: FilledRow; sim: SimResult; input: SimInput; bars: DayBar[]; cardSkip: string | null; seriesLong: boolean }
 
 function build(base: Omit<FilledRow, "status" | "fillDate" | "fillPrice" | "stopNow" | "stopPrev" | "stopMoved" | "newFill" | "lockedR" |
-  "lastDate" | "lastClose" | "openR" | "peakR" | "barsHeld" | "exitDate" | "exitPrice" | "exitReason" | "resultR" | "plannedExit" | "rules" | "warmup" | "origStop" | "entryPrice" | "target">,
+  "lastDate" | "lastClose" | "openR" | "peakR" | "barsHeld" | "exitDate" | "exitPrice" | "exitReason" | "resultR" | "plannedExit" | "rules" | "warmup" | "origStop" | "entryPrice" | "target" | "edge">,
   input: SimInput, bars: DayBar[], events: Evt[], cardSkip: string | null): Built | null {
   const seriesLong = input.side === "long";
   const raw = simulate(input, bars);
@@ -126,6 +133,7 @@ function build(base: Omit<FilledRow, "status" | "fillDate" | "fillPrice" | "stop
       barsHeld: fillDate ? bars.filter((b) => b.date >= fillDate && (!sim.exitDate || b.date <= sim.exitDate)).length : 0,
       exitDate: sim.exitDate, exitPrice: sim.exitPrice, exitReason: sim.exitReason, resultR: open ? null : sim.resultR,
       plannedExit, rules: null, warmup: false,
+      edge: (base.grade === "A" || base.grade === "trend") && !cardSkip,
     },
   };
 }
@@ -144,19 +152,71 @@ function cardSkipFor(row: any): string | null {
   return null;
 }
 
-function evaluateLogged(row: any, bars: DayBar[], events: Evt[], taken: FilledRow["taken"]): Built | null {
+/** What every logged row is re-judged with (the Nov 2026 layers), loaded once per request. */
+interface LayerCtx { marketAt: ((date: string) => MarketRead | null) | null; realYield: [string, number][] | null; yields: YieldSeries | null }
+
+async function loadLayerCtx(logs: any[]): Promise<LayerCtx> {
+  const needStocks = logs.some((r) => r.market === "futures" && specClass(r.instrument) === "stock" && !ETF.has(r.instrument));
+  let marketAt: LayerCtx["marketAt"] = null;
+  if (needStocks) {
+    try {
+      const spx = completedBars(await fetchDailyBars("^GSPC", "5y"));
+      const stocks = BASKET.filter((i) => specClass(i.symbol) === "stock" && !ETF.has(i.symbol));
+      const all: any[][] = [];
+      for (let i = 0; i < stocks.length; i += 8)   // same 5y feed as the scan → mostly cache hits
+        all.push(...await Promise.all(stocks.slice(i, i + 8).map((s) => fetchDailyBars(s.yahoo, "5y").then(completedBars).catch(() => []))));
+      const breadth = breadthSeries(all.filter((b) => b.length >= 200));
+      marketAt = (date) => marketReadAt(spx, breadth, date);
+    } catch { marketAt = null; }
+  }
+  const [realYield, yields] = await Promise.all([
+    fetchRealYield().catch(() => null),
+    logs.some((r) => r.market === "forex") ? fetchYields().catch(() => null) : Promise.resolve(null),
+  ]);
+  return { marketAt, realYield, yields };
+}
+
+/** The layer rule a logged setup fails, re-judged from its bars as of its signal (no look-ahead).
+ *  Rows logged before the layers existed get the same rules as today's cards. */
+function layerSkipFor(row: any, bars: DayBar[], ctx: LayerCtx | null): string | null {
+  if (!ctx || row.entry === "abcd") return null;
+  const s = row.snapshot ?? {}, sig = row.signalDate ?? row.firstBarDate;
+  if (row.market === "forex") {
+    if (!ctx.yields) return null;
+    const B = row.instrument.slice(0, 3), Q = row.instrument.slice(3);
+    const [buy, sell] = row.side === "long" ? [B, Q] : [Q, B];
+    const y = yieldRead(ctx.yields, buy, sell, sig);
+    return y && !y.supporting ? `yields against (10y gap ${y.change} over 3 months)` : null;
+  }
+  const b = bars as any[];
+  const cls = specClass(row.instrument);
+  if (cls === "stock" && !ETF.has(row.instrument)) {
+    const m = ctx.marketAt?.(sig);
+    if (m && m.state !== "healthy") return `market ${m.state} — stock setups only in a healthy market`;
+    return stockLayers(b, row.side, sig, s.setupRead?.agrees ?? null, s.setupRead?.verdict ?? "n/a").skip;
+  }
+  if (cls === "index") return indexLayers(b, row.side, row.rangeStart, row.rangeLo, row.rangeHi, sig).skip;
+  if (cls === "commodity") return commodityLayers(b, row.instrument, row.side, sig, ctx.realYield).skip;
+  return null;
+}
+
+function evaluateLogged(row: any, bars: DayBar[], events: Evt[], taken: FilledRow["taken"], ctx: LayerCtx | null = null): Built | null {
   const input = simInputFor(row);
   if (!input) return null;
   const inst = row.market === "futures" ? instrumentInfo(row.instrument) : undefined;
   const paper = row.entry === "abcd";
+  const layerSkip = layerSkipFor(row, bars, ctx);
+  // Index B → A: a retest after a reversal break that passes the AVWAP layer (same as scan.ts).
+  const upgrade = !!ctx && row.market === "futures" && specClass(row.instrument) === "index" && row.grade === "B"
+    && row.entry === "conservative" && row.snapshot?.context?.daily === "reversal" && !layerSkip;
   return build({
     id: row.id, market: row.market, instrument: row.instrument,
     executeSymbol: inst?.executeSymbol || row.instrument, inverted: inst?.inverted ?? false,
-    side: row.side, entry: row.entry, grade: row.grade,
+    side: row.side, entry: row.entry, grade: upgrade ? "A" : row.grade,
     slot: paper ? null : "range", weight: 1,
     rangeLo: row.rangeLo, rangeHi: row.rangeHi, rangeStart: row.rangeStart, signalDate: row.signalDate, firstBarDate: row.firstBarDate,
     breakevenAt: row.breakevenAt, taken,
-  }, input, bars, events, cardSkipFor(row));
+  }, input, bars, events, cardSkipFor(row) ?? layerSkip);
 }
 
 /** A trend/crypto breakout → a row. Stop re-measured from the next open (the card: "re-measure from your fill"). */
@@ -261,6 +321,7 @@ async function allBuilt() {
   const takenBy = new Map<string, { account: string; status: string }>(
     real.filter((t: any) => t.setupLogId).map((t: any) => [t.setupLogId, { account: t.account, status: t.status }]));
 
+  const ctx = await loadLayerCtx(logs);
   const groups = new Map<string, any[]>();
   for (const r of logs) {
     const k = `${r.market}|${r.instrument}`;
@@ -275,7 +336,7 @@ async function allBuilt() {
     catch (e) { errors.push({ instrument, error: e instanceof Error ? e.message : String(e) }); continue; }
     const ev = eventsOf(events, instrument);
     for (const row of list) {
-      const b = evaluateLogged(row, bars, ev, takenBy.get(row.id) ?? null);
+      const b = evaluateLogged(row, bars, ev, takenBy.get(row.id) ?? null, ctx);
       if (b) built.push(b);
     }
   }

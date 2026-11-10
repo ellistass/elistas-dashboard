@@ -42,8 +42,13 @@ export default function ForexSection({ view = "retest" }: { view?: "retest" | "a
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const live = (data?.setups ?? []).filter((s) => s.state !== "watch");
-  const watch = (data?.setups ?? []).filter((s) => s.state === "watch");
+  // Your edge (Nov 2026 test): COT grade A, no skip (late / quiet / selling USD / yields against) —
+  // 47 trades, 64% win, +0.49R. Everything else is kept out of the lists (collapsed below, for the record).
+  const all = data?.setups ?? [];
+  const inEdge = (s: DriverSetup) => s.grade === "A" && !s.skip;
+  const live = all.filter((s) => s.state !== "watch" && inEdge(s));
+  const watch = all.filter((s) => s.state === "watch" && inEdge(s));
+  const outside = all.filter((s) => !inEdge(s));
 
   return (
     <section style={{ marginTop: 32 }}>
@@ -80,6 +85,14 @@ export default function ForexSection({ view = "retest" }: { view?: "retest" | "a
           {live.length ? <Grid rows={live} /> : <EmptyState text="No reversal breaks waiting for a retest." small />}
           <h3 style={{ ...mono, fontSize: 11, color: "var(--text-3)", margin: "20px 0 8px" }}>WATCH — PRESSING THE EDGE · {watch.length}</h3>
           {watch.length ? <Grid rows={watch} /> : <EmptyState text="No ranges pressing a reversal edge." small />}
+          {outside.length > 0 && (
+            <details style={{ marginTop: 20 }}>
+              <summary style={{ ...mono, fontSize: 11, color: "var(--text-3)", cursor: "pointer" }}>
+                OUTSIDE MY EDGE — grade B or skipped, not traded · {outside.length}
+              </summary>
+              <div style={{ marginTop: 8 }}><Grid rows={outside} /></div>
+            </details>
+          )}
           <ForexRules />
         </>
       )}
