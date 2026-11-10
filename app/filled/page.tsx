@@ -39,6 +39,7 @@ interface Row {
   warmup: boolean;
   taken: { account: string; status: string } | null;
   edge: boolean;
+  upgradedFrom: string | null;
 }
 
 const TABS: { key: Status; label: string; empty: string }[] = [
@@ -219,7 +220,7 @@ function Who({ r, acct }: { r: Row; acct: string }) {
   return (
     <div className={s.row} style={{ flexWrap: "wrap" }}>
       <b>{r.executeSymbol}</b>{r.executeSymbol !== r.instrument ? <span className={s.small}>{r.instrument}</span> : null}
-      <SideTag side={r.side} /><Grade g={r.grade} />
+      <SideTag side={r.side} /><Grade g={r.upgradedFrom ? `${r.upgradedFrom}→${r.grade}` : r.grade} />
       <span className={s.small}>{r.entry === "trend" ? `${r.market} slot · ½ risk` : r.entry}</span>
       {c ? (c.taken
         ? <Tag tone="good">rules: take{c.reason ? ` · ${c.reason}` : ""}</Tag>
@@ -395,7 +396,7 @@ function Calendar({ rows, real, onPick }: { rows: Row[]; real: RealTrade[]; onPi
           <b style={{ fontSize: 12 }}>{dayLabel(day)}</b>
           {(simBy.get(day) ?? []).map((r) => (
             <div key={r.id} className={s.row} style={{ cursor: "zoom-in", flexWrap: "wrap" }} onClick={() => onPick(r)}>
-              <span className={s.small} style={{ width: 40 }}>sim</span><b>{r.executeSymbol}</b><SideTag side={r.side} /><Grade g={r.grade} />
+              <span className={s.small} style={{ width: 40 }}>sim</span><b>{r.executeSymbol}</b><SideTag side={r.side} /><Grade g={r.upgradedFrom ? `${r.upgradedFrom}→${r.grade}` : r.grade} />
               <span className={s.small}>{r.exitReason}</span>
               <span className={s.mono} style={{ color: tone(acctR(r) ?? 0), marginLeft: "auto" }}>{rr(acctR(r))}{r.weight !== 1 ? " (½)" : ""}</span>
             </div>

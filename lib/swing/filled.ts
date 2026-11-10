@@ -59,6 +59,8 @@ export interface FilledRow {
   taken: { account: string; status: string } | null;
   /** Inside the tested edge (Nov 2026: grade A + every layer rule) — what /setups now shows. */
   edge: boolean;
+  /** "B" when a grade-B futures retest was upgraded to A by the layers (shown as B→A). */
+  upgradedFrom: string | null;
 }
 
 export interface RealTrade {
@@ -105,8 +107,8 @@ function withEventExit(sim: SimResult, input: SimInput, bars: DayBar[], events: 
 interface Built { r: FilledRow; sim: SimResult; input: SimInput; bars: DayBar[]; cardSkip: string | null; seriesLong: boolean }
 
 function build(base: Omit<FilledRow, "status" | "fillDate" | "fillPrice" | "stopNow" | "stopPrev" | "stopMoved" | "newFill" | "lockedR" |
-  "lastDate" | "lastClose" | "openR" | "peakR" | "barsHeld" | "exitDate" | "exitPrice" | "exitReason" | "resultR" | "plannedExit" | "rules" | "warmup" | "origStop" | "entryPrice" | "target" | "edge">,
-  input: SimInput, bars: DayBar[], events: Evt[], cardSkip: string | null): Built | null {
+  "lastDate" | "lastClose" | "openR" | "peakR" | "barsHeld" | "exitDate" | "exitPrice" | "exitReason" | "resultR" | "plannedExit" | "rules" | "warmup" | "origStop" | "entryPrice" | "target" | "edge" | "upgradedFrom">,
+  input: SimInput, bars: DayBar[], events: Evt[], cardSkip: string | null, upgradedFrom: string | null = null): Built | null {
   const seriesLong = input.side === "long";
   const raw = simulate(input, bars);
   if (raw.outcome === "open" && !raw.fillDate) return null;               // still waiting for its fill: that's /setups
@@ -133,7 +135,9 @@ function build(base: Omit<FilledRow, "status" | "fillDate" | "fillPrice" | "stop
       barsHeld: fillDate ? bars.filter((b) => b.date >= fillDate && (!sim.exitDate || b.date <= sim.exitDate)).length : 0,
       exitDate: sim.exitDate, exitPrice: sim.exitPrice, exitReason: sim.exitReason, resultR: open ? null : sim.resultR,
       plannedExit, rules: null, warmup: false,
-      edge: (base.grade === "A" || base.grade === "trend") && !cardSkip,
+      // Trend/crypto are paper (own slot, ½ risk) — never "my edge"; they stay under Grade → Trend / crypto.
+      edge: base.grade === "A" && !cardSkip,
+      upgradedFrom,
     },
   };
 }
@@ -190,6 +194,8 @@ function layerSkipFor(row: any, bars: DayBar[], ctx: LayerCtx | null): string | 
   }
   const b = bars as any[];
   const cls = specClass(row.instrument);
+  // Currency-future range cards (6C, 6E…) were never part of the system: forex comes from the forex tab.
+  if (row.market === "futures" && cls === "forex") return "currency future — forex is traded from the forex tab (COT + yields)";
   if (cls === "stock" && !ETF.has(row.instrument)) {
     const m = ctx.marketAt?.(sig);
     if (m && m.state !== "healthy") return `market ${m.state} — stock setups only in a healthy market`;
@@ -217,7 +223,7 @@ function evaluateLogged(row: any, bars: DayBar[], events: Evt[], taken: FilledRo
     slot: paper ? null : "range", weight: 1,
     rangeLo: row.rangeLo, rangeHi: row.rangeHi, rangeStart: row.rangeStart, signalDate: row.signalDate, firstBarDate: row.firstBarDate,
     breakevenAt: row.breakevenAt, taken,
-  }, input, bars, events, cardSkipFor(row) ?? layerSkip);
+  }, input, bars, events, cardSkipFor(row) ?? layerSkip, upgrade ? "B" : null);
 }
 
 /** A trend/crypto breakout → a row. Stop re-measured from the next open (the card: "re-measure from your fill"). */

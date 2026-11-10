@@ -186,7 +186,7 @@ function Card({ s, readOnly = false }: { s: Row; readOnly?: boolean }) {
           </span>
         </div>
         <span style={{ ...mono, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${s.grade === "A" ? "var(--green)" : "var(--border-subtle)"}`, color: s.grade === "A" ? "var(--green)" : "var(--text-3)" }}>
-          grade {s.grade}
+          grade {s.grade}{s.upgradedFrom ? " · from B" : ""}
         </span>
       </div>
       {s.ruleSkip && (

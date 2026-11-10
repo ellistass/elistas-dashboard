@@ -45,6 +45,8 @@ export interface InstrumentSetup extends Setup {
   market: MarketRead | null;
   /** The account rules say don't take it (grade unchanged). */
   ruleSkip: string | null;
+  /** "B" when the layers upgraded a grade-B futures retest to A. */
+  upgradedFrom?: string | null;
 }
 
 export interface SetupScan {
@@ -208,14 +210,14 @@ export async function scanSetups(force = false): Promise<SetupScan> {
             // traded like A — 13 trades, 62% win, +0.96R (both halves positive). With-trend B retests
             // with the same layer lost (−0.31R, n 58), so they stay B.
             if (cls === "index" && layer && !layer.skip && s.grade === "B" && s.entry === "conservative" && s.context.daily === "reversal") {
-              s.grade = "A";
+              s.grade = "A"; (s as any).upgradedFrom = "B";
               s.checks.push({ label: "B → A: index retest after a reversal break, AVWAP centred + held (tested 13 trades, 62%, +0.96R)", pass: true });
             }
             // Commodity B → A (Nov 2026 test): a retest after a REVERSAL break that passes the commodity
             // layers — 27 trades, 67% win in both halves, +0.17R (small wins: +0.77R avg). Added to the
             // book: 295 trades, 62% win, +191R vs +186R, max DD −6.0R vs −5.0R, 48 vs 40 months with 3+ trades.
             if (cls === "commodity" && layer && !layer.skip && s.grade === "B" && s.entry === "conservative" && s.context.daily === "reversal") {
-              s.grade = "A";
+              s.grade = "A"; (s as any).upgradedFrom = "B";
               s.checks.push({ label: "B → A: commodity retest after a reversal break, layers passed (tested 27 trades, 67%, +0.17R — small winners)", pass: true });
             }
             setups.push({
@@ -232,7 +234,8 @@ export async function scanSetups(force = false): Promise<SetupScan> {
               lastBarDate: bars[bars.length - 1].date,
               feedGap,
               market: null,
-              ruleSkip: layer?.skip ?? null,
+              // Currency-future range cards (6C, 6E…) were never in the tested system: forex comes from the forex tab.
+              ruleSkip: layer?.skip ?? (inst.assetClass === "currency" ? "currency future — forex is traded from the forex tab (COT + yields)" : null),
             });
           }
         } catch (e) {

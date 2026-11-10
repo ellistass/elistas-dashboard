@@ -94,7 +94,8 @@ export function applyRules(cands: RuleCand[], acc: SwingAccountCfg, specs: Instr
     // One trade per currency direction (Nov 2026 test: max DD −8.8R → −7.7R for −2R over 8 years):
     // never twice in the same currency bet (GBPJPY long + CHFJPY long = short JPY twice).
     const sameCcy = (() => {
-      for (const t of open) for (const x of ex(c)) for (const y of ex(t))
+      // A trade that closes on this fill day doesn't block it (daily bars can't order the two; the stop usually came first).
+      for (const t of open.filter((o) => o.exitDate == null || o.exitDate > day)) for (const x of ex(c)) for (const y of ex(t))
         if (x.factor.startsWith("ccy:") && x.factor === y.factor && x.sign === y.sign) return { t, ccy: x.factor.slice(4), sign: x.sign };
       return null;
     })();
