@@ -106,7 +106,7 @@ export default function FilledPage() {
   const [tab, setTab] = useState<Status>("open");
   const [popup, setPopup] = useState<Row | null>(null);
   // Month the setup was SEEN (first on the Setups page). "all" = every month.
-  const [month, setMonth] = useState<string>("all");
+  const [month, setMonth] = useState<string | null>(null);   // null = the latest month
 
   const load = useCallback(async () => {
     setBusy(true); setError(null);
@@ -125,7 +125,9 @@ export default function FilledPage() {
   const modeOk = (r: Row) => mode === "every" || (mode === "rules" ? call(r)?.taken === true : !!call(r) && !call(r)!.taken);
   const filtered = (data?.rows ?? []).filter((r) => gradeOk(r) && modeOk(r) && (!edgeOnly || r.edge));
   const months = [...new Set(filtered.map((r) => r.firstBarDate.slice(0, 7)))].sort().reverse();
-  const rows = month === "all" ? filtered : filtered.filter((r) => r.firstBarDate.startsWith(month));
+  const curMonth = month && months.includes(month) ? month : months[0] ?? null;
+  const mi = curMonth ? months.indexOf(curMonth) : -1;
+  const rows = curMonth ? filtered.filter((r) => r.firstBarDate.startsWith(curMonth)) : filtered;
   const monthTally = (m: string) => {
     const mr = filtered.filter((r) => r.firstBarDate.startsWith(m));
     const cl = mr.filter((r) => r.resultR != null && r.status !== "expired" && r.status !== "open");
@@ -169,18 +171,6 @@ export default function FilledPage() {
             {data.accounts.map((a) => <Btn key={a.key} primary={acct === a.key} onClick={() => setAcct(a.key)}>{a.key}</Btn>)}
           </div>
           <div className={s.row} style={{ flexWrap: "wrap" }}>
-            <span style={{ width: 56 }}>Month</span>
-            <Btn primary={month === "all"} onClick={() => setMonth("all")}>All months</Btn>
-            {months.map((m) => {
-              const t = monthTally(m);
-              return (
-                <Btn key={m} primary={month === m} onClick={() => setMonth(m)}>
-                  {monthLabel(m)} · {t.n}{t.win != null ? ` · ${t.win}% · ${rr(t.net)}` : ""}
-                </Btn>
-              );
-            })}
-          </div>
-          <div className={s.row} style={{ flexWrap: "wrap" }}>
             <span style={{ width: 56 }}>View</span>
             <Btn primary={view === "list"} onClick={() => setView("list")}>List</Btn>
             <Btn primary={view === "calendar"} onClick={() => setView("calendar")}>Calendar · simulated vs real</Btn>
@@ -193,6 +183,18 @@ export default function FilledPage() {
           </div>
         </div>
       ) : null}
+
+      {data && curMonth ? (() => {
+        const t = monthTally(curMonth);
+        return (
+          <div className={`${s.card}`} style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+            <Btn onClick={() => setMonth(months[mi + 1])} disabled={mi >= months.length - 1}>◀ {mi < months.length - 1 ? monthLabel(months[mi + 1]) : ""}</Btn>
+            <b style={{ fontSize: 15 }}>{monthLabel(curMonth)}</b>
+            <Btn onClick={() => setMonth(months[mi - 1])} disabled={mi <= 0}>{mi > 0 ? monthLabel(months[mi - 1]) : ""} ▶</Btn>
+            <span className={s.small}>{t.n} setups seen{t.win != null ? ` · ${t.win}% win · ${rr(t.net)} closed` : ""}</span>
+          </div>
+        );
+      })() : null}
 
       {data && view === "calendar" ? <Calendar rows={rows} real={real} onPick={setPopup} /> : null}
 
@@ -372,6 +374,7 @@ function ChartModal({ r, onClose, acct, walk, onPick }: {
           <span style={{ color: "var(--amber)" }}>— amber line: the stop, bar by bar</span>
         </div>
         <SetupChartFull key={r.id} intraday replay
+          withRead={r.slot === "range" && (r.entry === "conservative" || r.entry === "aggressive")}
           instrument={r.instrument} entry={r.entry === "aggressive" || r.entry === "trend" ? "aggressive" : "conservative"} long={long}
           rangeLo={r.rangeLo} rangeHi={r.rangeHi} rangeStart={r.rangeStart} signalDate={r.signalDate ?? r.firstBarDate}
           entryPrice={r.entryPrice} stop={r.origStop} breakevenAt={r.breakevenAt} target={r.target ?? undefined} fmt={(x) => px(x)}

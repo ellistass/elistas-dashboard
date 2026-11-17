@@ -11,7 +11,7 @@
 // Context bars before the range are only lightly dimmed (0.75) — the old
 // expanded view dimmed them to 0.4, which washed out most of a long window.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { volumeView, isPlottableTag } from "@/lib/chart/volume";
 import { engineReadDetail, stoppingActionAt, structureRead } from "@/lib/wyckoff/engine";
 import { firstDropRead, dropShare, springRead, volumeFavour, type HourBar } from "@/lib/setups/intraday";
@@ -73,6 +73,21 @@ const loadIntra = (url: string, set: (v: Intra) => void) =>
     .then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error ?? r.statusText); return j; })
     .then((j) => set({ bars: j.bars, hasVolume: j.hasVolume }))
     .catch((e) => set({ bars: [], hasVolume: false, error: e instanceof Error ? e.message : String(e) }));
+/** Your own marks on the chart — kept while the popup is open, gone when it closes. */
+type Draw =
+  | { kind: "point"; date: string; price: number; label: string }
+  | { kind: "line"; date: string; price: number }
+  | { kind: "zone"; date: string; p1: number; p2: number }
+  | { kind: "trend"; d1: string; p1: number; d2: string; p2: number };
+type Tool = "move" | "point" | "line" | "zone" | "trend";
+const TOOLS: { key: Tool; label: string; hint: string }[] = [
+  { key: "move", label: "✋ move", hint: "drag to move, scroll to zoom" },
+  { key: "point", label: "• point", hint: "click a candle to mark a point (P1, P2 …)" },
+  { key: "line", label: "— pool", hint: "click a level — snaps to the nearest wick high/low" },
+  { key: "zone", label: "▭ zone", hint: "press, drag up/down, release" },
+  { key: "trend", label: "╱ line", hint: "click the start, then the end" },
+];
+const DRAW_COL = "#b48cff";
 /** A labelled point on the chart (H1, SC, 1st, A, F …). */
 interface Mark { date: string; label: string; title: string; col: string; below: boolean }
 
@@ -82,6 +97,9 @@ export default function SetupChartFull(plan: PlanProps) {
   const [view, setView] = useState<View>("D");
   const [showEffort, setShowEffort] = useState(false);
   const [showRead, setShowRead] = useState(true);
+  const [showAdx, setShowAdx] = useState(true);
+  const [draws, setDraws] = useState<Draw[]>([]);
+  const [tool, setTool] = useState<Tool>("move");
   const [h4, setH4] = useState<{ bars: Bar[]; hasVolume: boolean; error?: string } | null>(null);
   const [h2, setH2] = useState<{ bars: Bar[]; hasVolume: boolean; error?: string } | null>(null);
   const [h1, setH1] = useState<Intra>(null);
@@ -278,25 +296,34 @@ export default function SetupChartFull(plan: PlanProps) {
           {!data.suspectVolume && !isIntra(view) && (
             <button type="button" onClick={() => setShowEffort((v) => !v)} style={pill(showEffort)}>effort marks {showEffort ? "on" : "off"}</button>
           )}
+          {(
+            <button type="button" onClick={() => setShowAdx((v) => !v)} style={pill(showAdx)}>ADX {showAdx ? "on" : "off"}</button>
+          )}
         </div>
       </div>
       {rpState && <div style={{ ...mono, fontSize: 11, color: "var(--amber)", marginBottom: 6 }}>replay · {rpState} · ← → step, space play</div>}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+        {TOOLS.map((t) => <button key={t.key} type="button" title={t.hint} onClick={() => setTool(t.key)} style={pill(tool === t.key)}>{t.label}</button>)}
+        <button type="button" disabled={!draws.length} onClick={() => setDraws((d) => d.slice(0, -1))} style={pill(false)}>undo</button>
+        <button type="button" disabled={!draws.length} onClick={() => setDraws([])} style={pill(false)}>clear marks</button>
+        <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>{TOOLS.find((t) => t.key === tool)!.hint} · marks stay while this popup is open</span>
+      </div>
       {view === "1H" ? (
         !h1 ? <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading 1-hour bars…</div>
         : h1.error || !h1.bars.length ? <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>1-hour chart failed: {h1.error ?? "no bars"}</div>
-        : <PlanSvg daily={h1.bars} suspectVolume={!h1.hasVolume} tf="1H" showEffort={false} plan={plan} upTo={upTo} />
+        : <PlanSvg adx={showAdx} draws={draws} tool={tool} onDraw={(d) => setDraws((x) => [...x, d])} daily={h1.bars} suspectVolume={!h1.hasVolume} tf="1H" showEffort={false} plan={plan} upTo={upTo} />
       ) : view === "2H" ? (
         !h2 ? <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading 2-hour bars…</div>
         : h2.error || !h2.bars.length ? <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>2-hour chart failed: {h2.error ?? "no bars"}</div>
-        : <PlanSvg daily={h2.bars} suspectVolume={!h2.hasVolume} tf="2H" showEffort={false} plan={plan}
+        : <PlanSvg adx={showAdx} draws={draws} tool={tool} onDraw={(d) => setDraws((x) => [...x, d])} daily={h2.bars} suspectVolume={!h2.hasVolume} tf="2H" showEffort={false} plan={plan}
             marks={readOn ? two?.marks : undefined} shade={two?.shade ?? null} upTo={upTo} />
       ) : view === "4H" ? (
         !h4 ? <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading 4-hour bars…</div>
         : h4.error || !h4.bars.length ? <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>4-hour chart failed: {h4.error ?? "no bars"}</div>
-        : <PlanSvg daily={h4.bars} suspectVolume={!h4.hasVolume} tf="4H" showEffort={false} plan={plan}
+        : <PlanSvg adx={showAdx} draws={draws} tool={tool} onDraw={(d) => setDraws((x) => [...x, d])} daily={h4.bars} suspectVolume={!h4.hasVolume} tf="4H" showEffort={false} plan={plan}
             marks={readOn ? four?.marks : undefined} shade={four?.shade ?? null} upTo={upTo} />
       ) : (
-        <PlanSvg daily={data.bars} suspectVolume={data.suspectVolume} tf={view} showEffort={showEffort} plan={plan}
+        <PlanSvg adx={showAdx} draws={draws} tool={tool} onDraw={(d) => setDraws((x) => [...x, d])} daily={data.bars} suspectVolume={data.suspectVolume} tf={view} showEffort={showEffort} plan={plan}
           marks={readOn && view === "D" ? daily?.marks : undefined} shade={readOn && view === "D" ? daily?.shade ?? null : null}
           box={readOn && view === "D" ? effortText : null} upTo={upTo} />
       )}
@@ -337,8 +364,11 @@ function ReadBlock({ title, lines, warn }: { title: string; lines: string[]; war
   );
 }
 
-function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPlan, marks, shade, box, upTo }: {
+function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPlan, marks, shade, box, upTo, adx: adxOn, draws = [], tool = "move", onDraw }: {
   daily: Bar[]; suspectVolume: boolean; tf: View; showEffort: boolean; plan: PlanProps;
+  /** ADX(14) panel under the volume (Wilder, on the timeframe shown). */
+  adx?: boolean;
+  draws?: Draw[]; tool?: Tool; onDraw?: (d: Draw) => void;
   marks?: Mark[]; shade?: { from: string; to: string } | null; box?: string | null;
   /** Replay: draw only the bars up to this date / timestamp, and the trade only as far as it had got. */
   upTo?: string | null;
@@ -357,8 +387,9 @@ function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPla
       stops: fp.stops.filter((s) => s.date.slice(0, 10) <= day),
     },
   };
-  const W = 1000, PH = 360, VH = 100, GAP = 14, PAD = 64, LABEL_W = 150, FUTURE = 56;
-  const H = PH + GAP + VH;
+  const W = 1000, PH = 360, VH = 100, GAP = 14, PAD = 64, LABEL_W = 150, FUTURE = 56, AH = 80;
+  const AT = PH + GAP + VH + GAP;                    // top of the ADX panel
+  const H = PH + GAP + VH + (adxOn ? GAP + AH : 0);
   const { rangeLo, rangeHi, fmt } = plan;
 
   // Same re-location rule as the Wyckoff drawer: dates, not indices, survive
@@ -369,10 +400,21 @@ function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPla
     ? (d.length > 10 ? all.findIndex((b) => b.date === d) : all.findIndex((b) => b.date.slice(0, 10) >= d.slice(0, 10)))
     : tf === "D" ? all.findIndex((b) => b.date.slice(0, 10) === d.slice(0, 10)) : indexForDate(all, tf, d));
   const fullStart = Math.max(0, at(plan.rangeStart));
-  const win = isIntra(tf)
+  const baseWin = isIntra(tf)
     ? viewWindow(all.length, "D", Math.max(0, at(plan.signalDate) - 60))
     : viewWindow(all.length, tf, fullStart);
+  // Zoom / pan: your own window into the bars (scroll = zoom around the cursor, drag = move).
+  const [zw, setZw] = useState<{ from: number; to: number } | null>(null);
+  useEffect(() => { setZw(null); }, [tf]);           // a new timeframe starts unzoomed
+  const win = (() => {
+    if (!zw) return baseWin;
+    const to = Math.max(Math.min(all.length, zw.to), Math.min(all.length, 8));
+    return { from: Math.max(0, Math.min(zw.from, to - 8)), to };
+  })();
   const bars = all.slice(win.from, win.to);
+  // ADX on the whole series up to the last bar shown (only past bars feed each value), then cut to the window.
+  const adxAll = adxOn ? adxSeries(all) : null;
+  const ax = adxAll ? { adx: adxAll.adx.slice(win.from, win.to), pdi: adxAll.pdi.slice(win.from, win.to), mdi: adxAll.mdi.slice(win.from, win.to) } : null;
   const shift = (i: number) => (i < 0 ? null : i - win.from >= 0 && i - win.from < bars.length ? i - win.from : null);
   const startIdx = shift(fullStart) ?? 0;
   const sigIdx = shift(at(plan.signalDate));
@@ -388,8 +430,8 @@ function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPla
   const vol = volumeView(bars, { trusted: !suspectVolume });
   const noVolume = !bars.some((b) => b.v > 0);
   const rightEdge = W - LABEL_W - FUTURE;            // last candle sits here; the plan strip is to its right
-  const xw = Math.min((rightEdge - PAD) / n, MAX_BAR_PITCH);
-  const cw = Math.max(1.5, Math.min(9, xw * 0.62));
+  const xw = zw ? (rightEdge - PAD) / n : Math.min((rightEdge - PAD) / n, MAX_BAR_PITCH);
+  const cw = Math.max(1.5, Math.min(zw ? 40 : 9, xw * 0.62));
   const x = (i: number) => rightEdge - (n - 1 - i) * xw - xw / 2;
   const y = (p: number) => 10 + (1 - (p - pMin) / pSpan) * (PH - 20);
   const vy = (v: number) => PH + GAP + (1 - Math.min(v, vol.maxV) / vol.maxV) * VH;
@@ -399,13 +441,77 @@ function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPla
 
   const [hover, setHover] = useState<number | null>(null);
   const [pos, setPos] = useState<{ xPct: number; yPct: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const drag = useRef<{ x: number; from: number; to: number } | null>(null);
+  const [pending, setPending] = useState<{ kind: "zone" | "trend"; date: string; price: number } | null>(null);
+  const [cursorP, setCursorP] = useState<number | null>(null);
+  const toSvg = (e: { clientX: number; clientY: number }) => {
+    const r = svgRef.current!.getBoundingClientRect();
+    return { xv: ((e.clientX - r.left) / r.width) * W, yv: ((e.clientY - r.top) / r.height) * H, r };
+  };
+  const idxAt = (xv: number) => Math.round(n - 1 - (rightEdge - xv - xw / 2) / xw);
+  const priceAt = (yv: number) => pMin + (1 - (yv - 10) / (PH - 20)) * pSpan;
+  /** Pool line / point: snap to the hovered candle's high or low when within 8 px. */
+  const snap = (i: number, yv: number) => {
+    const b = bars[i]; if (!b) return priceAt(yv);
+    const dh = Math.abs(y(b.h) - yv), dl = Math.abs(y(b.l) - yv);
+    return Math.min(dh, dl) <= 8 ? (dh <= dl ? b.h : b.l) : priceAt(yv);
+  };
   const onMove = (e: React.PointerEvent<SVGSVGElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    const xv = ((e.clientX - r.left) / r.width) * W;
-    const i = Math.round(n - 1 - (rightEdge - xv - xw / 2) / xw);
+    const { xv, yv, r } = toSvg(e);
+    const i = idxAt(xv);
     setHover(i >= 0 && i < n ? i : null);
     setPos({ xPct: ((e.clientX - r.left) / r.width) * 100, yPct: ((e.clientY - r.top) / r.height) * 100 });
+    setCursorP(yv < PH ? priceAt(yv) : null);
+    if (drag.current && tool === "move") {
+      const k = Math.round((drag.current.x - xv) / xw);
+      const span = drag.current.to - drag.current.from;
+      const from = Math.max(0, Math.min(all.length - span, drag.current.from + k));
+      setZw({ from, to: from + span });
+    }
   };
+  const onDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    onMove(e);
+    const { xv, yv } = toSvg(e);
+    const i = Math.max(0, Math.min(n - 1, idxAt(xv)));
+    if (tool === "move") { drag.current = { x: xv, from: win.from, to: win.to }; e.currentTarget.setPointerCapture(e.pointerId); return; }
+    if (yv > PH || !onDraw) return;
+    const date = bars[i].date;
+    if (tool === "point") onDraw({ kind: "point", date, price: snap(i, yv), label: `P${draws.filter((d) => d.kind === "point").length + 1}` });
+    else if (tool === "line") onDraw({ kind: "line", date, price: snap(i, yv) });
+    else if (tool === "zone") { setPending({ kind: "zone", date, price: priceAt(yv) }); e.currentTarget.setPointerCapture(e.pointerId); }
+    else if (tool === "trend") {
+      if (pending?.kind === "trend") { onDraw({ kind: "trend", d1: pending.date, p1: pending.price, d2: date, p2: snap(i, yv) }); setPending(null); }
+      else setPending({ kind: "trend", date, price: snap(i, yv) });
+    }
+  };
+  const onUp = (e: React.PointerEvent<SVGSVGElement>) => {
+    drag.current = null;
+    if (pending?.kind === "zone" && onDraw) {
+      const { yv } = toSvg(e);
+      const p2 = priceAt(Math.min(yv, PH));
+      if (Math.abs(y(p2) - y(pending.price)) > 3) onDraw({ kind: "zone", date: pending.date, p1: pending.price, p2 });
+      setPending(null);
+    }
+  };
+  // Scroll = zoom around the bar under the cursor (native listener: React's wheel handler can't preventDefault).
+  const zoomRef = useRef({ win, len: all.length, n, idxAt });
+  zoomRef.current = { win, len: all.length, n, idxAt };
+  useEffect(() => {
+    const el = svgRef.current; if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { win: w, len, n: cnt, idxAt: ia } = zoomRef.current;
+      const { xv } = toSvg(e);
+      const a = w.from + Math.max(0, Math.min(cnt - 1, ia(xv)));
+      const span = Math.max(8, Math.min(len, Math.round(cnt * (e.deltaY > 0 ? 1.2 : 1 / 1.2))));
+      const f = cnt > 1 ? (a - w.from) / (cnt - 1) : 1;
+      const from = Math.max(0, Math.min(len - span, Math.round(a - f * (span - 1))));
+      setZw({ from, to: from + span });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  });
   const hb = hover != null ? bars[hover] : null;
   // The rules measure volume against the RANGE's own average (bars in the box,
   // up to the signal). Shown in the tooltip on the daily view so the break
@@ -440,8 +546,10 @@ function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPla
 
   return (
     <div className="card" style={{ padding: 10, position: "relative" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block", touchAction: "none", cursor: "crosshair" }}
-        onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => { setHover(null); setPos(null); }}>
+      {zw && <button type="button" onClick={() => setZw(null)}
+        style={{ position: "absolute", top: 14, left: 14, zIndex: 4, ...mono, fontSize: 10, padding: "3px 9px", borderRadius: 999, border: "1px solid var(--border-strong)", background: "var(--surface-1)", color: "var(--text-1)" }}>reset zoom</button>}
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block", touchAction: "none", cursor: tool === "move" ? (drag.current ? "grabbing" : "grab") : "crosshair" }}
+        onPointerMove={onMove} onPointerDown={onDown} onPointerUp={onUp} onPointerLeave={() => { setHover(null); setPos(null); setCursorP(null); }}>
         {/* range edges + prices */}
         {!plan.hideBox && <rect x={x(startIdx) - xw / 2} y={y(rangeHi)} width={Math.max(2, x(boxEnd) - x(startIdx))} height={Math.max(1, y(rangeLo) - y(rangeHi))} fill="var(--accent)" opacity={0.05} />}
         {!plan.hideBox && [rangeHi, rangeLo].map((p, i) => (
@@ -539,6 +647,48 @@ function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPla
           </g>
         )}
 
+        {/* your marks */}
+        {draws.map((d, k) => {
+          const xi = (date: string) => { const i = at(date) - win.from; return i < 0 ? x(0) - xw / 2 : i >= n ? null : x(i); };
+          if (d.kind === "point") { const xx = xi(d.date); return xx == null ? null : (
+            <g key={k}><circle cx={xx} cy={y(d.price)} r={5} fill="none" stroke={DRAW_COL} strokeWidth={1.6} />
+              <text x={xx + 8} y={y(d.price) - 6} fontSize={10.5} fill={DRAW_COL} {...mono}>{d.label} {fmt(d.price)}</text></g>); }
+          if (d.kind === "line") { const xx = xi(d.date); return xx == null ? null : (
+            <g key={k}><line x1={xx} y1={y(d.price)} x2={plotRight} y2={y(d.price)} stroke={DRAW_COL} strokeWidth={1.3} strokeDasharray="6 3" />
+              <text x={plotRight - 4} y={y(d.price) - 4} fontSize={10} fill={DRAW_COL} textAnchor="end" {...mono}>pool {fmt(d.price)}</text></g>); }
+          if (d.kind === "zone") { const xx = xi(d.date); return xx == null ? null : (
+            <g key={k}><rect x={xx} y={Math.min(y(d.p1), y(d.p2))} width={plotRight - xx} height={Math.abs(y(d.p1) - y(d.p2))} fill={DRAW_COL} opacity={0.12} stroke={DRAW_COL} strokeOpacity={0.5} />
+              <text x={plotRight - 4} y={Math.min(y(d.p1), y(d.p2)) - 4} fontSize={10} fill={DRAW_COL} textAnchor="end" {...mono}>zone {fmt(Math.min(d.p1, d.p2))}–{fmt(Math.max(d.p1, d.p2))}</text></g>); }
+          const x1 = xi(d.d1), x2 = xi(d.d2);
+          return x1 == null || x2 == null ? null : <line key={k} x1={x1} y1={y(d.p1)} x2={x2} y2={y(d.p2)} stroke={DRAW_COL} strokeWidth={1.5} />;
+        })}
+        {pending && hover != null && cursorP != null && (pending.kind === "zone"
+          ? <rect x={x(Math.max(0, at(pending.date) - win.from))} y={Math.min(y(pending.price), y(cursorP))} width={plotRight - x(Math.max(0, at(pending.date) - win.from))} height={Math.abs(y(pending.price) - y(cursorP))} fill={DRAW_COL} opacity={0.1} />
+          : <line x1={x(Math.max(0, at(pending.date) - win.from))} y1={y(pending.price)} x2={x(hover)} y2={y(cursorP)} stroke={DRAW_COL} strokeWidth={1.2} strokeDasharray="4 3" />)}
+
+        {/* ADX(14) panel */}
+        {ax && (() => {
+          const ay = (v: number) => AT + (1 - Math.min(v, 60) / 60) * AH;
+          const line = (arr: (number | null)[]) => arr.map((v, i) => (v == null ? null : `${x(i)},${ay(v)}`)).filter(Boolean).join(" ");
+          return (
+            <g>
+              <line x1={0} y1={AT - GAP / 2} x2={plotRight} y2={AT - GAP / 2} stroke="var(--border-subtle)" strokeWidth={0.8} />
+              {[20, 25].map((lv) => (
+                <g key={lv}>
+                  <line x1={PAD} y1={ay(lv)} x2={plotRight} y2={ay(lv)} stroke="var(--text-3)" strokeWidth={0.6} strokeDasharray="3 4" opacity={0.6} />
+                  <text x={plotRight + 6} y={ay(lv) + 3} fontSize={9} fill="var(--text-3)" {...mono}>{lv}</text>
+                </g>
+              ))}
+              <polyline fill="none" stroke="var(--green)" strokeWidth={0.9} opacity={0.6} points={line(ax.pdi)} />
+              <polyline fill="none" stroke="var(--red)" strokeWidth={0.9} opacity={0.6} points={line(ax.mdi)} />
+              <polyline fill="none" stroke="var(--text-1)" strokeWidth={1.6} points={line(ax.adx)} />
+              <text x={4} y={AT + 10} fontSize={9.5} fill="var(--text-2)" {...mono}>ADX 14</text>
+              <text x={4} y={AT + 22} fontSize={9} fill="var(--green)" {...mono}>+DI</text>
+              <text x={26} y={AT + 22} fontSize={9} fill="var(--red)" {...mono}>−DI</text>
+            </g>
+          );
+        })()}
+
         {/* "next" strip */}
         <line x1={rightEdge + xw / 2} y1={0} x2={rightEdge + xw / 2} y2={PH + GAP + VH} stroke="var(--border-subtle)" strokeWidth={1} />
         <text x={rightEdge + xw / 2 + 5} y={PH + GAP + 12} fontSize={9} fill="var(--text-3)" {...mono}>next →</text>
@@ -576,6 +726,13 @@ function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPla
             </span>
           </div>
           <div>O {fmt(hb.o)} · H {fmt(hb.h)} · L {fmt(hb.l)} · C <span style={{ color: hb.c >= hb.o ? "var(--green)" : "var(--red)" }}>{fmt(hb.c)}</span></div>
+          {ax && ax.adx[hover] != null && (
+            <div>ADX <span style={{ color: "var(--text-1)" }}>{ax.adx[hover]!.toFixed(1)}</span>
+              {" "}· <span style={{ color: "var(--green)" }}>+DI {ax.pdi[hover]!.toFixed(1)}</span>
+              {" "}· <span style={{ color: "var(--red)" }}>−DI {ax.mdi[hover]!.toFixed(1)}</span>
+              {hover >= 5 && ax.adx[hover - 5] != null ? <span> · {ax.adx[hover]! - ax.adx[hover - 5]! >= 0 ? "rising" : "falling"} over 5 bars</span> : null}
+            </div>
+          )}
           <div>vol <span style={{ color: "var(--text-1)" }}>{fmtVol(hb.v)}</span>
             {vol.ma[hover] > 0 && <span> · {(hb.v / vol.ma[hover]).toFixed(2)}× 20-day avg</span>}
             {rangeAvg > 0 && tf === "D" && <span style={{ color: "var(--text-1)" }}> · {(hb.v / rangeAvg).toFixed(2)}× range avg</span>}
@@ -596,4 +753,24 @@ function Marker({ x, y, label, title, col = "var(--accent)" }: { x: number; y: n
       <text x={x} y={y + 3.4} fontSize={label.length > 2 ? 8 : 9.5} fontWeight={700} fill={col} textAnchor="middle" {...mono}>{label}</text>
     </g>
   );
+}
+
+/** ADX / +DI / −DI, Wilder smoothing (the same ADX(14) as the Nov 2026 tests). null until there's enough history. */
+function adxSeries(b: Bar[], n = 14) {
+  const len = b.length;
+  const adx: (number | null)[] = new Array(len).fill(null), pdi: (number | null)[] = new Array(len).fill(null), mdi: (number | null)[] = new Array(len).fill(null);
+  let tr = 0, pdm = 0, mdm = 0, adxV = 0, dxSum = 0;
+  for (let i = 1; i < len; i++) {
+    const up = b[i].h - b[i - 1].h, dn = b[i - 1].l - b[i].l;
+    const p = up > dn && up > 0 ? up : 0, m = dn > up && dn > 0 ? dn : 0;
+    const t = Math.max(b[i].h - b[i].l, Math.abs(b[i].h - b[i - 1].c), Math.abs(b[i].l - b[i - 1].c));
+    if (i <= n) { tr += t; pdm += p; mdm += m; if (i < n) continue; }
+    else { tr = tr - tr / n + t; pdm = pdm - pdm / n + p; mdm = mdm - mdm / n + m; }
+    const pd = tr > 0 ? (100 * pdm) / tr : 0, md = tr > 0 ? (100 * mdm) / tr : 0;
+    pdi[i] = pd; mdi[i] = md;
+    const dx = pd + md > 0 ? (100 * Math.abs(pd - md)) / (pd + md) : 0;
+    if (i < 2 * n) { dxSum += dx; if (i === 2 * n - 1) { adxV = dxSum / n; adx[i] = adxV; } }
+    else { adxV = (adxV * (n - 1) + dx) / n; adx[i] = adxV; }
+  }
+  return { adx, pdi, mdi };
 }
