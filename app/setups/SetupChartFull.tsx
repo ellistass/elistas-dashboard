@@ -50,6 +50,10 @@ export interface PlanProps {
   withRead?: boolean;
   /** The engine read's window from the card, so the chart reads exactly what the card read. */
   readWindow?: { from: string; to: string };
+  /** Filled page: 4 hour and 1 hour views (price + volume, no read), 6 months of hourly data. */
+  intraday?: boolean;
+  /** Filled page: step through the chart bar by bar from the signal, as it happened. */
+  replay?: boolean;
   played?: {
     fillDate: string | null; fillPrice: number | null;
     exitDate: string | null; exitPrice: number | null; win: boolean | null;
@@ -60,8 +64,15 @@ export interface PlanProps {
 const mono = { fontFamily: "'DM Mono', monospace" } as const;
 const fmtVol = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : v.toFixed(0));
 
-type View = Timeframe | "4H" | "2H";
-const isIntra = (v: View) => v === "4H" || v === "2H";
+type View = Timeframe | "4H" | "2H" | "1H";
+const isIntra = (v: View) => v === "4H" || v === "2H" || v === "1H";
+const VIEW_LABEL: Record<string, string> = { "4H": "4 hour", "2H": "2 hour", "1H": "1 hour" };
+type Intra = { bars: Bar[]; hasVolume: boolean; error?: string } | null;
+const loadIntra = (url: string, set: (v: Intra) => void) =>
+  fetch(url)
+    .then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error ?? r.statusText); return j; })
+    .then((j) => set({ bars: j.bars, hasVolume: j.hasVolume }))
+    .catch((e) => set({ bars: [], hasVolume: false, error: e instanceof Error ? e.message : String(e) }));
 /** A labelled point on the chart (H1, SC, 1st, A, F …). */
 interface Mark { date: string; label: string; title: string; col: string; below: boolean }
 
@@ -73,6 +84,11 @@ export default function SetupChartFull(plan: PlanProps) {
   const [showRead, setShowRead] = useState(true);
   const [h4, setH4] = useState<{ bars: Bar[]; hasVolume: boolean; error?: string } | null>(null);
   const [h2, setH2] = useState<{ bars: Bar[]; hasVolume: boolean; error?: string } | null>(null);
+  const [h1, setH1] = useState<Intra>(null);
+  // Replay: the last bar shown (its date / timestamp). null = the whole chart.
+  const [rpAt, setRpAt] = useState<string | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const long6m = plan.intraday ? "&range=6mo" : "";
 
   useEffect(() => {
     let live = true;
@@ -86,11 +102,12 @@ export default function SetupChartFull(plan: PlanProps) {
   // 4H bars load on first use only.
   useEffect(() => {
     if (view !== "4H" || h4) return;
-    fetch(`/api/setups/chart4h?instrument=${encodeURIComponent(plan.instrument)}`)
-      .then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error ?? r.statusText); return j; })
-      .then((j) => setH4({ bars: j.bars, hasVolume: j.hasVolume }))
-      .catch((e) => setH4({ bars: [], hasVolume: false, error: e instanceof Error ? e.message : String(e) }));
-  }, [view, h4, plan.instrument]);
+    loadIntra(`/api/setups/chart4h?instrument=${encodeURIComponent(plan.instrument)}${long6m}`, setH4);
+  }, [view, h4, plan.instrument, long6m]);
+  useEffect(() => {
+    if (view !== "1H" || h1) return;
+    loadIntra(`/api/setups/chart4h?instrument=${encodeURIComponent(plan.instrument)}&tf=1h${long6m}`, setH1);
+  }, [view, h1, plan.instrument, long6m]);
   useEffect(() => {
     if (view !== "2H" || h2) return;
     fetch(`/api/setups/chart4h?instrument=${encodeURIComponent(plan.instrument)}&tf=2h`)
@@ -180,10 +197,51 @@ export default function SetupChartFull(plan: PlanProps) {
     return { marks: [] as Mark[], shade, lines };
   }, [plan.withRead, h2, plan.signalDate, plan.entry, side]);
 
+  // ── Replay ── steps through the bars of the view on screen (W / M step day by day).
+  const stepBars: Bar[] = (view === "4H" ? h4?.bars : view === "2H" ? h2?.bars : view === "1H" ? h1?.bars : data?.bars) ?? [];
+  const rpIdx = rpAt == null ? -1 : (() => { let k = -1; for (let i = 0; i < stepBars.length && stepBars[i].date <= rpAt; i++) k = i; return k; })();
+  const startAt = () => {
+    const sig = plan.signalDate.slice(0, 10);
+    const i = stepBars.findIndex((b) => b.date.slice(0, 10) >= sig);
+    return i < 0 ? null : stepBars[isIntra(view) ? Math.max(0, i - 1) : i].date;   // intraday: from the bar before the signal day
+  };
+  const stepTo = (k: number) => { if (stepBars.length) setRpAt(stepBars[Math.max(0, Math.min(stepBars.length - 1, k))].date); };
+  useEffect(() => {
+    if (!playing || rpAt == null) return;
+    if (rpIdx >= stepBars.length - 1) { setPlaying(false); return; }
+    const t = setTimeout(() => stepTo(rpIdx + 1), 450);
+    return () => clearTimeout(t);
+  });
+  useEffect(() => {
+    if (!plan.replay || rpAt == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight") { e.preventDefault(); setPlaying(false); stepTo(rpIdx + 1); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); setPlaying(false); stepTo(rpIdx - 1); }
+      else if (e.key === " ") { e.preventDefault(); setPlaying((p) => !p); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  // What the trade looked like at the replay bar (Filled page).
+  const rpState = (() => {
+    const pl = plan.played;
+    if (rpAt == null || !pl) return null;
+    const day = rpAt.slice(0, 10);
+    const bar = stepBars[rpIdx];
+    if (!pl.fillDate || pl.fillDate > day) return `${rpAt.slice(0, 16).replace("T", " ")} · not filled yet · order ${plan.fmt(plan.entryPrice)}`;
+    if (pl.exitDate && pl.exitDate <= day && pl.exitPrice != null) return `${rpAt.slice(0, 16).replace("T", " ")} · out at ${plan.fmt(pl.exitPrice)} (${pl.exitDate})`;
+    const stop = [...pl.stops].filter((s) => s.date.slice(0, 10) <= day).pop()?.stop ?? plan.stop;
+    const R = Math.abs((pl.fillPrice ?? plan.entryPrice) - plan.stop) || 1e-9;
+    const rNow = bar ? ((plan.long ? 1 : -1) * (bar.c - (pl.fillPrice ?? plan.entryPrice))) / R : null;
+    return `${rpAt.slice(0, 16).replace("T", " ")} · in at ${plan.fmt(pl.fillPrice ?? plan.entryPrice)} · stop ${plan.fmt(stop)}${rNow != null ? ` · ${rNow >= 0 ? "+" : ""}${rNow.toFixed(2)}R at this close` : ""}`;
+  })();
+
   if (err) return <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>chart failed: {err}</div>;
   if (!data) return <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading chart…</div>;
 
-  const views: View[] = plan.withRead ? ["D", "W", "M", "4H", "2H"] : ["D", "W", "M"];
+  const views: View[] = ["D", "W", "M", ...(plan.withRead || plan.intraday ? ["4H" as const] : []),
+    ...(plan.withRead ? ["2H" as const] : []), ...(plan.intraday ? ["1H" as const] : [])];
+  const upTo = rpAt;
   const readOn = plan.withRead && showRead;
   const effortText = daily
     ? data.suspectVolume
@@ -196,13 +254,24 @@ export default function SetupChartFull(plan: PlanProps) {
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 9, flexWrap: "wrap" }}>
         <div className="seg" style={{ display: "inline-flex" }}>
           {views.map((t) => (
-            <button key={t} type="button" className={view === t ? "on" : ""} onClick={() => setView(t)}>{t === "4H" ? "4 hour" : t === "2H" ? "2 hour" : TIMEFRAME_LABEL[t]}</button>
+            <button key={t} type="button" className={view === t ? "on" : ""} onClick={() => setView(t)}>{VIEW_LABEL[t] ?? TIMEFRAME_LABEL[t as Timeframe]}</button>
           ))}
         </div>
         <span style={{ ...mono, fontSize: 10, color: "var(--text-3)" }}>
           {isIntra(view) ? "the composite man inside the daily bar — break / test day shaded" : TIMEFRAME_PURPOSE[view as Timeframe]}{plan.note ? ` · ${plan.note}` : ""}
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+          {plan.replay && stepBars.length > 1 && (rpAt == null ? (
+            <button type="button" onClick={() => { setRpAt(startAt()); setPlaying(false); }} style={pill(false)}>▶ replay from the signal</button>
+          ) : (
+            <>
+              <button type="button" title="back to the signal" onClick={() => { setPlaying(false); setRpAt(startAt()); }} style={pill(false)}>⏮</button>
+              <button type="button" title="one bar back (←)" onClick={() => { setPlaying(false); stepTo(rpIdx - 1); }} style={pill(false)}>◀</button>
+              <button type="button" title="play / pause (space)" onClick={() => setPlaying((p) => !p)} style={pill(playing)}>{playing ? "⏸ pause" : "▶ play"}</button>
+              <button type="button" title="one bar forward (→)" onClick={() => { setPlaying(false); stepTo(rpIdx + 1); }} style={pill(false)}>▶</button>
+              <button type="button" onClick={() => { setPlaying(false); setRpAt(null); }} style={pill(false)}>show all</button>
+            </>
+          ))}
           {plan.withRead && (view === "D" || isIntra(view)) && (
             <button type="button" onClick={() => setShowRead((v) => !v)} style={pill(showRead)}>engine read {showRead ? "on" : "off"}</button>
           )}
@@ -211,20 +280,25 @@ export default function SetupChartFull(plan: PlanProps) {
           )}
         </div>
       </div>
-      {view === "2H" ? (
+      {rpState && <div style={{ ...mono, fontSize: 11, color: "var(--amber)", marginBottom: 6 }}>replay · {rpState} · ← → step, space play</div>}
+      {view === "1H" ? (
+        !h1 ? <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading 1-hour bars…</div>
+        : h1.error || !h1.bars.length ? <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>1-hour chart failed: {h1.error ?? "no bars"}</div>
+        : <PlanSvg daily={h1.bars} suspectVolume={!h1.hasVolume} tf="1H" showEffort={false} plan={plan} upTo={upTo} />
+      ) : view === "2H" ? (
         !h2 ? <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading 2-hour bars…</div>
         : h2.error || !h2.bars.length ? <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>2-hour chart failed: {h2.error ?? "no bars"}</div>
         : <PlanSvg daily={h2.bars} suspectVolume={!h2.hasVolume} tf="2H" showEffort={false} plan={plan}
-            marks={readOn ? two?.marks : undefined} shade={two?.shade ?? null} />
+            marks={readOn ? two?.marks : undefined} shade={two?.shade ?? null} upTo={upTo} />
       ) : view === "4H" ? (
         !h4 ? <div style={{ ...mono, fontSize: 11, color: "var(--text-3)", padding: 40, textAlign: "center" }}>loading 4-hour bars…</div>
         : h4.error || !h4.bars.length ? <div style={{ ...mono, fontSize: 11, color: "var(--red)", padding: 20 }}>4-hour chart failed: {h4.error ?? "no bars"}</div>
         : <PlanSvg daily={h4.bars} suspectVolume={!h4.hasVolume} tf="4H" showEffort={false} plan={plan}
-            marks={readOn ? four?.marks : undefined} shade={four?.shade ?? null} />
+            marks={readOn ? four?.marks : undefined} shade={four?.shade ?? null} upTo={upTo} />
       ) : (
         <PlanSvg daily={data.bars} suspectVolume={data.suspectVolume} tf={view} showEffort={showEffort} plan={plan}
           marks={readOn && view === "D" ? daily?.marks : undefined} shade={readOn && view === "D" ? daily?.shade ?? null : null}
-          box={readOn && view === "D" ? effortText : null} />
+          box={readOn && view === "D" ? effortText : null} upTo={upTo} />
       )}
       {readOn && (
         <div style={{ ...mono, fontSize: 10.5, marginTop: 10, display: "grid", gap: 10, lineHeight: 1.6 }}>
@@ -263,10 +337,26 @@ function ReadBlock({ title, lines, warn }: { title: string; lines: string[]; war
   );
 }
 
-function PlanSvg({ daily, suspectVolume, tf, showEffort, plan, marks, shade, box }: {
+function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPlan, marks, shade, box, upTo }: {
   daily: Bar[]; suspectVolume: boolean; tf: View; showEffort: boolean; plan: PlanProps;
   marks?: Mark[]; shade?: { from: string; to: string } | null; box?: string | null;
+  /** Replay: draw only the bars up to this date / timestamp, and the trade only as far as it had got. */
+  upTo?: string | null;
 }) {
+  const cut = upTo ? fullBars.filter((b) => b.date <= upTo) : fullBars;
+  const daily = cut.length >= 2 ? cut : fullBars.slice(0, 2);
+  const day = upTo?.slice(0, 10);
+  const fp = fullPlan.played;
+  const plan: PlanProps = !day || !fp ? fullPlan : {
+    ...fullPlan,
+    played: {
+      ...fp,
+      // hidden until they happen — also kept out of the price scale, so the chart doesn't hint at the outcome
+      ...(fp.fillDate && fp.fillDate.slice(0, 10) <= day ? {} : { fillDate: null, fillPrice: null }),
+      ...(fp.exitDate && fp.exitDate.slice(0, 10) <= day ? {} : { exitDate: null, exitPrice: null, win: null }),
+      stops: fp.stops.filter((s) => s.date.slice(0, 10) <= day),
+    },
+  };
   const W = 1000, PH = 360, VH = 100, GAP = 14, PAD = 64, LABEL_W = 150, FUTURE = 56;
   const H = PH + GAP + VH;
   const { rangeLo, rangeHi, fmt } = plan;

@@ -20,7 +20,7 @@ const TTL_MS = 15 * 60 * 1000;
 export async function fetchHourBars(
   yahooSymbol: string,
   force = false,
-  opts: { range?: "1mo" | "3mo"; keepNoVolume?: boolean } = {},
+  opts: { range?: "1mo" | "3mo" | "6mo"; keepNoVolume?: boolean } = {},
 ): Promise<HourBar[]> {
   const range = opts.range ?? "1mo";
   const key = `${yahooSymbol}|${range}|${opts.keepNoVolume ? 1 : 0}`;

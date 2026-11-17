@@ -105,6 +105,8 @@ export default function FilledPage() {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Status>("open");
   const [popup, setPopup] = useState<Row | null>(null);
+  // Month the setup was SEEN (first on the Setups page). "all" = every month.
+  const [month, setMonth] = useState<string>("all");
 
   const load = useCallback(async () => {
     setBusy(true); setError(null);
@@ -121,7 +123,16 @@ export default function FilledPage() {
   const gradeOk = (r: Row) => grade === "all" || (grade === "trend" ? r.entry === "trend" : r.grade === grade);
   const call = (r: Row) => r.rules?.[acct] ?? null;
   const modeOk = (r: Row) => mode === "every" || (mode === "rules" ? call(r)?.taken === true : !!call(r) && !call(r)!.taken);
-  const rows = (data?.rows ?? []).filter((r) => gradeOk(r) && modeOk(r) && (!edgeOnly || r.edge));
+  const filtered = (data?.rows ?? []).filter((r) => gradeOk(r) && modeOk(r) && (!edgeOnly || r.edge));
+  const months = [...new Set(filtered.map((r) => r.firstBarDate.slice(0, 7)))].sort().reverse();
+  const rows = month === "all" ? filtered : filtered.filter((r) => r.firstBarDate.startsWith(month));
+  const monthTally = (m: string) => {
+    const mr = filtered.filter((r) => r.firstBarDate.startsWith(m));
+    const cl = mr.filter((r) => r.resultR != null && r.status !== "expired" && r.status !== "open");
+    const net = cl.reduce((t, r) => t + r.resultR! * (r.weight ?? 1), 0);
+    const won = cl.filter((r) => r.resultR! > 0.05).length;
+    return { n: mr.length, net, win: cl.length ? Math.round((100 * won) / cl.length) : null };
+  };
   const real = (data?.real ?? []).filter((t) => t.account === acct && (grade === "all" || grade === "trend" || t.grade === grade));
   const count = (k: Status) => rows.filter((r) => r.status === k).length;
   const shown = rows.filter((r) => r.status === tab);
@@ -156,6 +167,18 @@ export default function FilledPage() {
             <Btn primary={edgeOnly} onClick={() => setEdgeOnly(!edgeOnly)}>{edgeOnly ? "My edge only" : "Everything (B + rule skips)"}</Btn>
             <span style={{ width: 12 }} />
             {data.accounts.map((a) => <Btn key={a.key} primary={acct === a.key} onClick={() => setAcct(a.key)}>{a.key}</Btn>)}
+          </div>
+          <div className={s.row} style={{ flexWrap: "wrap" }}>
+            <span style={{ width: 56 }}>Month</span>
+            <Btn primary={month === "all"} onClick={() => setMonth("all")}>All months</Btn>
+            {months.map((m) => {
+              const t = monthTally(m);
+              return (
+                <Btn key={m} primary={month === m} onClick={() => setMonth(m)}>
+                  {monthLabel(m)} · {t.n}{t.win != null ? ` · ${t.win}% · ${rr(t.net)}` : ""}
+                </Btn>
+              );
+            })}
           </div>
           <div className={s.row} style={{ flexWrap: "wrap" }}>
             <span style={{ width: 56 }}>View</span>
@@ -210,7 +233,9 @@ export default function FilledPage() {
           ) : <div className={`${s.card} ${s.empty}`}>{TABS.find((t) => t.key === tab)!.empty}</div>}
         </Section>
       ) : null}
-      {popup ? <ChartModal r={popup} onClose={() => setPopup(null)} /> : null}
+      {popup ? <ChartModal r={popup} onClose={() => setPopup(null)} acct={acct}
+        walk={[...rows].sort((a, b) => a.firstBarDate.localeCompare(b.firstBarDate) || a.instrument.localeCompare(b.instrument))}
+        onPick={setPopup} /> : null}
     </div>
   );
 }
@@ -273,10 +298,27 @@ function Result({ r }: { r: Row }) {
 }
 
 /** Same popup as /setups: the Setups chart, plus the fill, the stop trail and the exit. */
-function ChartModal({ r, onClose }: { r: Row; onClose: () => void }) {
+function ChartModal({ r, onClose, acct, walk, onPick }: {
+  r: Row; onClose: () => void; acct: string;
+  /** Every setup under the page's filters, in the order they were seen — walk through them with [ and ]. */
+  walk: Row[]; onPick: (r: Row) => void;
+}) {
   const [stops, setStops] = useState<{ date: string; stop: number }[]>([]);
+  // Practice: hide the outcome in the header so you can read the chart first (use replay for the chart).
+  const [blind, setBlind] = useState(false);
+  const at = walk.findIndex((w) => w.id === r.id);
+  const go = (k: number) => { if (walk[k]) onPick(walk[k]); };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "[") go(at - 1);
+      else if (e.key === "]") go(at + 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   useEffect(() => {
     let live = true;
+    setStops([]);
     fetch(`/api/setups/filled?id=${encodeURIComponent(r.id)}`)
       .then((res) => res.json()).then((j) => { if (live && Array.isArray(j.stops)) setStops(j.stops); })
       .catch(() => {});                                            // the chart still draws without the trail
@@ -305,19 +347,31 @@ function ChartModal({ r, onClose }: { r: Row; onClose: () => void }) {
             <span style={{ marginLeft: 10, color: execLong ? "var(--green)" : "var(--red)" }}>
               {execLong ? "BUY" : "SELL"} {r.executeSymbol} · {r.entry} · grade {r.grade}
             </span>
-            {v != null ? <span style={{ marginLeft: 10, color: v >= 0 ? "var(--green)" : "var(--red)" }}>{rr(v)}{r.status === "open" ? " open" : ""}</span> : null}
+            {v != null && !blind ? <span style={{ marginLeft: 10, color: v >= 0 ? "var(--green)" : "var(--red)" }}>{rr(v)}{r.status === "open" ? " open" : ""}</span> : null}
           </div>
-          <button onClick={onClose} style={{ ...mono, fontSize: 11, color: "var(--text-3)" }}>close (esc)</button>
+          <div style={{ display: "flex", gap: 8, alignItems: "baseline", ...mono, fontSize: 11 }}>
+            <button onClick={() => go(at - 1)} disabled={at <= 0} style={{ color: at <= 0 ? "var(--text-3)" : "var(--text-1)" }}>◀ previous [</button>
+            <span style={{ color: "var(--text-3)" }}>{at + 1} / {walk.length}</span>
+            <button onClick={() => go(at + 1)} disabled={at >= walk.length - 1} style={{ color: at >= walk.length - 1 ? "var(--text-3)" : "var(--text-1)" }}>] next ▶</button>
+            <button onClick={() => setBlind((b) => !b)} style={{ color: blind ? "var(--accent)" : "var(--text-3)" }}>{blind ? "result hidden" : "hide result"}</button>
+            <button onClick={onClose} style={{ color: "var(--text-3)" }}>close (esc)</button>
+          </div>
+        </div>
+        <div style={{ ...mono, fontSize: 11, marginTop: 6, color: r.edge ? "var(--green)" : "var(--amber)" }}>
+          seen {r.firstBarDate} · {r.edge ? "inside my edge" : "outside my edge"}
+          {r.rules?.[acct] ? ` · ${acct}: ${r.rules[acct].taken ? "taken by the rules" : `skipped — ${r.rules[acct].reason ?? "rules"}`}` : ""}
         </div>
         <div style={{ ...mono, fontSize: 11, color: "var(--text-2)", margin: "8px 0 12px", display: "flex", gap: 18, flexWrap: "wrap" }}>
-          {r.fillDate ? <span>in {px(r.fillPrice)} · {r.fillDate}</span> : <span>order {px(r.entryPrice)} · never filled</span>}
+          {blind ? <span>order {px(r.entryPrice)}</span>
+            : r.fillDate ? <span>in {px(r.fillPrice)} · {r.fillDate}</span> : <span>order {px(r.entryPrice)} · never filled</span>}
           <span style={{ color: "var(--red)" }}>first stop {px(r.origStop)}</span>
-          {r.status === "open" ? <span style={{ color: "var(--amber)" }}>stop next session {px(r.stopNow)} · {locked(r.lockedR)}</span> : null}
-          {r.exitDate ? <span style={{ color: (r.resultR ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>out {px(r.exitPrice)} · {r.exitDate} · {r.exitReason}</span> : null}
-          {r.fillDate ? <span style={{ color: "var(--text-3)" }}>peak {rr(r.peakR)}</span> : null}
+          {r.status === "open" && !blind ? <span style={{ color: "var(--amber)" }}>stop next session {px(r.stopNow)} · {locked(r.lockedR)}</span> : null}
+          {r.exitDate && !blind ? <span style={{ color: (r.resultR ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>out {px(r.exitPrice)} · {r.exitDate} · {r.exitReason}</span> : null}
+          {r.fillDate && !blind ? <span style={{ color: "var(--text-3)" }}>peak {rr(r.peakR)}</span> : null}
+          {blind ? <span style={{ color: "var(--text-3)" }}>use ▶ replay on the chart — the trade is drawn only as far as it had got</span> : null}
           <span style={{ color: "var(--amber)" }}>— amber line: the stop, bar by bar</span>
         </div>
-        <SetupChartFull
+        <SetupChartFull key={r.id} intraday replay
           instrument={r.instrument} entry={r.entry === "aggressive" || r.entry === "trend" ? "aggressive" : "conservative"} long={long}
           rangeLo={r.rangeLo} rangeHi={r.rangeHi} rangeStart={r.rangeStart} signalDate={r.signalDate ?? r.firstBarDate}
           entryPrice={r.entryPrice} stop={r.origStop} breakevenAt={r.breakevenAt} target={r.target ?? undefined} fmt={(x) => px(x)}
