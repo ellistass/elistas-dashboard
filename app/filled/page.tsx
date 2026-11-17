@@ -21,7 +21,16 @@ interface RealTrade {
   id: string; account: string; instrument: string; executeSymbol: string | null; side: string; grade: string;
   entryDate: string; exitDate: string | null; status: string; resultR: number | null; rNow: number | null; pnlUsd: number | null;
 }
-type GradeF = "all" | "A" | "B" | "trend";
+type GradeF = "A" | "B" | "trend";
+/** Setup type: retest / spring-upthrust / forex / trend / crypto / AB=CD. */
+type TypeF = "conservative" | "aggressive" | "forex" | "trend" | "crypto" | "abcd";
+const TYPES: { key: TypeF; label: string }[] = [
+  { key: "conservative", label: "Retest" }, { key: "aggressive", label: "Spring / UT" }, { key: "forex", label: "Forex" },
+  { key: "trend", label: "Trend" }, { key: "crypto", label: "Crypto" }, { key: "abcd", label: "AB=CD" },
+];
+const typeOf = (r: { entry: string; slot: string | null }): TypeF => (r.entry === "trend" ? (r.slot === "crypto" ? "crypto" : "trend") : (r.entry as TypeF));
+/** Toggle one value in a multi-select; an empty set means "all". */
+const toggle = <T,>(set: Set<T>, v: T) => { const n = new Set(set); n.has(v) ? n.delete(v) : n.add(v); return n; };
 type ModeF = "every" | "rules" | "skipped";
 interface Row {
   id: string; market: string; instrument: string; executeSymbol: string; inverted: boolean;
@@ -40,6 +49,7 @@ interface Row {
   taken: { account: string; status: string } | null;
   edge: boolean;
   upgradedFrom: string | null;
+  read: { verdict: string; agrees: boolean | null } | null;
 }
 
 const TABS: { key: Status; label: string; empty: string }[] = [
@@ -96,7 +106,8 @@ export default function FilledPage() {
     rows: Row[]; errors: { instrument: string; error: string }[];
     accounts: AccountInfo[]; real: RealTrade[]; windowStart: string; warmupDays: number;
   } | null>(null);
-  const [grade, setGrade] = useState<GradeF>("all");
+  const [grades, setGrades] = useState<Set<GradeF>>(new Set());   // empty = all grades
+  const [types, setTypes] = useState<Set<TypeF>>(new Set());       // empty = all types
   const [mode, setMode] = useState<ModeF>("every");
   const [edgeOnly, setEdgeOnly] = useState(true);
   const [acct, setAcct] = useState("50k");
@@ -120,10 +131,11 @@ export default function FilledPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const gradeOk = (r: Row) => grade === "all" || (grade === "trend" ? r.entry === "trend" : r.grade === grade);
+  const gradeOk = (r: Row) => !grades.size || grades.has((r.entry === "trend" ? "trend" : r.grade) as GradeF);
+  const typeOk = (r: Row) => !types.size || types.has(typeOf(r));
   const call = (r: Row) => r.rules?.[acct] ?? null;
   const modeOk = (r: Row) => mode === "every" || (mode === "rules" ? call(r)?.taken === true : !!call(r) && !call(r)!.taken);
-  const filtered = (data?.rows ?? []).filter((r) => gradeOk(r) && modeOk(r) && (!edgeOnly || r.edge));
+  const filtered = (data?.rows ?? []).filter((r) => gradeOk(r) && typeOk(r) && modeOk(r) && (!edgeOnly || r.edge));
   const months = [...new Set(filtered.map((r) => r.firstBarDate.slice(0, 7)))].sort().reverse();
   const curMonth = month && months.includes(month) ? month : months[0] ?? null;
   const mi = curMonth ? months.indexOf(curMonth) : -1;
@@ -135,7 +147,7 @@ export default function FilledPage() {
     const won = cl.filter((r) => r.resultR! > 0.05).length;
     return { n: mr.length, net, win: cl.length ? Math.round((100 * won) / cl.length) : null };
   };
-  const real = (data?.real ?? []).filter((t) => t.account === acct && (grade === "all" || grade === "trend" || t.grade === grade));
+  const real = (data?.real ?? []).filter((t) => t.account === acct && (!grades.size || grades.has("trend") || grades.has(t.grade as GradeF)));
   const count = (k: Status) => rows.filter((r) => r.status === k).length;
   const shown = rows.filter((r) => r.status === tab);
   const moves = rows.filter((r) => r.status === "open" && r.stopMoved).length;
@@ -156,9 +168,16 @@ export default function FilledPage() {
         <div className={`${s.card} ${s.small}`} style={{ display: "grid", gap: 8 }}>
           <div className={s.row} style={{ flexWrap: "wrap" }}>
             <span style={{ width: 56 }}>Grade</span>
-            {(["all", "A", "B", "trend"] as const).map((g) => (
-              <Btn key={g} primary={grade === g} onClick={() => setGrade(g)}>{g === "all" ? "All grades" : g === "trend" ? "Trend / crypto" : `Grade ${g}`}</Btn>
+            <Btn primary={!grades.size} onClick={() => setGrades(new Set())}>All grades</Btn>
+            {(["A", "B", "trend"] as const).map((g) => (
+              <Btn key={g} primary={grades.has(g)} onClick={() => setGrades(toggle(grades, g))}>{g === "trend" ? "Trend / crypto" : `Grade ${g}`}</Btn>
             ))}
+            <span className={s.small}>pick several</span>
+          </div>
+          <div className={s.row} style={{ flexWrap: "wrap" }}>
+            <span style={{ width: 56 }}>Type</span>
+            <Btn primary={!types.size} onClick={() => setTypes(new Set())}>All types</Btn>
+            {TYPES.map((t) => <Btn key={t.key} primary={types.has(t.key)} onClick={() => setTypes(toggle(types, t.key))}>{t.label}</Btn>)}
           </div>
           <div className={s.row} style={{ flexWrap: "wrap" }}>
             <span style={{ width: 56 }}>Trades</span>
@@ -249,6 +268,7 @@ function Who({ r, acct }: { r: Row; acct: string }) {
       <b>{r.executeSymbol}</b>{r.executeSymbol !== r.instrument ? <span className={s.small}>{r.instrument}</span> : null}
       <SideTag side={r.side} /><Grade g={r.upgradedFrom ? `${r.upgradedFrom}→${r.grade}` : r.grade} />
       <span className={s.small}>{r.entry === "trend" ? `${r.market} slot · ½ risk` : r.entry}</span>
+      <EngineTag r={r} />
       {c ? (c.taken
         ? <Tag tone="good">rules: take{c.reason ? ` · ${c.reason}` : ""}</Tag>
         : <Tag tone="plain">rules: skip · {c.reason}</Tag>) : null}
@@ -258,6 +278,15 @@ function Who({ r, acct }: { r: Row; acct: string }) {
       {r.inverted ? <span className={s.small}>prices are the future's — translate to {r.executeSymbol}</span> : null}
     </div>
   );
+}
+
+/** The card's engine read: verdict, and whether it's with the trade. */
+function EngineTag({ r }: { r: Row }) {
+  if (!r.read || r.read.verdict === "n/a") return null;
+  const word = r.read.verdict === "accum" ? "accumulation" : r.read.verdict === "distrib" ? "distribution" : "neutral";
+  return <Tag tone={r.read.agrees === true ? "good" : r.read.agrees === false ? "warn" : "plain"}>
+    engine: {word}{r.read.agrees === true ? " · with" : r.read.agrees === false ? " · against" : ""}
+  </Tag>;
 }
 
 function Fill({ r }: { r: Row }) {
@@ -362,6 +391,7 @@ function ChartModal({ r, onClose, acct, walk, onPick }: {
         <div style={{ ...mono, fontSize: 11, marginTop: 6, color: r.edge ? "var(--green)" : "var(--amber)" }}>
           seen {r.firstBarDate} · {r.edge ? "inside my edge" : "outside my edge"}
           {r.rules?.[acct] ? ` · ${acct}: ${r.rules[acct].taken ? "taken by the rules" : `skipped — ${r.rules[acct].reason ?? "rules"}`}` : ""}
+          {r.read && r.read.verdict !== "n/a" ? ` · card's engine read: ${r.read.verdict === "accum" ? "accumulation" : r.read.verdict === "distrib" ? "distribution" : "neutral"}${r.read.agrees === true ? " (with the trade)" : r.read.agrees === false ? " (against the trade)" : ""}` : ""}
         </div>
         <div style={{ ...mono, fontSize: 11, color: "var(--text-2)", margin: "8px 0 12px", display: "flex", gap: 18, flexWrap: "wrap" }}>
           {blind ? <span>order {px(r.entryPrice)}</span>

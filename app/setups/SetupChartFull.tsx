@@ -144,6 +144,12 @@ export default function SetupChartFull(plan: PlanProps) {
     let i1 = plan.readWindow ? bars.findIndex((b) => b.date.slice(0, 10) > plan.readWindow!.to.slice(0, 10)) - 1
       : bars.findIndex((b) => b.date.slice(0, 10) >= plan.signalDate.slice(0, 10)) - 1;
     if (i1 < -1) i1 = bars.length - 1;
+    // Replay before the signal: read only the range bars seen so far — the read as it stood that day.
+    const asOf = rpAt?.slice(0, 10);
+    if (asOf && asOf < plan.signalDate.slice(0, 10)) {
+      let k = -1; for (let j = 0; j < bars.length && bars[j].date.slice(0, 10) <= asOf; j++) k = j;
+      i1 = Math.min(i1, k);
+    }
     if (i0 < 0 || i1 - i0 < 4) return null;
     const detail = engineReadDetail(bars, i0, i1 + 1);
     const sa = stoppingActionAt(bars, i0, i1 + 1, plan.long);
@@ -161,7 +167,7 @@ export default function SetupChartFull(plan: PlanProps) {
       }
     }
     return { detail, st, marks, shade: { from: bars[i0].date, to: bars[i1].date } };
-  }, [plan.withRead, plan.readWindow, plan.rangeStart, plan.signalDate, plan.long, plan.rangeLo, plan.rangeHi, data]);
+  }, [plan.withRead, plan.readWindow, plan.rangeStart, plan.signalDate, plan.long, plan.rangeLo, plan.rangeHi, data, rpAt]);
 
   // 4H read — firstDropRead / dropShare / springRead, exactly as the card.
   const four = useMemo(() => {
@@ -261,11 +267,17 @@ export default function SetupChartFull(plan: PlanProps) {
     ...(plan.withRead ? ["2H" as const] : []), ...(plan.intraday ? ["1H" as const] : [])];
   const upTo = rpAt;
   const readOn = plan.withRead && showRead;
+  const verdictWord = (v: string) => (v === "accum" ? "ACCUMULATION" : v === "distrib" ? "DISTRIBUTION" : "NEUTRAL");
   const effortText = daily
-    ? data.suspectVolume
-      ? "volume: cash-index feed (suspect) — lean on the price read"
-      : `up effort ÷ down effort per point = ${daily.detail.ratio ?? "—"} → ${daily.detail.verdict === "accum" ? "ACCUMULATION" : daily.detail.verdict === "distrib" ? "DISTRIBUTION" : "NEUTRAL"}`
+    ? `up effort ÷ down effort per point = ${daily.detail.ratio ?? "—"} → ${verdictWord(daily.detail.verdict)}${data.suspectVolume ? " · cash-index volume (suspect) — lean on the price read" : ""}`
     : null;
+  // Direction: what the read favours, and whether that's with this trade — as of the replay bar when replaying.
+  const direction = daily ? (() => {
+    const v = daily.detail.verdict;
+    const fav = v === "accum" ? "longs" : v === "distrib" ? "shorts" : null;
+    const withTrade = fav == null ? null : (fav === "longs") === plan.long;
+    return { text: `${verdictWord(v)}${fav ? ` → favours ${fav}` : " → no side"}`, withTrade, asOf: daily.shade.to.slice(0, 10) };
+  })() : null;
 
   return (
     <div>
@@ -302,6 +314,13 @@ export default function SetupChartFull(plan: PlanProps) {
         </div>
       </div>
       {rpState && <div style={{ ...mono, fontSize: 11, color: "var(--amber)", marginBottom: 6 }}>replay · {rpState} · ← → step, space play</div>}
+      {direction && (
+        <div style={{ ...mono, fontSize: 11.5, marginBottom: 6, color: direction.withTrade == null ? "var(--text-2)" : direction.withTrade ? "var(--green)" : "var(--red)" }}>
+          engine read (range up to {direction.asOf}): <b>{direction.text}</b>
+          {direction.withTrade == null ? "" : direction.withTrade ? " · with this trade" : " · against this trade"}
+          {data.suspectVolume ? <span style={{ color: "var(--amber)" }}> · volume suspect on this market</span> : null}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
         {TOOLS.map((t) => <button key={t.key} type="button" title={t.hint} onClick={() => setTool(t.key)} style={pill(tool === t.key)}>{t.label}</button>)}
         <button type="button" disabled={!draws.length} onClick={() => setDraws((d) => d.slice(0, -1))} style={pill(false)}>undo</button>
@@ -662,6 +681,19 @@ function PlanSvg({ daily: fullBars, suspectVolume, tf, showEffort, plan: fullPla
           const x1 = xi(d.d1), x2 = xi(d.d2);
           return x1 == null || x2 == null ? null : <line key={k} x1={x1} y1={y(d.p1)} x2={x2} y2={y(d.p2)} stroke={DRAW_COL} strokeWidth={1.5} />;
         })}
+        {/* ghost: where the mark will land before you click (pool / point snap to the wick like the click does) */}
+        {tool !== "move" && !pending && hover != null && cursorP != null && (() => {
+          const gp = tool === "line" || tool === "point" || tool === "trend" ? snap(hover, y(cursorP)) : cursorP;
+          const gx = x(hover), gy = y(gp);
+          return (
+            <g pointerEvents="none" opacity={0.45}>
+              {tool === "line" && <line x1={gx} y1={gy} x2={plotRight} y2={gy} stroke={DRAW_COL} strokeWidth={1.3} strokeDasharray="6 3" />}
+              {tool === "zone" && <line x1={gx} y1={gy} x2={plotRight} y2={gy} stroke={DRAW_COL} strokeWidth={1} />}
+              {(tool === "point" || tool === "trend") && <circle cx={gx} cy={gy} r={5} fill="none" stroke={DRAW_COL} strokeWidth={1.4} />}
+              <text x={tool === "line" || tool === "zone" ? plotRight - 4 : gx + 8} y={gy - 5} fontSize={10} fill={DRAW_COL} textAnchor={tool === "line" || tool === "zone" ? "end" : "start"} {...mono}>{fmt(gp)}</text>
+            </g>
+          );
+        })()}
         {pending && hover != null && cursorP != null && (pending.kind === "zone"
           ? <rect x={x(Math.max(0, at(pending.date) - win.from))} y={Math.min(y(pending.price), y(cursorP))} width={plotRight - x(Math.max(0, at(pending.date) - win.from))} height={Math.abs(y(pending.price) - y(cursorP))} fill={DRAW_COL} opacity={0.1} />
           : <line x1={x(Math.max(0, at(pending.date) - win.from))} y1={y(pending.price)} x2={x(hover)} y2={y(cursorP)} stroke={DRAW_COL} strokeWidth={1.2} strokeDasharray="4 3" />)}

@@ -62,6 +62,8 @@ export interface FilledRow {
   edge: boolean;
   /** "B" when a grade-B futures retest was upgraded to A by the layers (shown as B→A). */
   upgradedFrom: string | null;
+  /** The card's engine read as first seen (range volume: accumulation / distribution). null = trend/crypto. */
+  read: { verdict: string; agrees: boolean | null } | null;
 }
 
 export interface RealTrade {
@@ -141,6 +143,12 @@ function build(base: Omit<FilledRow, "status" | "fillDate" | "fillPrice" | "stop
       upgradedFrom,
     },
   };
+}
+
+/** The engine read stored on the card: setupRead (range setups) or wyckoffRead (forex, on futures volume). */
+function readOf(snap: any): FilledRow["read"] {
+  const r = snap?.setupRead ?? snap?.wyckoffRead;
+  return r?.verdict ? { verdict: String(r.verdict), agrees: r.agrees ?? null } : null;
 }
 
 /** What the card itself says about taking it (before any account rule). */
@@ -224,6 +232,7 @@ function evaluateLogged(row: any, bars: DayBar[], events: Evt[], taken: FilledRo
     slot: paper ? null : "range", weight: 1,
     rangeLo: row.rangeLo, rangeHi: row.rangeHi, rangeStart: row.rangeStart, signalDate: row.signalDate, firstBarDate: row.firstBarDate,
     breakevenAt: row.breakevenAt, taken,
+    read: readOf(row.snapshot),
   }, input, bars, events, cardSkipFor(row) ?? layerSkip, upgrade ? "B" : null);
 }
 
@@ -243,7 +252,7 @@ function evaluateTrend(t: TrendSetup, bars: DayBar[], events: Evt[], taken: Fill
     executeSymbol: t.executeSymbol, inverted, side: t.side, entry: "trend", grade: "trend",
     slot: t.slot, weight: 0.5,
     rangeLo: t.channelLo, rangeHi: t.channelHi, rangeStart: t.channelStart, signalDate: t.signalDate, firstBarDate: t.signalDate,
-    breakevenAt: ref + d * TREND_STOP_ATR * t.atr, taken,
+    breakevenAt: ref + d * TREND_STOP_ATR * t.atr, taken, read: null,
   }, input, bars, events, t.ruleSkip ?? null);
 }
 
