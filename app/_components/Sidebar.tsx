@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import {
   ListChecks, Gauge, Crosshair, CalendarDays, PenLine,
   TrendingUp, Trophy, History as HistoryIcon,
-  Wallet, Database, Pencil, LogOut, Menu, Frame, Target, Briefcase, ShieldCheck, Moon, Sun, CalendarRange, BookMarked,
+  Wallet, Database, Pencil, LogOut, Menu, Frame, Target, Briefcase, ShieldCheck, Moon, Sun, CalendarRange, BookMarked, Landmark,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -52,6 +52,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: '/tonight',    label: 'Tonight',    icon: Moon },                          // what do I do right now?
       { href: '/setups',     label: 'Setups',     icon: Target },                        // what's firing, and is it worth taking?
+      { href: '/macro',      label: 'Macro',      icon: Landmark },                      // what does each bank's story say this week?
       { href: '/filled',     label: 'Filled',     icon: ListChecks },                    // what are the stops on filled setups tonight?
       { href: '/trades',     label: 'Trades',     icon: Briefcase, input: true },        // where are my positions and stops?
       { href: '/discipline', label: 'Discipline', icon: ShieldCheck },                   // am I following the rules?

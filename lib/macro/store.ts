@@ -73,7 +73,7 @@ export async function saveBankCards(runId: string, cards: any[]) {
     if (missing.length) bad.push({ currency: c.currency, missing })
     const { bank, inflation, labour, decision, pricing, verdict, stance, changeView } = c   // drop any extra keys the model adds
     const data = { bank, inflation, labour, decision, pricing, verdict, stance, changeView, evidenceRefs: refs, valid: missing.length === 0 }
-    await mdb.macroBankCard.upsert({ where: { runId_currency: { runId, currency: c.currency } }, create: { runId, ...data }, update: data })
+    await mdb.macroBankCard.upsert({ where: { runId_currency: { runId, currency: c.currency } }, create: { runId, currency: c.currency, ...data }, update: data })
   }
   return { saved: cards.length, invalid: bad }
 }
@@ -154,4 +154,27 @@ export async function completeRequest(id: string, result: string) {
 // ─── reads for the pair page ────────────────────────────────────────────
 export async function getEvidence(runId: string, refs?: string[]) {
   return mdb.macroEvidence.findMany({ where: { runId, ...(refs?.length ? { ref: { in: refs } } : {}) }, orderBy: { ref: 'asc' } })
+}
+
+// ─── reads for the /macro page ──────────────────────────────────────────
+/** Run list (newest first) + one run in full (default: latest done live run) + all positions. */
+export async function getRunView(runId?: string) {
+  const runs = await mdb.macroRun.findMany({
+    orderBy: { createdAt: 'desc' }, take: 52,
+    select: { id: true, week: true, kind: true, status: true, createdAt: true },
+  })
+  const id = runId ?? runs.find((r: any) => r.status === 'done' && r.kind === 'live')?.id ?? runs[0]?.id
+  const run = id
+    ? await mdb.macroRun.findUnique({
+        where: { id },
+        include: { evidence: { orderBy: { createdAt: 'asc' } }, cards: true, calls: true, scores: true },
+      })
+    : null
+  const positions = await mdb.macroPosition.findMany({ orderBy: [{ status: 'asc' }, { pair: 'asc' }] })
+  // running record: every scored call (outcome filled 4 weeks later)
+  const record = await mdb.macroCall.findMany({
+    where: { version: 'A', NOT: { outcome: null } },
+    include: { run: { select: { week: true } } }, orderBy: { createdAt: 'desc' }, take: 200,
+  })
+  return { runs, run, positions, record }
 }
