@@ -795,3 +795,145 @@ model EpsQuarter {
   @@id([symbol, asOf])
   @@map("eps_quarters")
 }
+
+// ─── Macro story framework (Nov 2026) ─────────────────────────────────────
+// Append to prisma/schema.prisma. Lineage: Evidence -> BankCard / Call (cite evidence refs) -> Score -> Position.
+// Calls, cards and evidence are a permanent record; Taiwo's changes go in MacroEdit (+ user fields), never overwrite.
+
+model MacroRun {
+  id           String   @id @default(cuid())
+  week         String                         // Friday the run is for, "2026-11-20"
+  kind         String   @default("live")      // "live" | "replay"
+  promptA      String                         // version label of the tested briefing prompt
+  promptB      String?                        // version label of the bank-card prompt
+  dataSnapshot Json?                          // what the run read (calendar range, yields as of, etc.) so it can be replayed
+  status       String   @default("running")   // "running" | "done" | "failed"
+  notes        String?
+  createdAt    DateTime @default(now())
+  evidence     MacroEvidence[]
+  cards        MacroBankCard[]
+  calls        MacroCall[]
+  scores       MacroScore[]
+  @@index([week])
+}
+
+model MacroEvidence {
+  id           String   @id @default(cuid())
+  runId        String
+  run          MacroRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ref          String                         // "E12" — what reasons cite
+  currency     String                         // "AUD"
+  kind         String                         // inflation | jobs | growth | decision | forecast | yield | pricing | other
+  name         String                         // "Unemployment Rate (Oct)"
+  value        String                         // as released, "4.9%"
+  expected     String?                        // consensus
+  bankForecast String?                        // the bank's own projection for this measure, "4.7% (Dec 2026, Nov SMP)"
+  target       String?                        // e.g. "2-3%"
+  releaseDate  String                         // "2026-11-19"
+  source       String                         // "ABS" | "Forex Factory" | "RBA SMP Nov 2026" ...
+  sourceUrl    String?
+  flagged      Boolean  @default(false)       // Taiwo: "this number is wrong"
+  flagNote     String?
+  createdAt    DateTime @default(now())
+  @@unique([runId, ref])
+  @@index([currency])
+}
+
+model MacroBankCard {
+  id           String   @id @default(cuid())
+  runId        String
+  run          MacroRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  currency     String                         // "AUD"
+  bank         String                         // "RBA"
+  inflation    Json                           // { measure, readings:[{value,ref}], vsTarget, vsOwnForecast }
+  labour       Json                           // { unemployment:[...], wages:[...] }
+  decision     Json                           // { rate, change, vote, guidance, ref }
+  pricing      Json                           // { nextMeeting, twoYear4wChange, refs }
+  verdict      String                         // "strengthening" | "weakening" | "dilemma"
+  stance       String                         // "more hawkish" | "more dovish" | "neutral"
+  changeView   String                         // one line: what would change the view
+  evidenceRefs String[]
+  valid        Boolean  @default(true)        // false = cited a ref that doesn't exist
+  userNote     String?
+  createdAt    DateTime @default(now())
+  @@unique([runId, currency])
+}
+
+model MacroCall {
+  id           String   @id @default(cuid())
+  runId        String
+  run          MacroRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  pair         String                         // "AUDUSD"
+  version      String                         // "A" (tested briefing, trades) | "B" (bank cards, logged only)
+  direction    String                         // "UP" | "DOWN" | "NONE"
+  confidence   Int                            // 1-3
+  reason       String                         // cites [E12] style refs
+  evidenceRefs String[]
+  valid        Boolean  @default(true)
+  outcome      Json?                          // filled later: { fwd1, fwd4, R4, win }
+  userNote     String?
+  createdAt    DateTime @default(now())
+  @@unique([runId, pair, version])
+}
+
+model MacroScore {
+  id           String   @id @default(cuid())
+  runId        String
+  run          MacroRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  pair         String
+  regime       String                         // "rising_slow" ...
+  role         String                         // "long growth" | "long haven" | "neutral"
+  divergence   Float?                         // 6-month policy-rate change gap
+  alignment    Int                            // confidence + regime adj
+  riskPct      Float                          // 0 / 0.5 / 1.0
+  components   Json                           // every input to the score, for the pair page
+  createdAt    DateTime @default(now())
+  @@unique([runId, pair])
+}
+
+model MacroPosition {
+  id           String    @id @default(cuid())
+  pair         String
+  side         String                         // "long" | "short"
+  unit         Int       @default(1)          // 1 = first unit, 2-3 = adds
+  openedWeek   String
+  openedRunId  String?
+  entry        Float
+  stop         Float
+  stopMode     String                         // "1R" | "2R_close" | "swing"
+  riskPct      Float
+  status       String    @default("open")     // "open" | "closed" | "skipped"
+  closedWeek   String?
+  exitPrice    Float?
+  exitReason   String?                        // "story flip" | "stop" | "26 weeks" | "user"
+  userFill     Float?                         // Taiwo's real fill
+  userStop     Float?                         // Taiwo's real stop
+  userNote     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  @@index([status])
+}
+
+model MacroEdit {
+  id           String   @id @default(cuid())
+  entity       String                         // "position" | "evidence" | "call" | "card"
+  entityId     String
+  field        String
+  oldValue     Json?
+  newValue     Json?
+  reason       String
+  by           String                         // "taiwo" | "claude"
+  createdAt    DateTime @default(now())
+  @@index([createdAt])
+}
+
+model MacroRequest {
+  id           String    @id @default(cuid())
+  type         String                         // "rerun" | "rerun_pair" | "refetch_evidence" | "question"
+  payload      Json
+  status       String    @default("pending")  // "pending" | "done"
+  result       String?
+  createdAt    DateTime  @default(now())
+  doneAt       DateTime?
+  @@index([status])
+}

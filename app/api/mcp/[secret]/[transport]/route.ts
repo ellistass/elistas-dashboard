@@ -14,6 +14,7 @@
 // scoring routes) so we don't introduce a third secret to manage.
 import { createMcpHandler } from '@vercel/mcp-adapter'
 import { z } from 'zod'
+import * as macro from '@/lib/macro/store'
 import type { NextRequest } from 'next/server'
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://elistas-dashboard.vercel.app'
@@ -204,6 +205,133 @@ const mcpHandler = createMcpHandler(
         }
         return { content: [{ type: 'text', text }] }
       },
+    )
+
+    /* ─── Macro story framework ──────────────────────────────────────────────
+       Direct Prisma via lib/macro/store (no internal HTTP hop needed — same app).
+       Every tool returns JSON text; validation problems come back in the result
+       (invalid: [...]) rather than as errors, so a run can fix and re-save. */
+    const asJson = (v: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(v, null, 1) }] })
+    const fail = (e: unknown) => ({ content: [{ type: 'text' as const, text: String((e as Error)?.message ?? e) }], isError: true })
+    const loose = <T extends z.ZodTypeAny>(s: T) =>
+      z.preprocess((v) => { if (typeof v === 'string') { try { return JSON.parse(v) } catch { return v } } return v }, s)
+
+    server.tool(
+      'get_macro_state',
+      'Start of a macro run: open positions + open risk %, the last live run (calls, scores, bank cards), Taiwo\'s edits since that run, pending dashboard requests, and evidence he flagged as wrong.',
+      {},
+      async () => { try { return asJson(await macro.getState()) } catch (e) { return fail(e) } },
+    )
+
+    server.tool(
+      'save_macro_run',
+      'Create a run for a week (Friday date). Returns runId. Then save evidence, bank cards, calls, scores, positions, and finally finish_macro_run.',
+      {
+        week: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        kind: z.enum(['live', 'replay']).default('live'),
+        promptA: z.string(),
+        promptB: z.string().optional(),
+        dataSnapshot: loose(z.record(z.unknown())).optional(),
+        notes: z.string().optional(),
+      },
+      async (a) => { try { const r = await macro.createRun(a); return asJson({ runId: r.id }) } catch (e) { return fail(e) } },
+    )
+
+    server.tool(
+      'finish_macro_run',
+      'Mark a run done or failed.',
+      { runId: z.string(), status: z.enum(['done', 'failed']), notes: z.string().optional() },
+      async ({ runId, status, notes }) => { try { return asJson(await macro.finishRun(runId, status, notes)) } catch (e) { return fail(e) } },
+    )
+
+    const Evidence = z.object({
+      ref: z.string().regex(/^E\d+$/), currency: z.string().length(3), kind: z.string(), name: z.string(), value: z.string(),
+      expected: z.string().optional(), bankForecast: z.string().optional(), target: z.string().optional(),
+      releaseDate: z.string(), source: z.string(), sourceUrl: z.string().optional(),
+    })
+    server.tool(
+      'save_macro_evidence',
+      'Save evidence items for a run. Every number a call or bank card uses must be an evidence item with a source and release date. Refs are E1, E2, ... unique within the run.',
+      { runId: z.string(), items: loose(z.array(Evidence).min(1)) },
+      async ({ runId, items }) => { try { return asJson(await macro.saveEvidence(runId, items)) } catch (e) { return fail(e) } },
+    )
+
+    const Card = z.object({
+      currency: z.string().length(3), bank: z.string(),
+      inflation: z.record(z.unknown()), labour: z.record(z.unknown()), decision: z.record(z.unknown()), pricing: z.record(z.unknown()),
+      verdict: z.enum(['strengthening', 'weakening', 'dilemma']),
+      stance: z.enum(['more hawkish', 'more dovish', 'neutral']),
+      changeView: z.string(), evidenceRefs: z.array(z.string()).default([]),
+    }).passthrough()
+    server.tool(
+      'save_macro_bank_cards',
+      'Save the bank cards (one per currency) for a run. Cites evidence refs; cards citing refs not saved in this run come back under invalid.',
+      { runId: z.string(), cards: loose(z.array(Card).min(1)) },
+      async ({ runId, cards }) => { try { return asJson(await macro.saveBankCards(runId, cards)) } catch (e) { return fail(e) } },
+    )
+
+    const Call = z.object({
+      pair: z.string().regex(/^[A-Z]{6}$/), version: z.enum(['A', 'B']),
+      direction: z.enum(['UP', 'DOWN', 'NONE']), confidence: z.number().int().min(1).max(3), reason: z.string().min(10),
+    })
+    server.tool(
+      'save_macro_calls',
+      'Save pair calls. A = tested briefing prompt (drives trades), B = bank-card prompt (logged only). The reason must cite evidence like [E12]; UP/DOWN calls with no citation, or citing missing refs, come back under invalid and are stored valid=false.',
+      { runId: z.string(), calls: loose(z.array(Call).min(1)) },
+      async ({ runId, calls }) => { try { return asJson(await macro.saveCalls(runId, calls)) } catch (e) { return fail(e) } },
+    )
+
+    const Score = z.object({
+      pair: z.string().regex(/^[A-Z]{6}$/), regime: z.string(), role: z.string(), divergence: z.number().nullable().optional(),
+      alignment: z.number().int(), riskPct: z.number().min(0).max(2), components: z.record(z.unknown()),
+    })
+    server.tool(
+      'save_macro_scores',
+      'Save regime / divergence / alignment score and risk % per pair for a run (from the version A calls).',
+      { runId: z.string(), scores: loose(z.array(Score).min(1)) },
+      async ({ runId, scores }) => { try { return asJson(await macro.saveScores(runId, scores)) } catch (e) { return fail(e) } },
+    )
+
+    const PosOp = z.discriminatedUnion('action', [
+      z.object({
+        action: z.literal('open'),
+        position: z.object({
+          pair: z.string(), side: z.enum(['long', 'short']), unit: z.number().int().min(1).max(3).default(1),
+          openedWeek: z.string(), openedRunId: z.string().optional(), entry: z.number(), stop: z.number(),
+          stopMode: z.enum(['1R', '2R_close', 'swing']), riskPct: z.number(),
+        }),
+      }),
+      z.object({ action: z.enum(['update', 'close']), id: z.string(), changes: z.record(z.unknown()), reason: z.string() }),
+    ])
+    server.tool(
+      'update_macro_positions',
+      'Open, update or close positions. Updates/closes are logged in the edit history (by claude). Respect Taiwo\'s skips, fills and stops from get_macro_state.',
+      { ops: loose(z.array(PosOp).min(1)) },
+      async ({ ops }) => { try { return asJson(await macro.updatePositions(ops)) } catch (e) { return fail(e) } },
+    )
+
+    server.tool(
+      'apply_macro_edit',
+      'Edit one whitelisted field (position status/stop/risk/exit/user fields, evidence flag, call/card notes, call outcome). Logged with old and new value. Use by="claude".',
+      {
+        entity: z.enum(['position', 'evidence', 'call', 'card']), id: z.string(), field: z.string(),
+        value: loose(z.unknown()), reason: z.string(),
+      },
+      async (a) => { try { return asJson(await macro.applyEdit({ ...a, by: 'claude' })) } catch (e) { return fail(e) } },
+    )
+
+    server.tool(
+      'complete_macro_request',
+      'Mark a pending dashboard request done, with a short result.',
+      { id: z.string(), result: z.string() },
+      async ({ id, result }) => { try { return asJson(await macro.completeRequest(id, result)) } catch (e) { return fail(e) } },
+    )
+
+    server.tool(
+      'get_macro_evidence',
+      'Read the evidence for a run (all, or only some refs).',
+      { runId: z.string(), refs: z.array(z.string()).optional() },
+      async ({ runId, refs }) => { try { return asJson(await macro.getEvidence(runId, refs)) } catch (e) { return fail(e) } },
     )
   },
   {},
