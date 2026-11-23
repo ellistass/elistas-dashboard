@@ -4,6 +4,7 @@
 // and later by the dashboard API routes (Taiwo, by = "taiwo"). One rule everywhere:
 // calls, cards and evidence are a permanent record — changes go through applyEdit,
 // which only touches whitelisted fields and logs old -> new in MacroEdit.
+import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 
 // Macro* models are new: until `npm run db:push` regenerates the Prisma client the generated types
@@ -173,7 +174,7 @@ export async function getRunView(runId?: string) {
   const positions = await mdb.macroPosition.findMany({ orderBy: [{ status: 'asc' }, { pair: 'asc' }] })
   // running record: every scored call (outcome filled 4 weeks later)
   const record = await mdb.macroCall.findMany({
-    where: { version: 'A', NOT: { outcome: null } },
+    where: { version: 'A', outcome: { not: Prisma.AnyNull } },   // JSON column: Prisma needs AnyNull, not null
     include: { run: { select: { week: true } } }, orderBy: { createdAt: 'desc' }, take: 200,
   })
   return { runs, run, positions, record }
