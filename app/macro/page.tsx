@@ -158,7 +158,7 @@ export default function MacroPage() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
                 <tr style={{ color: "var(--text-label)", textAlign: "left", fontSize: 11 }}>
-                  {["", "Pair", "Tested call (A)", "Deeper story (B)", "Divergence · moves first", "Score", "Risk", "Position", "A and B agree"].map((h) => (
+                  {["", "Pair", "Tested call (A)", "Deeper story (B)", "Divergence · moves first", "2-year check", "Score", "Risk", "Position", "A and B agree"].map((h) => (
                     <th key={h} style={{ padding: "9px 10px", borderBottom: "1px solid var(--border)", fontWeight: 500 }}>{h}</th>))}
                 </tr>
               </thead>
@@ -176,6 +176,7 @@ export default function MacroPage() {
                       <td style={{ padding: "9px 10px" }}>{a ? <><b style={{ color: a.direction === "NONE" ? "var(--text-3)" : "var(--text-1)" }}>{side(p, a.direction)}</b> <span style={{ color: "var(--text-3)" }}>· conf {a.confidence}</span></> : "—"}</td>
                       <td style={{ padding: "9px 10px" }}>{b ? <><span style={{ color: "var(--text-body)" }}>{side(p, b.direction)}</span> <span style={{ color: "var(--text-3)" }}>· conf {b.confidence}</span></> : <span style={{ color: "var(--text-3)" }}>not run</span>}</td>
                       <td style={{ padding: "9px 10px", color: "var(--text-body)" }}>{story ? `${story.divergence} · ${story.firstMover}` : "—"}</td>
+                      <td style={{ padding: "9px 10px", whiteSpace: "nowrap", color: /^agree/i.test(s?.components?.twoYearCheck ?? "") ? "var(--green)" : /^against/i.test(s?.components?.twoYearCheck ?? "") ? "var(--red)" : "var(--text-2)" }}>{s?.components?.twoYearCheck ?? "—"}</td>
                       <td style={{ ...mono, padding: "9px 10px", color: (s?.alignment ?? 0) >= 2 ? "var(--green)" : "var(--text-3)" }}>{s?.alignment ?? "—"}</td>
                       <td style={{ ...mono, padding: "9px 10px" }}>{s ? `${s.riskPct}%` : "—"}</td>
                       <td style={{ ...mono, padding: "9px 10px", fontSize: 11.5 }}>{pos ? <>{pos.side} {fmt(pos.userFill ?? pos.entry)} <span style={{ color: "var(--text-3)" }}>stop {fmt(pos.userStop ?? pos.stop)}</span></> : <span style={{ color: "var(--text-3)" }}>—</span>}</td>
@@ -184,9 +185,11 @@ export default function MacroPage() {
                         : <AlertTriangle size={14} style={{ color: "var(--amber)" }} />}</td>
                     </tr>,
                     isOpen && (
-                      <tr key={p + "-x"}><td colSpan={9} style={{ padding: "4px 16px 14px 38px", background: "var(--bg-card-raised)", fontSize: 12.5, color: "var(--text-body)" }}>
+                      <tr key={p + "-x"}><td colSpan={10} style={{ padding: "4px 16px 14px 38px", background: "var(--bg-card-raised)", fontSize: 12.5, color: "var(--text-body)" }}>
                         {a && <p style={{ margin: "8px 0" }}><b style={{ color: "var(--text-label)" }}>Tested call (A):</b> <Cited text={a.reason} ev={ev} open={openRef} setOpen={setOpenRef} /></p>}
                         {b && <p style={{ margin: "8px 0" }}><b style={{ color: "var(--text-label)" }}>Deeper story (B):</b> <Cited text={b.reason} ev={ev} open={openRef} setOpen={setOpenRef} /></p>}
+                        {s?.components?.hiddenStory && <p style={{ margin: "8px 0" }}><b style={{ color: "var(--text-label)" }}>Hidden story:</b> <Cited text={s.components.hiddenStory} ev={ev} open={openRef} setOpen={setOpenRef} /></p>}
+                        {s?.components?.priced && <p style={{ margin: "8px 0" }}><b style={{ color: "var(--text-label)" }}>Priced:</b> <Cited text={s.components.priced} ev={ev} open={openRef} setOpen={setOpenRef} /></p>}
                         {s && <p style={{ margin: "8px 0", color: "var(--text-2)", fontSize: 11.5 }}>Score {s.alignment} = confidence {s.components?.confidence} + regime {s.components?.regime} · 2-year: {s.components?.twoYear ?? "—"} · role: {s.role}</p>}
                         {openRef && ev.get(openRef) && <EvidencePanel e={ev.get(openRef)!} onFlag={flagEvidence} />}
                       </td></tr>
@@ -199,38 +202,62 @@ export default function MacroPage() {
         </section>
 
         {/* ── central banks ─────────────────────────────────────── */}
+        {/* One row per economy, read left to right: what the bank did → what the data is doing (trend,
+            in the bank's own measure) → what the bank itself projects → what the market already prices →
+            what the bank does next → the signal and why. Every number is an evidence chip. */}
         <section>
-          <SectionHeader icon={<Landmark size={14} />} title="Central banks" count={run.cards.length} note="each bank's story this week: what it's worried about, its likely next move, and whether it's forced or can wait" />
+          <SectionHeader icon={<Landmark size={14} />} title="Central banks" count={run.cards.length}
+            note="▲ hawkish / strengthening · ▼ dovish / weakening · ↔ dilemma — the edge is data running past what's priced" />
           {run.cards.length === 0 ? <EmptyState small text="No bank cards in this run." /> : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-              {[...run.cards].sort((x, y) => CCY_ORDER.indexOf(x.currency) - CCY_ORDER.indexOf(y.currency)).map((c) => {
-                const d = c.decision ?? {};
-                return (
-                  <div key={c.id} style={{ padding: 14, borderRadius: 10, background: "var(--bg-card)", border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <b style={{ color: "var(--text-1)", fontSize: 13.5 }}>{c.bank} <span style={{ color: "var(--text-3)", fontWeight: 400 }}>· {c.currency}</span></b>
-                      <Pill text={c.stance} color={tone(c.stance)} />
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 10px" }}>
-                      <span style={{ color: "var(--text-3)" }}>Next move</span><b style={{ color: tone(d.nextMove ?? "") }}>{d.nextMove ?? "—"} <span style={{ color: "var(--text-2)", fontWeight: 400 }}>· {d.when ?? "—"}</span></b>
-                      <span style={{ color: "var(--text-3)" }}>Forced?</span><span style={{ color: "var(--text-body)" }}>{d.forced ?? "—"} · pressure {d.pressure ?? "—"}</span>
-                      <span style={{ color: "var(--text-3)" }}>Rate</span><span style={{ color: "var(--text-body)" }}><Cited text={d.rate ?? "—"} ev={ev} open={openRef} setOpen={setOpenRef} /></span>
-                      <span style={{ color: "var(--text-3)" }}>Verdict</span><span style={{ color: tone(c.verdict) }}>{c.verdict}</span>
-                    </div>
-                    {[["Inflation", c.inflation], ["Labour", c.labour], ["Priced", c.pricing]].map(([label, obj]: any) => (
-                      <div key={label} style={{ color: "var(--text-body)" }}>
-                        <span style={{ color: "var(--text-label)" }}>{label}: </span>
-                        {Object.entries(obj ?? {}).map(([k, v], i) => (
-                          <span key={k}>{i ? " · " : ""}<span style={{ color: "var(--text-3)" }}>{k.replace(/_/g, " ")}</span> <Cited text={String(v)} ev={ev} open={openRef} setOpen={setOpenRef} /></span>
-                        ))}
-                      </div>
-                    ))}
-                    <div style={{ color: "var(--text-2)", borderTop: "1px solid var(--border-subtle)", paddingTop: 6 }}>
-                      <span style={{ color: "var(--text-label)" }}>What changes the view: </span><Cited text={c.changeView} ev={ev} open={openRef} setOpen={setOpenRef} />
-                    </div>
-                  </div>
-                );
-              })}
+            <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "auto", background: "var(--bg-card)" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, lineHeight: 1.55 }}>
+                <thead>
+                  <tr style={{ color: "var(--text-label)", textAlign: "left", fontSize: 11 }}>
+                    {["Economy", "Rate & last move", "Inflation trend", "Labour trend", "Bank's own projection", "Priced (2-year)", "Next move", "Signal"].map((h) => (
+                      <th key={h} style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...run.cards].sort((x, y) => CCY_ORDER.indexOf(x.currency) - CCY_ORDER.indexOf(y.currency)).map((c) => {
+                    const d = c.decision ?? {}, inf = c.inflation ?? {}, lab = c.labour ?? {}, pr = c.pricing ?? {};
+                    const arrow = c.verdict === "strengthening" ? "▲" : c.verdict === "weakening" ? "▼" : "↔";
+                    const cell = { padding: "11px 12px", verticalAlign: "top", borderBottom: "1px solid var(--border-subtle)" } as const;
+                    const cite = (t: unknown) => (t == null || t === "" ? <span style={{ color: "var(--text-3)" }}>—</span>
+                      : <Cited text={String(t)} ev={ev} open={openRef} setOpen={setOpenRef} />);
+                    const sub = (t: unknown) => (t ? <div style={{ color: "var(--text-2)", fontSize: 11.5, marginTop: 2 }}>{cite(t)}</div> : null);
+                    return (
+                      <tr key={c.id}>
+                        <td style={{ ...cell, whiteSpace: "nowrap" }}>
+                          <b style={{ color: "var(--text-1)" }}>{c.currency}</b> <span style={{ color: "var(--text-3)" }}>/ {c.bank}</span>
+                          {d.target && <div style={{ color: "var(--text-3)", fontSize: 11 }}>target {d.target}</div>}
+                        </td>
+                        <td style={{ ...cell, minWidth: 150 }}>{cite(d.rate)}{sub(d.lastMove)}</td>
+                        <td style={{ ...cell, minWidth: 180 }}>
+                          {inf.measure && <div style={{ color: "var(--text-3)", fontSize: 11 }}>{inf.measure}</div>}
+                          {cite(inf.trend)}{sub(inf.other)}
+                        </td>
+                        <td style={{ ...cell, minWidth: 170 }}>{cite(lab.trend)}{sub(lab.other)}</td>
+                        <td style={{ ...cell, minWidth: 220 }}>{cite(d.ownProjection)}{sub(d.guidance)}
+                          {d.vsOwn && <div style={{ marginTop: 4, fontSize: 11.5, color: tone(d.vsOwn) }}>{d.vsOwn}</div>}
+                        </td>
+                        <td style={{ ...cell, minWidth: 160 }}>{cite(pr.twoYear)}{sub(pr.priced)}</td>
+                        <td style={{ ...cell, whiteSpace: "nowrap" }}>
+                          <b style={{ color: tone(d.nextMove ?? "") }}>{d.nextMove ?? "—"}</b> <span style={{ color: "var(--text-2)" }}>· {d.when ?? "—"}</span>
+                          <div style={{ color: /^forced/i.test(d.forced ?? "") ? "var(--amber)" : "var(--text-2)" }}>{d.forced ?? "—"}</div>
+                          <div style={{ color: "var(--text-3)" }}>pressure {d.pressure ?? "—"}</div>
+                        </td>
+                        <td style={{ ...cell, minWidth: 300 }}>
+                          <b style={{ color: tone(c.verdict) }}>{arrow} {c.stance[0].toUpperCase() + c.stance.slice(1)}</b>{" "}
+                          {d.why && <span style={{ color: "var(--text-body)" }}>{cite(d.why)}</span>}
+                          <div style={{ marginTop: 4, color: "var(--text-2)", fontSize: 12 }}>
+                            <span style={{ color: "var(--text-label)" }}>Changes the view: </span>{cite(c.changeView)}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
           {openRef && ev.get(openRef) && !expanded && <EvidencePanel e={ev.get(openRef)!} onFlag={flagEvidence} />}
