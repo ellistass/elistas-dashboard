@@ -103,6 +103,13 @@ export async function saveScores(runId: string, scores: any[]) {
   return { saved: scores.length }
 }
 
+/** Story-divergence setups for a run (all 28 pairs). Replaces the run's previous set. */
+export async function saveStories(runId: string, stories: any[]) {
+  await mdb.macroStory.deleteMany({ where: { runId } })
+  for (const s of stories) await mdb.macroStory.create({ data: { runId, ...s } })
+  return { saved: stories.length }
+}
+
 /** Position changes from the run. Opens create rows; updates/closes are logged as edits by claude. */
 export async function updatePositions(ops: any[]) {
   const out: string[] = []
@@ -168,7 +175,7 @@ export async function getRunView(runId?: string) {
   const run = id
     ? await mdb.macroRun.findUnique({
         where: { id },
-        include: { evidence: { orderBy: { createdAt: 'asc' } }, cards: true, calls: true, scores: true },
+        include: { evidence: { orderBy: { createdAt: 'asc' } }, cards: true, calls: true, scores: true, stories: { orderBy: { gap: 'desc' } } },
       })
     : null
   const positions = await mdb.macroPosition.findMany({ orderBy: [{ status: 'asc' }, { pair: 'asc' }] })

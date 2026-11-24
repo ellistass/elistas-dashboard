@@ -292,6 +292,22 @@ const mcpHandler = createMcpHandler(
       async ({ runId, scores }) => { try { return asJson(await macro.saveScores(runId, scores)) } catch (e) { return fail(e) } },
     )
 
+    const StoryWeek = z.object({ w: z.string(), pLong: z.number(), pShort: z.number(), gap: z.number(),
+      policyGap: z.number().nullable().optional(), y2Gap: z.number().nullable().optional() })
+    const Story = z.object({
+      pair: z.string().length(6), side: z.string(), pLong: z.number().int(), pShort: z.number().int(), gap: z.number().int(),
+      since: z.string(), weeks: z.number().int(), startPrice: z.number(), now: z.number(), unitPct: z.number(), moveUnits: z.number(),
+      status: z.enum(['new', 'dip zone', 'running', 'back near start', 'stretched']),
+      plan: z.record(z.unknown()), priced: z.record(z.unknown()).optional(), orders: z.record(z.unknown()).optional(),
+      history: z.array(StoryWeek).optional(), slot: z.string(), note: z.string().optional(),
+    })
+    server.tool(
+      'save_macro_stories',
+      'Save the open story-divergence setups (all 28 pairs) for a run: scores, entry plan (half at start, half on a 1-unit dip), stops, 1:3 partial, priced-in read, orders, weekly story/rate history for the chart, and the one-story-per-currency slot. Replaces the run\'s previous set.',
+      { runId: z.string(), stories: loose(z.array(Story)) },
+      async ({ runId, stories }) => { try { return asJson(await macro.saveStories(runId, stories)) } catch (e) { return fail(e) } },
+    )
+
     const PosOp = z.discriminatedUnion('action', [
       z.object({
         action: z.literal('open'),

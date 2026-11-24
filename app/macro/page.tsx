@@ -10,7 +10,7 @@
 // Every number in a reason is an evidence chip [E12]: click it to see the release,
 // the forecast, the source, and flag it if it's wrong.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Landmark, RefreshCw, Flag, ExternalLink, ChevronDown, ChevronRight, Check, AlertTriangle } from "lucide-react";
 import { SectionHeader, EmptyState, LoadingCard, ErrorCard } from "../wyckoff/_components/ui";
 
@@ -25,7 +25,7 @@ type Pos = { id: string; pair: string; side: "long" | "short"; unit: number; ope
   stopMode: string; riskPct: number; status: string; closedWeek?: string | null; exitPrice?: number | null; exitReason?: string | null;
   userFill?: number | null; userStop?: number | null; userNote?: string | null };
 type Run = { id: string; week: string; kind: string; status: string; notes?: string | null; dataSnapshot?: any;
-  evidence: Ev[]; calls: Call[]; scores: Score[]; cards: Card[] };
+  evidence: Ev[]; calls: Call[]; scores: Score[]; cards: Card[]; stories?: Story[] };
 interface Payload { runs: { id: string; week: string; kind: string; status: string }[]; run: Run | null; positions: Pos[]; record: (Call & { run: { week: string } })[] }
 
 const PAIRS = ["EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDJPY", "USDCAD", "USDCHF"];
@@ -83,6 +83,132 @@ function EvidencePanel({ e, onFlag }: { e: Ev; onFlag: (e: Ev) => void }) {
       <div style={{ marginTop: 2, color: "var(--text-3)" }}>{e.kind} · released {e.releaseDate} · {e.source}</div>
       {e.flagged && <div style={{ marginTop: 4, color: "var(--red)" }}>Flagged: {e.flagNote || "marked wrong"}</div>}
     </div>
+  );
+}
+
+type Story = { pair: string; side: string; pLong: number; pShort: number; gap: number; since: string; weeks: number;
+  startPrice: number; now: number; unitPct: number; moveUnits: number; status: string; plan: any; priced?: any; orders?: any;
+  history?: StoryWeek[] | null; slot: string; note?: string | null };
+type StoryWeek = { w: string; pLong: number; pShort: number; gap: number; policyGap?: number | null; y2Gap?: number | null };
+
+const STATUS: Record<string, { label: string; color: string; hint: string }> = {
+  "new":             { label: "NEW — half now",       color: "var(--green)",  hint: "Story just opened: enter half at the close" },
+  "dip zone":        { label: "DIP — add half",       color: "var(--accent)", hint: "Closed 1 unit against the story inside 20 days: second half" },
+  "back near start": { label: "BACK AT START",        color: "var(--accent)", hint: "Open story, price back to/below the start: late entry (+0.55R tested)" },
+  "running":         { label: "RUNNING",              color: "var(--text-3)",  hint: "In profit and inside the plan: hold, no new entry" },
+  "stretched":       { label: "STRETCHED — wait",     color: "var(--amber)",  hint: "Far from start: don't chase, wait for a dip" },
+};
+const PRICED: Record<string, string> = { room: "var(--green)", "partly priced": "var(--amber)", priced: "var(--red)" };
+
+function StoriesSection({ stories }: { stories: Story[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  if (!stories.length) return null;
+  const th = { textAlign: "left" as const, fontSize: 11, color: "var(--text-label)", fontWeight: 500, padding: "6px 8px", whiteSpace: "nowrap" as const };
+  const td = { fontSize: 12, padding: "7px 8px", borderTop: "1px solid var(--border)", whiteSpace: "nowrap" as const };
+  return (
+    <section>
+      <SectionHeader icon={<Landmark size={14} />} title="Story divergence setups" count={stories.length}
+        note="hawkish vs dovish, all 28 pairs · half at start, half on a 1-unit dip · stop 2 units (Friday close) · half off at 1:3 · one story per currency · click a row for the chart" />
+      <div style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-card)" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr>
+            {["Pair", "Trade", "Story", "Since", "Now vs start", "Status", "Entry plan", "Priced in", "Orders", "Slot"].map(h => <th key={h} style={th}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {stories.map(s => {
+              const st = STATUS[s.status] ?? { label: s.status, color: "var(--text-3)", hint: "" };
+              const taken = s.slot !== "free";
+              return (
+                <Fragment key={s.pair}>
+                  <tr onClick={() => setOpen(open === s.pair ? null : s.pair)} style={{ cursor: "pointer", opacity: taken ? 0.55 : 1 }}>
+                    <td style={{ ...td, fontWeight: 600, color: "var(--text-1)" }}>{pairLabel(s.pair)}</td>
+                    <td style={td}>{s.side}</td>
+                    <td style={{ ...td, ...mono }}>
+                      <span style={{ color: "var(--green)" }}>{s.pLong > 0 ? "+" : ""}{s.pLong}</span> vs <span style={{ color: "var(--red)" }}>{s.pShort > 0 ? "+" : ""}{s.pShort}</span>
+                      <span style={{ color: "var(--text-3)" }}> (gap {s.gap})</span>
+                    </td>
+                    <td style={td}>{s.since} <span style={{ color: "var(--text-3)" }}>· {s.weeks}w</span></td>
+                    <td style={{ ...td, ...mono, color: s.moveUnits >= 0 ? "var(--green)" : "var(--red)" }}>{s.moveUnits >= 0 ? "+" : ""}{s.moveUnits.toFixed(2)}u</td>
+                    <td style={td} title={st.hint}><Pill text={st.label} color={st.color} /></td>
+                    <td style={{ ...td, ...mono, fontSize: 11 }}>
+                      {s.plan?.dipHalf?.level ? <>dip {fmt(s.plan.dipHalf.level)}</> : "—"}<span style={{ color: "var(--text-3)" }}> · stop {fmt(s.plan?.startHalf?.stop)} · 1:3 {fmt(s.plan?.partial13)}</span>
+                    </td>
+                    <td style={td}>{s.priced?.read ? <Pill text={s.priced.read} color={PRICED[s.priced.read] ?? "var(--text-3)"} /> : <span style={{ color: "var(--text-3)" }}>—</span>}</td>
+                    <td style={td}>{s.orders ? <Pill text={`${s.orders.leg} ${s.orders.roll5}`} color={s.orders.roll5 === "with" ? "var(--green)" : "var(--red)"} /> : <span style={{ color: "var(--text-3)" }}>—</span>}</td>
+                    <td style={{ ...td, fontSize: 11, color: taken ? "var(--amber)" : "var(--text-3)" }}>{s.slot}</td>
+                  </tr>
+                  {open === s.pair && (
+                    <tr><td colSpan={10} style={{ ...td, whiteSpace: "normal", background: "var(--bg-card-2)", fontSize: 12, lineHeight: 1.6 }}>
+                      <StoryChart s={s} />
+                      <div><b>Start price</b> {fmt(s.startPrice)} · <b>now</b> {fmt(s.now)} · <b>1 unit</b> {s.unitPct.toFixed(2)}%</div>
+                      <div><b>Half 1</b> entry {fmt(s.plan?.startHalf?.entry)}, stop {fmt(s.plan?.startHalf?.stop)} · <b>Half 2</b> at {fmt(s.plan?.dipHalf?.level)} (until {s.plan?.window ?? "—"}), stop {fmt(s.plan?.dipHalf?.stop)} · <b>half off</b> at {fmt(s.plan?.partial13)}</div>
+                      {s.priced && <div><b>Priced</b> long side: 2y {s.priced.long?.twoYear ?? "—"} vs policy {s.priced.long?.policy ?? "—"} ({s.priced.long?.spreadBp ?? "—"}bp, 4w {s.priced.long?.chg4wBp ?? "—"}bp) · short side: 2y {s.priced.short?.twoYear ?? "—"} vs policy {s.priced.short?.policy ?? "—"} ({s.priced.short?.spreadBp ?? "—"}bp, 4w {s.priced.short?.chg4wBp ?? "—"}bp)</div>}
+                      {s.note && <div style={{ color: "var(--text-3)" }}>{s.note}</div>}
+                    </td></tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function StoryChart({ s }: { s: Story }) {
+  const [bars, setBars] = useState<{ date: string; o: number; h: number; l: number; c: number }[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    fetch(`/api/macro/chart?pair=${s.pair}`).then(r => r.json()).then(d => d.error ? setErr(d.error) : setBars(d.bars)).catch(e => setErr(String(e)));
+  }, [s.pair]);
+  if (err) return <div style={{ color: "var(--red)", fontSize: 12 }}>Chart: {err}</div>;
+  if (!bars) return <div style={{ color: "var(--text-3)", fontSize: 12 }}>Loading chart…</div>;
+
+  const W = 900, TOP = 300, BOT = 110, PAD = 46, n = bars.length, bw = (W - PAD - 8) / n;
+  const x = (i: number) => PAD + i * bw + bw / 2;
+  const levels = [
+    { v: s.startPrice, c: "var(--text-3)", t: "start" },
+    { v: s.plan?.dipHalf?.level, c: "var(--accent)", t: "dip (half 2)" },
+    { v: s.plan?.startHalf?.stop, c: "var(--red)", t: "stop half 1" },
+    { v: s.plan?.dipHalf?.stop, c: "var(--red)", t: "stop half 2" },
+    { v: s.plan?.partial13, c: "var(--green)", t: "half off 1:3" },
+  ].filter(l => typeof l.v === "number");
+  const hi = Math.max(...bars.map(b => b.h), ...levels.map(l => l.v)), lo = Math.min(...bars.map(b => b.l), ...levels.map(l => l.v));
+  const y = (p: number) => 8 + (hi - p) / (hi - lo || 1) * (TOP - 16);
+  const idx = (d: string) => { const k = bars.findIndex(b => b.date >= d); return k < 0 ? n - 1 : k; };
+  const hist = (s.history ?? []).filter(h => h.w >= bars[0].date);
+  const gaps = hist.map(h => h.gap), rates = hist.map(h => (h.y2Gap ?? h.policyGap) as number | null).filter((v): v is number => v != null);
+  const gy = (g: number) => TOP + 15 + (4 - Math.max(-4, Math.min(4, g))) / 8 * (BOT - 25);   // story gap on a fixed -4..+4 scale
+  const rMin = Math.min(...rates, 0), rMax = Math.max(...rates, 0);
+  const ry = (v: number) => TOP + 15 + (rMax - v) / (rMax - rMin || 1) * (BOT - 25);
+  const step = (pts: [number, number][]) => pts.map(([px, py], k) => k === 0 ? `M${px},${py}` : `H${px} V${py}`).join(" ") + (pts.length ? ` H${W - 8}` : "");
+  const si = idx(s.since);
+  return (
+    <svg viewBox={`0 0 ${W} ${TOP + BOT}`} style={{ width: "100%", height: "auto", background: "var(--bg-card)", borderRadius: 8 }}>
+      {/* candles */}
+      {bars.map((b, i) => {
+        const up = b.c >= b.o, col = up ? "var(--green)" : "var(--red)";
+        return <g key={b.date}><line x1={x(i)} x2={x(i)} y1={y(b.h)} y2={y(b.l)} stroke={col} strokeWidth={1} />
+          <rect x={x(i) - bw * 0.35} width={Math.max(1, bw * 0.7)} y={y(Math.max(b.o, b.c))} height={Math.max(1, Math.abs(y(b.o) - y(b.c)))} fill={col} /></g>;
+      })}
+      {/* plan levels */}
+      {levels.map(l => <g key={l.t}><line x1={PAD} x2={W - 8} y1={y(l.v)} y2={y(l.v)} stroke={l.c} strokeDasharray="4 3" strokeWidth={1} />
+        <text x={W - 10} y={y(l.v) - 3} fontSize={9.5} textAnchor="end" fill={l.c}>{l.t} {fmt(l.v)}</text></g>)}
+      {/* story start */}
+      <line x1={x(si)} x2={x(si)} y1={0} y2={TOP + BOT} stroke="var(--accent)" strokeWidth={1} opacity={0.6} />
+      <text x={x(si) + 4} y={12} fontSize={10} fill="var(--accent)">story since {s.since}</text>
+      {/* price axis */}
+      {[hi, (hi + lo) / 2, lo].map(p => <text key={p} x={4} y={y(p) + 3} fontSize={9.5} fill="var(--text-3)" style={mono}>{fmt(p)}</text>)}
+      {/* lower panel */}
+      <line x1={PAD} x2={W - 8} y1={TOP} y2={TOP} stroke="var(--border)" />
+      <line x1={PAD} x2={W - 8} y1={gy(0)} y2={gy(0)} stroke="var(--border)" strokeDasharray="2 3" />
+      <path d={step(hist.map(h => [x(idx(h.w)), gy(h.gap)]))} fill="none" stroke="var(--accent)" strokeWidth={1.8} />
+      {rates.length > 1 && <path d={hist.filter(h => (h.y2Gap ?? h.policyGap) != null).map((h, k) => `${k ? "L" : "M"}${x(idx(h.w))},${ry((h.y2Gap ?? h.policyGap) as number)}`).join(" ")}
+        fill="none" stroke="var(--amber)" strokeWidth={1.5} />}
+      <text x={PAD} y={TOP + 12} fontSize={10} fill="var(--accent)">story gap ({s.side.split(" ")[1]} − other){gaps.length ? ` · now ${s.gap}` : " · no history yet"}</text>
+      <text x={PAD + 230} y={TOP + 12} fontSize={10} fill="var(--amber)">{hist.some(h => h.y2Gap != null) ? "2-year yield gap" : "policy-rate gap"} (pp)</text>
+    </svg>
   );
 }
 
@@ -150,6 +276,7 @@ export default function MacroPage() {
       {!run && <EmptyState text="No macro run yet. Claude writes one each Friday after the close." />}
 
       {run && (<>
+        <StoriesSection stories={run.stories ?? []} />
         {/* ── calls & trades ────────────────────────────────────── */}
         <section>
           <SectionHeader icon={<Landmark size={14} />} title="Calls and trades" count={[...callsA.values()].filter((c) => c.direction !== "NONE").length}

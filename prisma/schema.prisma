@@ -814,6 +814,7 @@ model MacroRun {
   cards        MacroBankCard[]
   calls        MacroCall[]
   scores       MacroScore[]
+  stories      MacroStory[]
   @@index([week])
 }
 
@@ -936,4 +937,30 @@ model MacroRequest {
   createdAt    DateTime  @default(now())
   doneAt       DateTime?
   @@index([status])
+}
+
+model MacroStory {
+  id          String   @id @default(cuid())
+  runId       String
+  run         MacroRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  pair        String                         // "GBPCAD" (any of the 28)
+  side        String                         // "long GBP" — the hawkish currency
+  pLong       Int                            // story score of the long currency  (-3..+3)
+  pShort      Int                            // story score of the short currency
+  gap         Int                            // pLong - pShort (>= 2 opens a story)
+  since       String                         // Friday the story opened, "2026-10-09"
+  weeks       Int
+  startPrice  Float
+  now         Float
+  unitPct     Float                          // 1 weekly unit, % of price
+  moveUnits   Float                          // move since start, in units (+ = with the story)
+  status      String                         // "new" | "dip zone" | "running" | "back near start" | "stretched"
+  plan        Json                           // { startHalf:{entry,stop}, dipHalf:{level,stop}, partial13, window }
+  priced      Json?                          // { long:{twoYear,policy,spreadBp,chg4wBp}, short:{...}, read:"room"|"partly priced"|"priced" }
+  orders      Json?                          // { leg:"6B", roll5:"with"|"against", z:1.2 } when a leg has futures delta
+  history     Json?                          // weekly, ~1 year: [{ w:"2026-10-09", pLong, pShort, gap, policyGap, y2Gap }]
+  slot        String                         // "free" | "taken by GBPCAD" (one story per currency)
+  note        String?
+  createdAt   DateTime @default(now())
+  @@unique([runId, pair])
 }
